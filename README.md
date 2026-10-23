@@ -1,0 +1,693 @@
+# musictool
+
+Download music from YouTube/YouTube Music and fetch **synced** lyrics for it.
+Replaces a `get_music.sh` shell script with something that handles playlists,
+multiple lyrics sources, and both a CLI and a GUI.
+
+- **Cross-platform:** Windows, macOS, Linux, Termux/Android
+- **Python 3.8+, stdlib only** plus two dependencies: `yt-dlp` and `mutagen`
+- Works offline for scanning; the only network calls are to yt-dlp and lyrics APIs
+
+```
+./
+├── musictool.py          entry point
+└── musictool/
+    ├── cli.py            command line
+    ├── gui.py            Tkinter interface
+    ├── download.py       yt-dlp wrapper + videoId index
+    ├── lyrics.py         scan / fetch / embed pipeline
+    ├── providers.py      ytmusic, lrclib, netease
+    ├── tags.py           mutagen tag + .lrc handling
+    ├── config.py         saved defaults
+    └── util.py           normalisation, LRC, HTTP
+```
+
+## Install
+
+```bash
+pip install yt-dlp mutagen
+
+# ffmpeg is needed to extract audio and embed cover art
+pkg install ffmpeg                          # Termux
+winget install Gyan.FFmpeg                  # Windows
+sudo apt install ffmpeg                     # Debian/Ubuntu
+
+# GUI (optional — the CLI needs none of this)
+pkg install python-tkinter                  # Termux
+sudo apt install python3-tk                 # Debian/Ubuntu
+# Windows: the python.org installer already includes tkinter
+
+# check everything
+python musictool.py doctor
+```
+
+## Quick start
+
+```bash
+# one video
+python musictool.py get "https://music.youtube.com/watch?v=XXXX"
+
+# a whole playlist
+# a whole playlist -- each file gets its lyrics the moment it finishes,
+# so the folder is already tagged while the rest is still downloading
+python musictool.py get "https://music.youtube.com/playlist?list=PLVuMx2J3_K6w" \
+    -o ~/Music/Gospel --items 1-186 --cookies cookies.txt
+
+# fix lyrics for files you already have
+python musictool.py lyrics ~/Music/Gospel
+
+# am I blocked, or can I download with no cookies at all?
+python musictool.py check "https://youtube.com/watch?v=XXXX"
+
+# what qualities does this video have, and how big is each?
+python musictool.py formats "https://youtube.com/watch?v=XXXX" --keep-video
+
+# one video, at a chosen quality, with a size ceiling
+python musictool.py get "https://youtube.com/watch?v=XXXX" --keep-video \
+    --no-playlist --quality 720 --max-size 250M --merge-format mkv --no-lyrics
+
+# what needs fixing? (offline, instant)
+python musictool.py scan ~/Music/Gospel
+
+python musictool.py gui          # graphical interface
+```
+
+## Commands
+
+| command | what it does |
+|---|---|
+| `get URL...` | download, embedding each file's lyrics as it lands |
+| `check URL...` | is this reachable, or does YouTube want a login? (no cookies used) |
+| `formats URL...` | every quality on offer, with its size, plus the command to take one |
+| `lyrics PATH...` | fetch/fix lyrics for existing files or folders |
+| `scan PATH...` | offline state report (`--json` for scripting) |
+| `duplicates PATH...` | find files sharing the same lyrics; `--fix` re-fetches |
+| `extract PATH...` | write each file's embedded lyrics to a `.lrc` you can edit |
+| `embed PATH...` | put a `.lrc` you made/downloaded back into the matching song |
+| `providers` | list lyrics sources; `--test` probes them live |
+| `config [key] [value]` | show or set saved defaults |
+| `doctor` | verify yt-dlp, ffmpeg, tkinter, mutagen |
+| `gui` | graphical interface |
+
+### Download options
+
+`-o/--output-dir` · `-t/--template` · `--format m4a|mp3|opus|flac|ogg|wav` ·
+`-q/--audio-quality 0-10` · `--keep-video` · `--no-thumbnail` · `--no-metadata` ·
+`--chapters` · `--ascii` (ASCII-only filenames, helps picky players) ·
+`--cookies FILE` · `--cookies-from-browser auto|off|edge|chrome|firefox|brave|...` ·
+`--proxy` · `--limit-rate 2M` · `--concurrent N` ·
+`--archive FILE` (skip already-downloaded videos) · `--items 1-50` ·
+`--no-playlist` · `--yes-playlist` · `--retries N` (attempts across a network
+drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
+
+### Quality options (video downloads)
+
+`--quality 720` (or `1080`, `best`, `smallest`) · `--max-size 250M` (best quality
+that fits under it) · `-f 137+140` (a raw yt-dlp selector, overrides both) ·
+`--merge-format mkv|mp4|webm|mov` · `--subs` · `--sub-langs en,es` ·
+`--remote-components ejs:github` · `--keep-video` (without it you get audio only)
+
+### Lyrics options
+
+`--no-lyrics` · `--lyrics-only` · `--lyrics-dir DIR` · `--providers lrclib,netease` ·
+`--allow-unsynced` · `--shift -2.5` (offset drifting timestamps) · `--delay 0.35` ·
+`--force` · `--recursive` · `--limit N` · `--dry-run` · `--no-embed`
+
+## Am I blocked? -- `check`
+
+Before touching cookies at all, ask:
+
+```bash
+python musictool.py check "https://youtube.com/watch?v=XXXX"
+python musictool.py check "https://youtube.com/playlist?list=PLrOFa8sDv6jf..."
+```
+
+`check` deliberately uses **no cookies** -- a request that succeeds while carrying
+your login proves nothing about whether you are blocked, so it goes in as a
+stranger and tells you what came back:
+
+```
+checking with no cookies, as a stranger -- this is the honest answer to 'am I blocked?'
+
+==> https://youtube.com/playlist?list=PLrOFa8sDv6jf...
+    reachable  playlist of 447 items; first is "Elevation Worship - Praise"
+    -> no login needed for this one
+
+============================================================
+checked 1 URL(s): 1 reachable, 0 blocked
+you are not blocked: download with no cookies at all
+```
+
+When it *is* blocked it says which kind of block and what would fix it --
+`bot` (needs a login), `age`, `private`, `members`, `unavailable`, or `network`
+(a dead connection, which is not a block at all) -- and exits non-zero so you can
+script around it. `--with-cookies` runs the same check *with* your login, for
+comparing the two.
+
+## Picking a quality by its size -- `formats`
+
+```bash
+python musictool.py formats "https://youtube.com/watch?v=XXXX" --keep-video
+```
+
+```
+    Elevation Worship - Praise  (3:45)
+id   what         container  video    audio  size
+---  -----------  ---------  -------  -----  --------
+248  video only   webm       1080p60  vp9    80.1 MiB
+137  video only   mp4        1080p    avc1   66.8 MiB
+136  video only   mp4        720p     avc1   31.5 MiB
+18   video+audio  mp4        360p     avc1   13.4 MiB
+251  audio only   webm       -        opus   4.2 MiB
+140  audio only   m4a        -        mp4a   3.4 MiB
+
+    to take this one:
+      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 248+251 --merge-format mkv
+```
+
+Sizes are yt-dlp's own numbers: `filesize`, or `filesize_approx`, or bitrate x
+duration when YouTube reports neither. Storyboards and other non-media entries
+are filtered out. Video-only streams are paired with a real audio track -- never
+with another combined file, which would drag a second video track along.
+
+Or skip the reading and just say what you want:
+
+```bash
+musictool get URL --keep-video --quality 720              # tallest 720p-or-less
+musictool get URL --keep-video --max-size 250M            # best that fits
+musictool get URL --keep-video --max-size 250M --quality 1080
+musictool get URL --keep-video -f 137+140 --merge-format mkv   # an id from the list
+```
+
+Each costs one metadata request and prints what it chose
+(`quality: -f 136+251   (720p avc1 + opus ~ 35.7 MiB)`). If nothing fits the
+ceiling it says so rather than quietly taking something bigger. An explicit `-f`
+always wins and skips the lookup.
+
+### Your previous yt-dlp command, in musictool
+
+```bash
+musictool get "https://youtube.com/playlist?list=PLrOFa8sDv6jfKx9poMArMUV2MGbZoXrCT" \
+    --keep-video --merge-format mkv --chapters --subs --quality 1080 \
+    -t "%(playlist_title)s/%(playlist_index)02d - %(title)s.%(ext)s"
+```
+
+That is `-f bestvideo+bestaudio/best` chosen by size instead of by guesswork, with
+no `--cookies` at all. Add `--remote-components ejs:github` only if yt-dlp says it
+needs the JS component; recent versions usually do not.
+
+## Cookies: "Sign in to confirm you're not a bot"
+
+YouTube refuses playlist downloads from an ordinary IP address unless the request
+carries a logged-in session. That is the wall you hit part-way through a big
+playlist, and it is not something the tool can talk its way around -- it needs your
+login. Two ways to give it one:
+
+**1. Let it read your browser (the default, and the easy one on Windows).**
+
+```bash
+python musictool.py get "https://music.youtube.com/playlist?list=..." -o "~/Music/Gospel Songs"
+```
+
+`--cookies-from-browser` defaults to **`auto`**: musictool looks at the browsers
+installed on your machine, finds the ones with a cookie database, and uses the one
+whose database was touched most recently -- i.e. the browser you actually watch
+YouTube in. On Windows that is normally Edge or Chrome, in
+`%LOCALAPPDATA%\Microsoft\Edge\User Data` or `...\Google\Chrome\User Data`.
+Nothing is exported, nothing is uploaded; yt-dlp decrypts the cookie store locally
+the same way it always has. The log tells you what it picked:
+
+```
+cookies: reading your chrome login (C:\Users\you\AppData\Local\Google\Chrome\...\Cookies)
+```
+
+Pick one yourself with `--cookies-from-browser chrome` (or `edge`, `firefox`,
+`brave`, `vivaldi`, `opera`, `chromium`, `whale`, `safari` -- the browsers yt-dlp
+can read), or switch it off with `--cookies-from-browser off`. `musictool doctor`
+prints the browser it would use.
+
+If no browser is found the download still runs, and says so instead of failing
+silently. And if YouTube still refuses, the error you get now says what to do
+rather than leaving you with a bare `ERROR:`.
+
+**2. Or point it at an exported `cookies.txt`.**
+
+That is what the **cookies.txt** box is for: the *path* to a Netscape-format
+cookies file that a browser extension (e.g. "Get cookies.txt LOCALLY") exported
+while you were signed in to YouTube. It is optional, and the browser picker above
+is easier -- use a file when the browser you use is one yt-dlp cannot read, or
+when you want a fixed login that survives browser updates. A file always wins when
+both are set.
+
+**Resuming where you stopped.** With 286 of 447 already downloaded, either let
+yt-dlp skip what exists (`--archive archive.txt` from the start, so it knows), or
+ask for the rest by position: `--items 287-447`. A file interrupted mid-download
+keeps its `.part`, and `--continue` (always on) resumes it byte-for-byte rather
+than starting again.
+
+## Missing or mistyped paths
+
+Every command that takes paths (`lyrics`, `scan`, `duplicates`, `extract`, `embed`)
+checks them first: a path that doesn't exist is reported and skipped, and the rest
+still run. If *none* of the given paths exist it says so clearly and exits non-zero
+instead of silently doing nothing. In the GUI, loading a file list for a folder that
+doesn't exist pops a "that path doesn't exist" warning.
+
+## Your own lyrics (extract / embed)
+
+Listened to a song and corrected its lyrics, or downloaded a better `.lrc`?
+Round-trip it:
+
+```bash
+musictool extract "/storage/67FE-19FE/Music/New Gospel Songs"   # audio -> .lrc
+# edit the .lrc: add [mm:ss.xx] timings to make unsynced -> synced
+musictool embed   "/storage/67FE-19FE/Music/New Gospel Songs"   # .lrc -> audio
+```
+
+`extract` writes `<name>.lrc` next to each file (`--out DIR`, `--force`).
+`embed` reads the matching `.lrc` (next to the file, or `--lyrics-dir`) and embeds
+it, also refreshing the sidecar; or pass an explicit pair
+`musictool embed song.m4a my.lrc`. `--dry-run` shows what would happen. The same
+two buttons live on the GUI's **Lyrics files** tab.
+
+## Surviving WiFi drops
+
+A power cut that kills the WiFi for a few minutes should not mean re-downloading
+everything. Two layers:
+
+- **Downloads resume, never restart.** yt-dlp runs with `--continue`, so a partial
+  file is kept and resumed. If yt-dlp dies with a *connectivity* error, musictool
+  waits (exponential back-off up to `--net-max-wait`, default 240 s — enough for a
+  two-to-three-minute drop) and runs it again, which resumes from where it left
+  off. A genuinely bad URL fails immediately instead of spinning.
+- **Lyrics requests retry too.** The HTTP layer treats name-resolution failures,
+  timeouts, resets and 5xx as retryable and sleeps through them; 404s and bad
+  responses still fail fast.
+
+So in practice you can "forget about it": start a batch, lose the WiFi, and when it
+comes back the same run continues. No OS-level WiFi/MAC auto-connect is needed (and
+on Android/Termux the OS won't allow an app to force-connect anyway).
+
+## Stopping a run
+
+Press **Stop** (bottom right of the window, greyed out until something is running)
+or **Ctrl+C** in a terminal. The stop is cooperative, which is what makes it safe:
+
+- the file currently downloading is not deleted -- its `.part` stays, so the next
+  run resumes it;
+- every file that already finished keeps its lyrics, because lyrics are embedded
+  the moment each file lands, not at the end;
+- yt-dlp is terminated rather than abandoned, so no orphan process keeps writing;
+- a summary and `lyrics-report.txt` are still written for the part that completed,
+  so you can see exactly what is done and what is left.
+
+Ctrl+C in a terminal asks once ("stopping after the current file..."); a second
+Ctrl+C quits immediately.
+
+## Live download progress (why you used to see nothing)
+
+`musictool` previously captured yt-dlp's output and only printed it when the
+process *finished* -- on a long playlist that's minutes of silence. Now the
+download is streamed while it runs (yt-dlp redraws its percentage with carriage
+returns, so the output is split on `\r` as well as `\n`), and:
+
+- the **log** gets readable progress lines as they happen: `Downloading item 3 of
+  186`, the current `Destination: ...`, and errors;
+- the **GUI** (Windows/macOS/Linux/Termux with tkinter) shows a dedicated panel
+  above the log with two progress bars -- overall playlist position and the current
+  file's percentage -- plus the current filename, download speed, the per-file
+  `ETA`, and an **estimated time left for the whole run** (computed from elapsed
+  time and fraction done).
+
+The bars update from parsed yt-dlp events, so they work for single videos and for
+whole playlists. In a plain terminal you get the streamed lines too (the bar is a
+GUI-only addition, never doubled output).
+
+### What the panel shows
+
+Two bars, each with its own numbers beside it:
+
+```
+████████░░░░░░░░   playlist  64.0%   item 286 of 447   ·   18m 04s elapsed, est. 10m 09s left
+██████░░░░░░░░░░   Elevation Worship - Praise.m4a    42.5%   1.20MiB/s   ETA 00:09
+```
+
+- **percentages on both bars**, not just a moving rectangle;
+- **elapsed time in minutes** (`18m 04s`, `1h 02m`) and the estimated time left for
+  the whole run, computed from how long it has taken to get this far -- never a
+  bare number of seconds like `1084s`;
+- the current file, its own percentage, the download speed and yt-dlp's ETA.
+
+**The split is draggable.** The bars and their text sit in a horizontal paned
+window, so you can drag the divider to make the bars narrower and the text wider
+(or the other way round). The width you leave it at is saved and restored next
+time.
+
+### Two traps that left the bar completely dead
+
+Streaming alone was not enough -- both of these had to be fixed for anything to move:
+
+1. **`--print` implies `--quiet`.** `get` asks yt-dlp for
+   `--print after_move:%(id)s<TAB>%(filepath)s`, which is how it learns which file just
+   finished and what its videoId is (that is what feeds the per-file lyrics pass). But
+   `--print` also switches yt-dlp into quiet mode, and in quiet mode it prints *nothing
+   else*: no `Downloading item 3 of 186`, no percentage, no speed, no ETA. The only
+   output was the `id<TAB>filename` line per file -- exactly the "just the names of the
+   files" symptom. `get` now passes **`--no-quiet`** next to `--print`, which cancels the
+   implied quiet; the template still prints, and the progress lines come back.
+2. **Tkinter is not thread-safe.** The download runs on a worker thread and the bars were
+   being updated by calling `root.after(...)` *from that thread*, which on Windows can
+   silently do nothing at all. Progress events now go into a `queue.Queue` and are applied
+   by the same main-thread pump that already drains the log, coalesced to the newest
+   redraw so hundreds of `\r` updates a second cannot flood the UI. Completion is
+   signalled through the same queue (`FINISH`), so no widget is ever touched off-thread.
+
+The parser is written against the strings yt-dlp actually emits (verified against
+2026.08.19), including the awkward ones: `at Unknown B/s ETA Unknown` before the first
+sample (the `Unknown` tokens are ignored rather than shown as a speed), the fragment
+estimate `[download] 4.2% of ~ 12.34MiB at ...`, and the final
+`[download] 100% of 7.63MiB in 00:00:03 at 2.00MiB/s` (a completion, not a percentage).
+
+### If you saw `ERROR: [generic] '%(artist,uploader)s:%(meta_artist)s' is not a valid URL`
+
+`--replace-in-metadata` takes **three** values -- `FIELDS`, `REGEX` and `REPLACE`. Only
+two were being passed, so yt-dlp swallowed the *next* option (`--parse-metadata`) as the
+replacement text and the template after it was left over as a "URL". That broke the
+` - Topic` artist cleanup as well. The replacement is now the empty string it always
+should have been, which is what deletes the suffix.
+
+## Lyrics are included as it downloads
+
+`get` does not wait for the batch to finish before doing lyrics. yt-dlp is run with
+`--print after_move:%(id)s\t%(filepath)s`, and the moment a finished file is reported,
+`get`:
+
+1. records that file's **videoId** in the download archive index, so the `ytmusic`
+   provider can look the song up by its exact identity instead of by title search;
+2. reads the file's tags, fetches its lyrics (synced preferred, per the usual
+   provider order), and **embeds them into the file right away**;
+3. moves on to the next download.
+
+So on the 186-track playlist, track 1 already has its synced lyrics in the file while
+track 2 is still downloading -- you can play and see them immediately, and a crash or
+WiFi drop half-way through leaves the finished files complete rather than lyrics-less.
+The `==> lyrics for <file>` lines appear interleaved with the download progress, and a
+single combined summary + `lyrics-report.txt` is written at the end for the whole batch.
+
+All lyrics HTTP work shares **one session**, so the local response cache and rate
+limits apply across the batch instead of restarting per file. `--no-lyrics` still skips
+it entirely; `--lyrics-only` (or a run where nothing downloaded) falls back to scanning
+the output folder as before.
+
+## Finding wrongly-embedded lyrics
+
+If a previous tool grabbed lyrics for the wrong file, several unrelated songs end
+up carrying the same lyrics. `duplicates` finds them by **content**, not filename:
+
+```bash
+python musictool.py duplicates ~/Music/Gospel            # report
+python musictool.py duplicates ~/Music/Gospel --json     # for scripting
+python musictool.py duplicates ~/Music/Gospel --fix      # re-fetch each one
+```
+
+Each file's lyrics are reduced to a fingerprint of their *words* — timestamps and
+LRC header tags (`[ti:]`, `[ar:]`, `[by:]`, `[offset:]`) are stripped first, so the
+same lyrics pasted in with slightly different timings still group together. Text
+shorter than `--min-chars` (default 40) is ignored, so near-empty tags don't all
+collide into one group.
+
+Groups are labelled:
+
+- **SUSPICIOUS** — members have *different* titles. This is the bug.
+- **same title** — usually a genuine duplicate (two uploads of one song), left alone
+  unless you pass `--fix`.
+
+`--fix` re-fetches each file using **its own** tags (artist, title, album, duration,
+and its videoId if it was downloaded with `get`) — never folder order — then
+re-reports. Genuinely duplicated songs will still match afterwards, which is correct.
+
+## Lyrics sources
+
+Tried in this order by default (`--providers` to change it):
+
+### 1. `ytmusic` — YouTube Music's own timed lyrics
+The best source **for a YouTube-sourced library**, because it is the same
+MusixMatch-licensed timing YouTube Music shows you, so it lines up with your file.
+
+It needs the **videoId**, which `get` records in `.musictool-index.json` beside
+your downloads. Three unauthenticated calls: `next` (find the lyrics tab) then
+`browse` (read the cues). Only the `ANDROID_MUSIC` client returns timings —
+`WEB_REMIX` returns plain text, so the client version matters.
+
+Deliberately does **not** search YouTube by artist/title. YouTube's search never
+reports "no match": give it a nonsense title and it returns confident, fully-timed
+lyrics for a different song. Looking up by the exact videoId you downloaded avoids
+that failure mode entirely.
+
+### 2. `lrclib` — free, open, keyless
+`https://lrclib.net`. No API key, no registration, documented API. Synced and
+plain. Its only requirements are a `User-Agent` identifying the client, honouring
+`429`/`Retry-After`, and 200–500 ms between requests — all implemented.
+
+### 3. `netease` — NetEase Cloud Music
+Public, keyless, very large synced corpus (strongest for CJK, but covers plenty of
+Western tracks too). Uses `/api/search/get/web` then `/api/song/lyric?lv=-1`,
+with a `Referer` header.
+
+### Not implemented, and why
+
+| source | why not |
+|---|---|
+| MusixMatch direct | needs an API key, and the free tier returns only ~30% of each lyric |
+| Genius, AZLyrics, Megalobiz | plain text only, and aggressive bot detection — this is what kept blocking `ytmdl` and `syncedlyrics` |
+
+If LRCLIB, NetEase and YouTube Music all miss a track, there is a good chance
+nobody has synced lyrics for it. `lyrics-report.txt` lists every miss with the
+reason.
+
+### Matching safety
+
+Fuzzy searches return other songs with the same title, so every candidate from
+`lrclib`/`netease` must clear a title + artist + duration similarity threshold
+before it is accepted. A `TRIBL - Well, Well, Well` file will not be tagged with
+Maverick City's lyrics. `ytmusic` is exempt because it is an exact-videoId lookup.
+
+Filenames are normalised first: `&amp;` → `&`, `⧸` → `/`, `｜` → `|`, fullwidth
+`？`/`：` → `?`/`:`, `(feat. …)`/`(Live)`/`(Ao Vivo)`/`(Radio Version)`/
+`(Extended Version)`/`(Spontaneous)`/`[ … ]` stripped, medleys split into parts
+and searched separately, and yt-dlp credit lists (`"A, B, C, D"`) retried with the
+lead credit.
+
+## What it writes
+
+| file | contents |
+|---|---|
+| `Lyrics/<song>.lrc` | sidecar for players that read external lyrics |
+| `©lyr` / `LYRICS` tag | embedded, via mutagen — no re-mux, so cover art and other tags survive |
+| `Lyrics/_backup/<song>.old.lrc` | previous lyrics, only when something is overwritten |
+| `lyrics-report.txt` | every fix, every miss with its reason |
+| `.musictool-index.json` | file → videoId/url, so `ytmusic` works later |
+| `~/.config/musictool/http-cache.json` | API responses; re-runs make no calls |
+
+`scan` classifies each file as `synced` (fine), `partial` (a few timestamps),
+`plain` (no timestamps) or `empty`.
+
+The sidecar and the embedded tag are tracked **separately**. If your `.lrc` is good
+but the tag inside the file is stale or garbage, `lyrics` repairs the tag from the
+sidecar without a network call, instead of skipping the file as "already ok".
+
+`lyrics_dir` is a folder *name* (`Lyrics`), resolved against the folder being
+scanned or downloaded to — never the current working directory. A lyrics folder
+unrelated to the scan is ignored, so stale sidecars elsewhere cannot silently
+override the tags in your files.
+
+## GUI
+
+```bash
+python musictool.py gui
+```
+
+Six tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
+**Tools**, **Lyrics files** — over the same code paths as the CLI.
+
+**Every CLI option is in the GUI, and it stays that way automatically.** The
+widgets are generated from the argparse parser itself, and running a job builds the
+exact argv the CLI would receive and calls `cli.main()` with output redirected into
+the log. There is no second copy of the option handling to drift out of sync, so
+adding a flag to `cli.py` adds a widget with no GUI work. The test suite asserts
+this for every flag of every subcommand.
+
+Every run echoes the command it used:
+
+```
+$ musictool duplicates "/home/you/Music" --min-chars 40 --fix --allow-unsynced
+```
+
+so you can copy it into a shell or a cron job.
+
+- **Browse buttons** — every field that takes a path (output folder, lyrics
+  folder, cookies.txt, download archive) has a **Browse...** button beside it, so
+  you never have to type or paste a Windows path, and a short grey line under the
+  field says what it is for.
+- **The output folder is remembered.** Downloading somewhere saves that folder,
+  and it is the default the next time you open the window (or run the CLI). The
+  URLs and folders you use are kept as history too.
+- **Stop** — bottom right, live only while a job runs; see "Stopping a run".
+- **Check access (no cookies)** and **List qualities + sizes** — next to the
+  download button: the first tells you whether YouTube is blocking you before you
+  change anything, the second prints the quality/size table into the log so you
+  can copy an id into the `-f` field. "This video only, not its playlist" is a
+  quick option at the top of the tab, since most of the time you want one video.
+- **Quick options** — the toggles you reach for constantly (`--allow-unsynced`,
+  "redo files that already have lyrics", subfolders, dry run, .lrc-only) sit in a
+  strip that is the first block of each tab, laid out in a wrapping grid so it
+  stays short on small screens. They are bound to the *same* variables as the
+  generated widgets below, so ticking one ticks the other; nothing to keep in sync.
+- **Pick the files** — the **Fix lyrics** and **Scan & duplicates** tabs list every
+  audio file with its current state, so you can run the whole folder, a subset, or
+  everything except a few. Files that share lyrics with another file are flagged in
+  the list. See below.
+- **Remembered paths and URLs** — the last 12 folders and URLs are kept in the
+  config and offered in a dropdown on every tab, so you are not re-typing
+  `/storage/67FE-19FE/Music/...` each time.
+- **Scan & duplicates** — scan, scan-as-JSON, find duplicate groups, render the
+  groups as a tree, and **FIX duplicate lyrics**, all from one tab.
+- **Report** — loads `lyrics-report.txt` and shows a summary line
+  (`2 fixed (40%) · 1 already ok · 1 unresolved · 0 unreadable · of 5 scanned`),
+  a collapsible tree of fixed / unresolved / unreadable with the reason for each
+  miss, and a per-provider tally. Export to JSON or CSV. It refreshes itself after
+  a run, and duplicate scans render straight into the same tree.
+- **Tools** — probe the lyrics sources, read/set/reset saved defaults, and run
+  `doctor`. "Save these options as defaults" writes the current widgets to the
+  config so the next launch starts where you left off.
+- **Everything scrolls** — each tab's body sits in one scrolling area, so a short
+  or narrow window cannot push a control out of reach (your 1600x720 window is
+  exactly why). The path field and the run buttons are pinned outside it and stay
+  on screen while everything else, including the quick options and the file list,
+  scrolls. The mouse wheel scrolls whichever tab the pointer is over, and
+  stays out of the way of the file list, the report tree and the log, which scroll
+  themselves.
+- **Resizable log** — the tabs and the log are two halves of one draggable split.
+  Drag the bar between them, or use **log taller** / **log shorter** / **reset
+  split** just above the log. Neither half can be pushed off screen, and
+  **Clear** empties the pane.
+
+### Running a subset of your files
+
+Press **Load file list** on the **Fix lyrics** tab and every audio file in the
+folder appears with a tick box, its state (`synced` / `plain` / `empty` /
+`unreadable`), its tags and its length. Everything starts ticked.
+
+| you want to | do this |
+| --- | --- |
+| redo every file, even the ones that look fine | **Redo ALL files (force)** |
+| run only the broken ones | **Only needing lyrics** |
+| run everything except a few | tick **All**, then click the ones to skip (or highlight them and press **Skip highlighted**) |
+| run just two or three files | **None**, then click the ones you want (or highlight them and press **Only highlighted**) |
+| re-do only the wrong-lyrics damage | **Only shared lyrics** |
+
+Click a row to toggle its tick. Highlight several rows (shift/ctrl-click) and use
+**Skip highlighted** / **Only highlighted** to move them in bulk. The line under
+the list always says how many files will be processed.
+
+When every file is ticked the tool is given the folder; when you narrow it down,
+only the ticked files are passed — so an unticked file is not touched, and the
+report is still written next to them.
+
+Needs tkinter (`pkg install python-tkinter` on Termux, `python3-tk` on Debian).
+If it is missing the CLI prints the install command for your platform and keeps
+working.
+
+## Config
+
+```bash
+python musictool.py config                    # show everything
+python musictool.py config output_dir ~/Music
+python musictool.py config provider_order lrclib,netease,ytmusic
+python musictool.py config allow_unsynced true
+python musictool.py config --reset
+```
+
+Stored at `~/.config/musictool/config.json` (`%APPDATA%\musictool\config.json` on
+Windows). Environment overrides: `MUSICTOOL_COOKIES`, `MUSICTOOL_OUT`,
+`MUSICTOOL_PROVIDERS`, `MUSICTOOL_GENIUS`, `MUSICTOOL_MUSIXMATCH`, plus
+`MUSICTOOL_LRCLIB_BASE` / `MUSICTOOL_NETEASE_BASE` / `MUSICTOOL_YTM_BASE` for
+mirrors and testing. CLI flags always win.
+
+## Platform notes
+
+- **Termux:** `yt-dlp` may only be importable, not on `PATH` — the tool falls back
+  to `python -m yt_dlp`. `doctor` tells you which it found.
+- **Windows:** paths with spaces and `&` are quoted when the command is echoed.
+- **Both:** `--ascii` avoids filenames some car stereos and older players mangle.
+
+## Tests
+
+```bash
+python3 tests/test_musictool.py
+```
+
+No network needed: the three lyrics APIs are stubbed with their documented response
+shapes and `yt-dlp` is replaced by a fake on `PATH`. Needs `mutagen`, and either
+`ffmpeg` on `PATH` or `pip install imageio-ffmpeg`.
+
+`tests/tkstub.py` is a small headless stand-in for tkinter. It renders nothing, but
+it lets the suite *execute* `gui.run()` on a machine with no display and no tkinter:
+build the real widget tree, invoke real buttons, tick real boxes, and capture the
+argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
+
+## Verified / not verified
+
+**Verified by running the code — 560 assertions, 0 failures**
+(`tests/test_musictool.py`): text normalisation against real messy
+filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
+all three providers against stub APIs that replay the documented response shapes
+(including `WEB_REMIX` returning no timings and `ANDROID_MUSIC` returning cues),
+the candidate-rejection guard, synced-over-unsynced precedence, duplicate-lyrics
+detection and repair, GUI/CLI option parity and argv round-tripping for every flag,
+path history, report parsing, `build_args` for every download option, the videoId index,
+and the CLI end-to-end as a subprocess with a fake `yt-dlp` on `PATH` — `get`,
+`scan`, `scan --json`, `lyrics`, `--dry-run`, `duplicates`, `duplicates --fix`,
+`--providers`, `config`, `doctor`, `providers --test`, and `--help` for every
+subcommand.
+
+**Also verified against the real thing** (not just fakes): a real `yt-dlp`
+(2026.08.19) downloading from a local HTTP server with a real `ffmpeg` on `PATH`, run
+through `download()` and through the `get` CLI. That is what exposed both progress bugs
+-- with the flags we were passing, yt-dlp emitted *only* the `after_move` line, so the
+bar had zero events to consume -- and it is how the fix was confirmed: 17 live
+percentage events plus `item`/`file`/`done`, the log showing `[download] ...  ETA ...`
+lines, `on_file` firing with the real videoId, and the finished file landing in the
+output folder with the index written. The fake `yt-dlp` in the test suite models the
+`--print`-implies-`--quiet` behaviour, with a negative control proving that without
+`--no-quiet` there is genuinely nothing to parse.
+
+The stop path was also driven for real: a genuine `yt-dlp` download was started
+from the CLI, sent `SIGINT` three seconds in, and came back with
+`stopping after the current file...`, then `==> stopped by user`, exit code 0, no
+orphan process. Browser-cookie detection is unit-tested against a fake Windows
+profile tree (two browsers, different cookie timestamps -> picks the newer one),
+and `--cookies` was passed to a real `yt-dlp` to confirm the flag combination is
+accepted.
+
+**Not verified here:**
+- **Live calls to YouTube Music, LRCLIB and NetEase.** This sandbox's egress
+  allowlist blocks them (`api.github.com` and `pypi.org` return 200; `lrclib.net`
+  and `google.com` return 000). Run `python musictool.py providers --test` on your
+  machine to check reachability before a big batch. The `ytmusic` provider follows
+  the documented reverse-engineered InnerTube flow; if YouTube changes the client
+  version that returns timings, that provider will simply return nothing and fall
+  through to `lrclib`.
+- **The GUI's pixels.** tkinter is not installed in this sandbox, so the window was
+  never *drawn*. Everything except the drawing is now executed for real against
+  `tests/tkstub.py`: `gui.run()` builds all five tabs, every button is invoked, and
+  the argv each one produces is captured and asserted — including ticking the
+  quick-strip `--allow-unsynced` box, loading the file list, skipping a highlighted
+  file, redoing everything with `--force`, refusing to run with nothing ticked, and
+  resizing the log pane, and wheel events routed to the right scrolling area.
+  Widget generation still covers every CLI flag of every
+  subcommand, and each value round-trips through `build_argv` and back through the
+  real argparse parser. What no stub can prove is font metrics, real sash dragging
+  and how the theme looks on your platform.
+- **Real `yt-dlp` downloads**, for the same egress reason; a fake `yt-dlp`
+  exercises the argument building, output parsing and index writing.

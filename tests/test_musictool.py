@@ -2209,9 +2209,10 @@ _q = nb.tab_for("Quality")
 check("the Quality tab exists and is reachable", _q is not None)
 _qt = [w for w in _q.walk() if isinstance(w, tkstub.Treeview)]
 check("the picker is a table you can click", len(_qt) == 1)
-check("the table shows id, quality, container, codec, size and variants",
+check("the table shows id, quality, container, codec, language, size, variants",
       list(_qt[0].options.get("columns", ())) ==
-      ["id", "what", "container", "video", "codec", "size", "variants"],
+      ["id", "what", "container", "video", "codec", "lang", "size",
+       "variants"],
       str(_qt[0].options.get("columns")))
 _cbs = {w.options.get("text") for w in _qw(_q, "checkbutton")}
 check("the filters are on the tab, not in a menu",
@@ -2652,6 +2653,155 @@ C._resolve_quality("https://youtu.be/ZLRwjygiCTE", _o3, log=_log3.append)
 check("when the qualities cannot be read, it says whose default you get",
       any("yt-dlp will pick its own default" in m for m in _log3)
       or bool(_o3.get("format_selector")), str(_log3))
+
+# ============ 30. which language you get, and being told what it is
+# yt-dlp ranks the ORIGINAL language first, so a dubbed video quietly arrives
+# in the wrong one unless the picker is told what you want.
+print("\n--- 30. dubbed videos: the language is shown and preferred ---")
+
+_DUB = {"duration": 900, "formats": [
+    {"format_id": "248", "ext": "webm", "vcodec": "vp9", "acodec": "none",
+     "height": 1080, "tbr": 1400, "filesize": 160000000},
+    {"format_id": "140-0", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 160, "filesize": 18000000, "language": "es",
+     "language_preference": 10, "format_note": "Spanish (original)"},
+    {"format_id": "140-1", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 14400000, "language": "en",
+     "format_note": "English"},
+    {"format_id": "140-2", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 14400000, "language": "fr",
+     "format_note": "French"},
+]}
+_drows = F.rows_from_info(_DUB)
+check("a row knows the language it is spoken in",
+      {r["id"]: r["lang"] for r in _drows}.get("140-1") == "en"
+      and {r["id"]: r["lang"] for r in _drows}.get("248") == "",
+      str([(r["id"], r["lang"]) for r in _drows]))
+check("...and which one is the original",
+      [r for r in _drows if r["id"] == "140-0"][0]["lang_pref"] == 10)
+_dt = F.table(_drows)
+check("the table shows a lang column when there is a language to show",
+      "lang" in _dt.splitlines()[0] and "en" in _dt, _dt)
+check("...and stars the original track", "es*" in _dt, _dt)
+check("a video with no tagged language does not grow an empty column",
+      "lang" not in F.table(F.rows_from_info(_INC)).splitlines()[0],
+      F.table(F.rows_from_info(_INC)).splitlines()[0])
+_dc = F.collapse_variants(_drows)
+check("a dub is not a CDN variant of another language",
+      sorted(r["id"] for r in _dc if r["kind"] == "audio")
+      == ["140-0", "140-1", "140-2"], str([r["id"] for r in _dc]))
+check("and dedupe does not merge two languages at the same bitrate",
+      len([r for r in F.dedupe_quality(_drows) if r["kind"] == "audio"]) == 3)
+check("languages are listed originals first",
+      [c for c, _o, _n in F.languages_in(_drows)] == ["es", "en", "fr"],
+      str(F.languages_in(_drows)))
+
+check("the default picker would take the Spanish original",
+      F.pick(_drows)[0] == "248+140-0", F.pick(_drows)[0])
+check("asking for English takes English, though it is the smaller bitrate",
+      F.pick(_drows, lang="en")[0] == "248+140-1",
+      F.pick(_drows, lang="en")[0])
+check("the same for audio-only and for the auto presets",
+      F.pick(_drows, audio_only=True, lang="en")[0] == "140-1"
+      and F.auto_pick(_drows, "best", lang="en")[0] == "248+140-1"
+      and F.auto_pick(_drows, "audio", lang="en")[0] == "140-1")
+check("'en' also matches a region tag like en-GB",
+      F._match_lang({"lang": "en-GB"}, "en") and not F._match_lang({"lang": "fr"}, "en")
+      and not F._match_lang({"lang": ""}, "en") and not F._match_lang({"lang": "en"}, "any"))
+check("a language the video does not have falls back instead of failing",
+      F.pick(_drows, lang="de")[0] == "248+140-0"
+      and F.preferred_language(_drows, "de") is None
+      and F.preferred_language(_drows, "en") == "en")
+check("the choice is announced with its language",
+      "[en]" in F.describe_choice(*F.pick(_drows, lang="en")[1:3]),
+      F.describe_choice(*F.pick(_drows, lang="en")[1:3]))
+check("the yt-dlp filter it builds prefers the language and still falls back",
+      F.audio_lang_selector(True, "en") == "bv*+ba[language^=en]/bv*+ba/b"
+      and F.audio_lang_selector(False, "en") == "ba[language^=en]/ba/b"
+      and F.audio_lang_selector(True, "any") == "")
+
+if _YDL is not None:
+    def _dubbed(sel, extra=None):
+        fmts = [{"format_id": f["format_id"], "ext": f["ext"],
+                 "vcodec": f.get("vcodec", "none"),
+                 "acodec": f.get("acodec", "none"), "height": f.get("height"),
+                 "width": f.get("width", 1920), "fps": f.get("fps", 30),
+                 "tbr": f.get("tbr", 0), "abr": f.get("abr", 0),
+                 "filesize": f.get("filesize"), "format": f["format_id"],
+                 "protocol": "https", "language": f.get("language"),
+                 "language_preference": f.get("language_preference", 0),
+                 "preference": None, "format_note": f.get("format_note"),
+                 "dynamic_range": None} for f in _DUB["formats"]]
+        info = {"id": "d", "extractor": "youtube", "formats": fmts, "title": "t"}
+        ydl = _YDL({"quiet": True, "simulate": True})
+        ydl.sort_formats(info)          # yt-dlp sorts before it selects
+        return [f["format_id"] for f in ydl.build_format_selector(sel)(info)]
+
+    check("yt-dlp's own default takes the Spanish original",
+          _dubbed("bv*+ba/b") == ["248+140-0"], str(_dubbed("bv*+ba/b")))
+    check("the language filter takes the English dub, and only falls back "
+          "when there is none",
+          _dubbed(F.audio_lang_selector(True, "en")) == ["248+140-1"],
+          str(_dubbed(F.audio_lang_selector(True, "en"))))
+    check("--format-sort lang:en does NOT do this (it sorts a number, not a "
+          "language) -- which is why a filter is used",
+          "lang" in str(F.audio_lang_selector(True, "en")))
+
+_b1 = download.build_args("U", {"keep_video": True, "audio_lang": "en",
+                                "output_dir": ".", "template": "t"})
+_b2 = download.build_args("U", {"keep_video": False, "audio_lang": "en",
+                                "output_dir": ".", "template": "t"})
+_b3 = download.build_args("U", {"keep_video": True, "audio_lang": "any",
+                                "output_dir": ".", "template": "t"})
+_b4 = download.build_args("U", {"keep_video": True, "audio_lang": "en",
+                                "format_selector": "248+140-1",
+                                "output_dir": ".", "template": "t"})
+check("the language preference reaches yt-dlp for video and for audio",
+      _b1[_b1.index("-f") + 1] == "bv*+ba[language^=en]/bv*+ba/b"
+      and _b2[_b2.index("-f") + 1] == "ba[language^=en]/ba/b",
+      f"{_b1[_b1.index('-f') + 1]} | {_b2[_b2.index('-f') + 1]}")
+check("'any' leaves yt-dlp alone, and an explicit -f always wins",
+      "-f" not in _b3 and _b4[_b4.index("-f") + 1] == "248+140-1",
+      f"{'-f' in _b3} | {_b4[_b4.index('-f') + 1] if '-f' in _b4 else None}")
+check("--audio-lang is a real flag the GUI can reach",
+      "audio_lang" in {x["dest"] for x in U.widget_specs("get", parser=PARSER)})
+
+# --- and the real command, against a video that is actually dubbed
+DUBBIN = os.path.join(WORK, "dubbin")
+os.makedirs(DUBBIN, exist_ok=True)
+open(os.path.join(DUBBIN, "yt-dlp"), "w").write(
+    "#!/usr/bin/env python3\n"
+    "import json, sys\n"
+    + "sys.stdout.write(json.dumps(%r))\n" % _DUB)
+os.chmod(os.path.join(DUBBIN, "yt-dlp"), 0o755)
+
+
+def run_dub(*args):
+    env = dict(ENV, PATH=DUBBIN + os.pathsep + ENV["PATH"])
+    return subprocess.run([sys.executable, ENTRY, *args], capture_output=True,
+                          text=True, env=env)
+
+
+_rd = run_dub("formats", "https://youtu.be/DUB1", "--keep-video",
+              "--show-audio")
+check("formats names every spoken language and the original",
+      "spoken languages: es (original), en, fr" in _rd.stdout, _rd.stdout[-400:])
+check("...says which one it will take, and picks it",
+      "will take: en" in _rd.stdout and "-f 248+140-1" in _rd.stdout,
+      _rd.stdout[-300:])
+_re = run_dub("formats", "https://youtu.be/DUB1", "--keep-video",
+              "--audio-lang", "es")
+check("and a different preference is obeyed",
+      "will take: es" in _re.stdout and "-f 248+140-0" in _re.stdout,
+      _re.stdout[-300:])
+_rx = run_dub("formats", "https://youtu.be/DUB1", "--keep-video",
+              "--audio-lang", "de")
+check("a language nobody dubbed says so instead of pretending",
+      "nothing here is tagged de" in _rx.stdout, _rx.stdout[-300:])
+_rg = run_dub("get", "https://youtu.be/DUB1", "--keep-video", "--no-lyrics",
+              "--dry-run")
+check("a plain get carries the language filter to yt-dlp",
+      "bv*+ba[language^=en]/bv*+ba/b" in _rg.stdout, _rg.stdout[-300:])
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

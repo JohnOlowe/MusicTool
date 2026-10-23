@@ -1240,7 +1240,8 @@ def run():
                     variable=qmode, value="manual",
                     command=lambda: q_draw()).pack(side="left", padx=(14, 0))
 
-    qcols = ("id", "what", "container", "video", "codec", "size", "variants")
+    qcols = ("id", "what", "container", "video", "codec", "lang", "size",
+             "variants")
     qwrap = ttk.Frame(qtab)
     qwrap.pack(fill="both", expand=True, padx=8)
     qtree = ttk.Treeview(qwrap, columns=qcols, show="headings", height=10)
@@ -1250,8 +1251,8 @@ def run():
     qtree.pack(side="left", fill="both", expand=True)
     for cid, txt, wd in (
             ("id", "id", 70), ("what", "what", 86), ("container", "container", 80),
-            ("video", "video", 60), ("codec", "codec", 66), ("size", "size", 88),
-            ("variants", "variants", 92)):
+            ("video", "video", 60), ("codec", "codec", 66), ("lang", "lang", 52),
+            ("size", "size", 88), ("variants", "variants", 92)):
         qtree.heading(cid, text=txt)
         qtree.column(cid, width=wd, anchor="w")
     qtree.bind("<<TreeviewSelect>>", lambda ev: q_picked(ev))
@@ -1334,6 +1335,7 @@ def run():
             n = r.get("variants", 1)
             iid = qtree.insert("", "end", values=(
                 r["id"], what, r["ext"], res, r["vcodec"] or r["acodec"] or "-",
+                formats._lang_tag(r),
                 formats.human_bytes(r["bytes"]),
                 f"{n} merged" if n > 1 else ""))
             q_iids[iid] = r

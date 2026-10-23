@@ -343,6 +343,61 @@ When the qualities cannot be read at all — no network, a blocked video — the
 log says `yt-dlp will pick its own default`, so an unapplied `--max-size` is
 never a silent one.
 
+### Dubbed videos: which language you get
+
+YouTube serves a dubbed track as its own format, with the language on it, and
+**yt-dlp's default ranks the *original* language first** — so on a video whose
+original is Spanish, the default download is the Spanish audio even when an
+English dub is sitting right there. `--audio-lang` (default `en`) is how you
+say which one you want, and `formats` shows you what is on offer:
+
+```
+id     what        container  video  audio  lang  size
+-----  ----------  ---------  -----  -----  ----  ---------
+248    video only  webm       1080p  vp9          152.6 MiB
+140-0  audio only  m4a        -      mp4a   es*   17.2 MiB
+140-1  audio only  m4a        -      mp4a   en    13.7 MiB
+140-2  audio only  m4a        -      mp4a   fr    13.7 MiB
+
+    spoken languages: es (original), en, fr
+    will take: en
+
+    to take this one:
+      musictool get "…" --keep-video -f 248+140-1     # 1080p vp9 + mp4a [en] ~ 166.3 MiB
+```
+
+`*` marks the original track. The `lang` column appears only when the video
+actually has tagged languages, so a normal single-language video looks exactly
+as it did before.
+
+- `--audio-lang en` (the default) — take the English track when there is one.
+- `--audio-lang es` — take a different one.
+- `--audio-lang any` — no preference; take whatever is best, which is yt-dlp's
+  old behaviour (the original language).
+- If the language you asked for is not offered, it says
+  `will take: the best available -- nothing here is tagged de` rather than
+  silently giving you something else.
+
+Under the hood this is a **format filter**, not a sort. `--format-sort lang:en`
+looks like the obvious answer and does nothing: in yt-dlp the sort field called
+`lang` maps to `language_preference`, a number, not to the language code. What
+works is
+
+```
+-f "bv*+ba[language^=en]/bv*+ba/b"      # video downloads
+-f "ba[language^=en]/ba/b"              # audio-only downloads
+```
+
+which musictool adds for you when no explicit `-f` is in play — with the `/…/b`
+fallback, so a video with no tagged languages behaves exactly as before. An
+explicit `--format-selector` still wins over everything.
+
+Two bugs this exposed while being built: a dubbed video's three audio tracks
+shared one itag base (`140-0`, `140-1`, `140-2`), so the variant collapse
+merged all three into one row and the de-duplication merged them again — you
+literally could not see that an English track existed. Language is now part of
+both grouping keys.
+
 ### Your previous yt-dlp command, in musictool
 
 ```bash
@@ -843,7 +898,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 705 assertions, 0 failures**
+**Verified by running the code — 733 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

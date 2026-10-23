@@ -84,6 +84,13 @@ def rows_from_info(info):
             "abr": float(f.get("abr") or 0) or None,
             "bytes": int(size) if size else None,
             "note": f.get("format_note") or "",
+            # YouTube serves a dubbed track as its own format, with the
+            # language on it. Without this the picker cannot tell an English
+            # track from a Spanish one, and yt-dlp's own default ranks the
+            # *original* language first -- so a dubbed video quietly arrives
+            # in the wrong language.
+            "lang": (f.get("language") or "").strip(),
+            "lang_pref": int(f.get("language_preference") or 0),
         })
     # biggest first is how people read a quality list
     out.sort(key=lambda r: (r["bytes"] or -1, r["height"] or -1), reverse=True)
@@ -98,6 +105,7 @@ def table(rows, title=None):
     """An aligned text table, biggest first, with a 'what is it' column."""
     body = []
     show_variants = any(r.get("variants", 1) > 1 for r in rows)
+    show_lang = any((r.get("lang") or "") for r in rows)
     for r in rows:
         if r["kind"] == "audio":
             what = "audio only"
@@ -111,13 +119,20 @@ def table(rows, title=None):
         if r["fps"] and r["fps"] not in (25, 30):
             res += f"{r['fps']}"
         row = [(r.get("base") or r["id"]) if show_variants else r["id"],
-               what, r["ext"], res,
-               r["vcodec"] or r["acodec"] or "-", human_bytes(r["bytes"])]
+               what, r["ext"], res, r["vcodec"] or r["acodec"] or "-"]
+        if show_lang:
+            row.append(_lang_tag(r))
+        row.append(human_bytes(r["bytes"]))
         if show_variants:
             n = r.get("variants", 1)
             row.append(f"{n} merged" if n > 1 else "")
         body.append(row)
-    head = list(COLUMNS_V if show_variants else COLUMNS)
+    head = list(COLUMNS[:5])
+    if show_lang:
+        head.append("lang")
+    head.append("size")
+    if show_variants:
+        head.append("variants")
     widths = [max(len(str(h)), *(len(str(b[i])) for b in body)) if body else len(str(h))
               for i, h in enumerate(head)]
     lines = []
@@ -130,18 +145,81 @@ def table(rows, title=None):
     return "\n".join(lines)
 
 
-def _audio_pool(rows):
+def _audio_pool(rows, lang=None):
     """Pure audio tracks first: pairing a video stream with a *combined*
-    (video+audio) format would merge in a second video track for nothing."""
+    (video+audio) format would merge in a second video track for nothing.
+
+    With `lang`, the tracks in that language only -- and only when the video
+    actually offers one, so a single-language video is never left with an
+    empty pool.
+    """
     pure = [r for r in rows if r["kind"] == "audio"]
-    if pure:
-        return pure
-    # No separate audio track (a plain file): the file itself carries the audio.
-    return [r for r in rows if r["kind"] in ("both", "file")]
+    if not pure:
+        # No separate audio track (a plain file): the file itself carries it.
+        pure = [r for r in rows if r["kind"] in ("both", "file")]
+    if lang:
+        wanted = [r for r in pure if _match_lang(r, lang)]
+        if wanted:
+            return wanted
+    return pure
 
 
-def _best_audio(rows):
-    auds = _audio_pool(rows)
+def _match_lang(row, lang):
+    """'en' matches 'en', 'en-US' and 'en-GB'; '' matches nothing."""
+    want = str(lang or "").strip().lower()
+    have = str(row.get("lang") or "").strip().lower()
+    if not want or not have or want in ("any", "auto", "original", "*"):
+        return False
+    return have == want or have.split("-")[0] == want.split("-")[0]
+
+
+def _lang_tag(row):
+    """What the lang column shows: the code, starred when it is the original."""
+    lang = row.get("lang") or ""
+    if not lang:
+        return ""
+    return lang + "*" if (row.get("lang_pref") or 0) > 0 else lang
+
+
+def languages_in(rows):
+    """Every spoken language this video offers, originals first."""
+    out = []
+    for r in sorted(rows or [], key=lambda r: -(r.get("lang_pref") or 0)):
+        lang = (r.get("lang") or "").strip()
+        if lang and lang not in [x[0] for x in out]:
+            out.append((lang, (r.get("lang_pref") or 0) > 0,
+                        (r.get("note") or "").strip()))
+    return out
+
+
+def preferred_language(rows, lang):
+    """Which of the languages this video offers a preference lands on.
+
+    -> the code ('en'), or None when the video has no track in it.
+    """
+    for code, _orig, _note in languages_in(rows):
+        if _match_lang({"lang": code}, lang):
+            return code
+    return None
+
+
+def audio_lang_selector(keep_video=False, lang="en"):
+    """A default `-f` that prefers one spoken language, with a clean fallback.
+
+    `--format-sort lang:en` does NOT do this: in yt-dlp the sort field called
+    `lang` maps to `language_preference`, a number, not to the language code.
+    Filtering on the `language` field is what actually works, and the `/`
+    fallback keeps the old behaviour when no track is tagged.
+    """
+    lang = str(lang or "").strip()
+    if not lang or lang.lower() in ("any", "auto", "original", "*"):
+        return ""
+    tag = f"[language^={lang}]"
+    return (f"bv*+ba{tag}/bv*+ba/b" if keep_video else f"ba{tag}/ba/b")
+
+
+def _best_audio(rows, lang=None):
+    auds = _audio_pool(rows, lang)
     if not auds:
         return None
     return max(auds, key=lambda r: (r["abr"] or r["tbr"] or 0))
@@ -151,7 +229,8 @@ def _rank(r):
     return (r["height"] or 0, r["fps"] or 0, r["tbr"] or 0)
 
 
-def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
+def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False,
+         lang=None):
     """Choose a yt-dlp format selector.
 
     -> (selector, video_row_or_None, audio_row_or_None, note) or (None, ...) when
@@ -160,7 +239,7 @@ def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
     if not rows:
         return None, None, None, "no formats reported"
     if audio_only:
-        auds = _audio_pool(rows)
+        auds = _audio_pool(rows, lang)
         if not auds:
             return None, None, None, "no audio track offered"
         chosen = min(auds, key=lambda r: (r["bytes"] or 0)) if smallest else \
@@ -190,12 +269,12 @@ def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
         else max(pool, key=_rank)
     audio = None
     if chosen["kind"] == "video":
-        audio = _best_audio(rows)
+        audio = _best_audio(rows, lang)
         if audio is None:
             return None, chosen, None, "video stream found but no audio track"
         if max_bytes and chosen["bytes"] and audio["bytes"] and \
                 chosen["bytes"] + audio["bytes"] > max_bytes:
-            small = [r for r in rows if r["kind"] == "audio" and r["bytes"]
+            small = [r for r in _audio_pool(rows, lang) if r["bytes"]
                      and chosen["bytes"] + r["bytes"] <= max_bytes]
             if small:
                 audio = max(small, key=lambda r: (r["abr"] or r["tbr"] or 0))
@@ -252,10 +331,13 @@ def collapse_variants(rows):
     """One row per real stream, keeping the biggest variant of each."""
     groups = {}
     for r in rows:
-        groups.setdefault((variant_base(r["id"]), r["kind"], r["ext"]),
-                          []).append(r)
+        # Language is part of the identity: a dubbed video serves the same
+        # itag once per spoken language, and merging those would hide every
+        # language but one behind a single row.
+        groups.setdefault((variant_base(r["id"]), r["kind"], r["ext"],
+                           (r.get("lang") or "")), []).append(r)
     out = []
-    for (base, _kind, _ext), g in groups.items():
+    for (base, _kind, _ext, _lang), g in groups.items():
         best = dict(max(g, key=lambda r: (r["bytes"] or 0, r["tbr"] or 0)))
         best["base"] = base
         best["variants"] = len(g)
@@ -274,7 +356,10 @@ def dedupe_quality(rows):
     seen = {}
     for r in rows:
         if r["kind"] == "audio":
-            key = ("audio", r["acodec"], r["ext"], round(r["abr"] or r["tbr"] or 0))
+            # Two dubs at the same bitrate are the same quality in different
+            # languages -- they are not duplicates of each other.
+            key = ("audio", r["acodec"], r["ext"],
+                   round(r["abr"] or r["tbr"] or 0), (r.get("lang") or ""))
         else:
             key = (r["height"], r["fps"], r["vcodec"], r["ext"])
         cur = seen.get(key)
@@ -350,16 +435,16 @@ def total_bytes(row, audio=None):
     return _total(row, audio)
 
 
-def _pair(row, rows, max_bytes=None):
+def _pair(row, rows, max_bytes=None, lang=None):
     """A video row plus the best audio track to go with it."""
     if row["kind"] != "video":
         return row, None
-    audio = _best_audio(rows)
+    audio = _best_audio(rows, lang)
     if audio is None:
         return row, None
     if max_bytes and row["bytes"] and audio["bytes"] and \
             row["bytes"] + audio["bytes"] > max_bytes:
-        small = [r for r in rows if r["kind"] == "audio" and r["bytes"]
+        small = [r for r in _audio_pool(rows, lang) if r["bytes"]
                  and row["bytes"] + r["bytes"] <= max_bytes]
         if small:
             audio = max(small, key=lambda r: (r["abr"] or r["tbr"] or 0))
@@ -439,7 +524,7 @@ def _total(row, audio):
     return (row["bytes"] or 0) + ((audio["bytes"] or 0) if audio else 0)
 
 
-def auto_pick(rows, mode="best", max_bytes=None):
+def auto_pick(rows, mode="best", max_bytes=None, lang=None):
     """Choose for the user and say why. -> (selector, row, audio, why)
 
     `rows` should already be filtered. Nothing here guesses: when the pool is
@@ -447,7 +532,7 @@ def auto_pick(rows, mode="best", max_bytes=None):
     """
     all_rows = rows or []
     if mode == "audio":
-        auds = _audio_pool(all_rows)
+        auds = _audio_pool(all_rows, lang)
         if not auds:
             return None, None, None, "no audio track offered"
         best = max(auds, key=lambda r: (r["abr"] or r["tbr"] or 0))
@@ -457,7 +542,7 @@ def auto_pick(rows, mode="best", max_bytes=None):
                 best = max(fit, key=lambda r: (r["abr"] or r["tbr"] or 0))
         return (_selector(best, None), best, None,
                 f"best audio: {best['acodec']} {best['ext']} "
-                f"~ {human_bytes(best['bytes'])}")
+                f"{_spoken(best)}~ {human_bytes(best['bytes'])}")
 
     vids = [r for r in all_rows if r["kind"] in ("video", "both", "file")]
     if not vids:
@@ -491,13 +576,20 @@ def auto_pick(rows, mode="best", max_bytes=None):
             why = (f"best quality: {chosen['height'] or '?'}p "
                    f"{chosen['vcodec'] or chosen['ext']} "
                    f"~ {human_bytes(chosen['bytes'])}")
-    row, audio = _pair(chosen, all_rows, max_bytes)
+    row, audio = _pair(chosen, all_rows, max_bytes, lang)
     total = _total(row, audio)
     if audio:
-        why += f"  +  {audio['acodec']} audio -> ~ {human_bytes(total)} total"
+        why += (f"  +  {audio['acodec']} audio {_spoken(audio)}"
+                f"-> ~ {human_bytes(total)} total")
     if max_bytes and total and total > max_bytes:
         why += f"  (over the {human_bytes(max_bytes)} limit -- nothing fits)"
     return _selector(row, audio), row, audio, why
+
+
+def _spoken(row):
+    """'English ' when the track says what it is spoken in, else ''."""
+    lang = ((row or {}).get("lang") or "").strip()
+    return f"[{lang}] " if lang else ""
 
 
 def describe_choice(chosen, audio=None):
@@ -508,12 +600,14 @@ def describe_choice(chosen, audio=None):
     total = (chosen["bytes"] or 0) + (
         (audio["bytes"] or 0) if audio and audio is not chosen else 0)
     if chosen["kind"] == "audio":
-        return f"audio {chosen['acodec']} {chosen['ext']} ~ {human_bytes(total)}"
+        return (f"audio {chosen['acodec']} {chosen['ext']} {_spoken(chosen)}"
+                f"~ {human_bytes(total)}")
     if chosen["kind"] == "file":
         return f"whole file {chosen['ext']} ~ {human_bytes(total)}"
     res = (f"{chosen['height']}p" if chosen["height"]
            else (chosen["vcodec"] or chosen["ext"]))
     if chosen["fps"] and chosen["fps"] not in (25, 30):
         res += str(chosen["fps"])
-    return (f"{res} {chosen['vcodec']} + {audio['acodec'] if audio else 'audio'} "
-            f"~ {human_bytes(total)}")
+    return (f"{res} {chosen['vcodec']} + "
+            f"{audio['acodec'] if audio else 'audio'} "
+            f"{_spoken(audio if audio else chosen)}~ {human_bytes(total)}")

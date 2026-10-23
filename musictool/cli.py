@@ -62,6 +62,9 @@ def _add_quality_flags(p):
     g.add_argument("--max-size", dest="max_size",
                    help="size ceiling for the file, e.g. 250M or 1G -- picks the "
                         "best quality that fits under it")
+    g.add_argument("--audio-lang", dest="audio_lang", default="en",
+                   help="spoken language you want when a video is dubbed, "
+                        "e.g. en (default) or es; 'any' takes whatever is best")
     g.add_argument("-f", "--format-selector", dest="format_selector",
                    help="a raw yt-dlp -f selector, e.g. 137+140 (overrides the "
                         "two above)")
@@ -202,6 +205,7 @@ def _opts(args):
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
               "quality", "max_size", "format_selector", "merge_format",
+              "audio_lang",
               "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
               "retries", "net_max_wait", "download_archive", "lyrics_dir",
@@ -332,10 +336,25 @@ def cmd_formats(args):
         cap = formats.parse_size(o.get("max_size"))
         want = str(o.get("quality") or "").strip().lower().rstrip("p")
         height = int(want) if want.isdigit() else None
+        lang = str(o.get("audio_lang") or "")
+        spoken = formats.languages_in(rows)
+        if len(spoken) > 1:
+            said = ", ".join(f"{c} (original)" if orig else c
+                             for c, orig, _n in spoken)
+            print(f"\n    spoken languages: {said}")
+            taking = formats.preferred_language(rows, lang)
+            if not lang or lang.lower() in ("any", "auto", "original", "*"):
+                print("    will take: the best available "
+                      "(--audio-lang picks one)")
+            elif taking:
+                print(f"    will take: {taking}")
+            else:
+                print(f"    will take: the best available -- nothing here is "
+                      f"tagged {lang}")
         sel, v, a, note = formats.pick(
             rows, height=height, max_bytes=cap,
             audio_only=not o.get("keep_video"),
-            smallest=want in ("smallest", "worst"))
+            smallest=want in ("smallest", "worst"), lang=lang)
         if sel:
             print(f"\n    to take this one:")
             print(f"      musictool get \"{url}\" --keep-video -f {sel}"
@@ -346,7 +365,7 @@ def cmd_formats(args):
         auto = getattr(args, "auto", None)
         if auto:
             asel, av, aa, why = formats.auto_pick(rows, mode=auto,
-                                                  max_bytes=cap)
+                                                  max_bytes=cap, lang=lang)
             if asel:
                 print(f"\n    auto ({auto}): {why}")
                 print(f"      musictool get \"{url}\" --keep-video -f {asel}"
@@ -404,7 +423,8 @@ def _resolve_quality(url, o, log=print):
     sel, v, a, note = formats.pick(
         rows, height=height, max_bytes=cap,
         audio_only=not o.get("keep_video"),
-        smallest=want in ("smallest", "worst"))
+        smallest=want in ("smallest", "worst"),
+        lang=str(o.get("audio_lang") or ""))
     if not sel:
         log(f"  !! no quality matched ({note})")
         log("  !! so --quality/--max-size cannot be honoured here; yt-dlp "

@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 
-from . import cancel, progress
+from . import cancel, formats, progress
 from .util import (ytdlp_cmd, have_ffmpeg, is_windows, is_net_error, net_sleeps,
                    detect_browser)
 
@@ -226,6 +226,15 @@ def build_args(url, o):
     # a concrete quality, chosen from the size list (`formats`), or a raw -f
     if o.get("format_selector"):
         args += ["-f", o["format_selector"]]
+    else:
+        # No selector of our own: ask yt-dlp for the language you want, with a
+        # fallback to its usual choice when nothing is tagged. Its own default
+        # ranks the ORIGINAL language first, which is not the same as the
+        # language you asked for on a dubbed video.
+        _sel = formats.audio_lang_selector(o.get("keep_video"),
+                                           o.get("audio_lang"))
+        if _sel:
+            args += ["-f", _sel]
     if o.get("merge_format"):
         args += ["--merge-output-format", o["merge_format"]]
     if o.get("remote_components"):

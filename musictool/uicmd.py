@@ -32,11 +32,21 @@ HINTS = {
     "cookies_from_browser": "reads your YouTube login from the browser; 'auto' picks the one you use",
     "output_dir": "remembered between runs",
     "playlist_items": "e.g. 287-447 to resume a playlist where you stopped",
-    "quality": "height in pixels; tick 'keep video' or you get audio only",
+    "keep_video": "Keep video (no audio extract)",
+    "all_formats": "Show every raw row (do not merge variants)",
+    "container": "Only this container",
+    "codec": "Only this codec (avc1, vp9, av01, opus)",
+    "show_audio": "Include the audio-only tracks",
+    "sort": "Sort by",
+    "auto": "Suggest a quality for me",
     "max_size": "takes the best quality that fits under this, e.g. 250M or 1G",
     "format_selector": "an id from 'List qualities + sizes', e.g. 137+140",
     "merge_format": "mkv accepts every codec; mp4 is more compatible",
     "no_playlist": "download just this video, not the playlist it sits in",
+    "all_formats": "yt-dlp splits one stream into ~18 CDN variants; those are merged by default",
+    "auto": "best, compatible (H.264/mp4), fit (best under the size limit), smallest, audio",
+    "sort": "size_desc = biggest file first",
+    "show_audio": "the audio-only tracks, which normally get merged into the video choice",
 }
 
 # Human wording for the generated widgets. Anything missing here falls back to

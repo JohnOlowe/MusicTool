@@ -30,6 +30,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import cancel
 from . import config as configmod
+from . import download
+from . import formats
 from . import progress
 from . import uicmd
 from .cli import build_parser, main as cli_main
@@ -392,6 +394,9 @@ def run():
     # drains the log also applies them. (Calling root.after() from the worker
     # is what silently did nothing on Windows: the bar never moved.)
     pq = queue.Queue()
+    # ...and so must every other callback into the widgets: a worker never
+    # touches a tkinter object, it queues a closure that pump() runs.
+    uq = queue.Queue()
     status = tk.StringVar(value="idle")
     report_headline = tk.StringVar(value="no report loaded")
 
@@ -400,6 +405,17 @@ def run():
         q.put(str(msg))
 
     def pump():
+        # callbacks queued by worker threads -- they must run here, on the
+        # main thread, not in the thread that produced them.
+        try:
+            while True:
+                cb = uq.get_nowait()
+                try:
+                    cb()
+                except Exception as e:                        # noqa: BLE001
+                    log(f"!! {type(e).__name__}: {e}")
+        except queue.Empty:
+            pass
         try:
             while True:
                 outbox.configure(state="normal")
@@ -443,6 +459,10 @@ def run():
         status.set("stopping..." if cancel.requested() else
                    ("working..." if on else "idle"))
 
+    def ui(fn):
+        """Queue a widget touch for the main thread (pump runs it)."""
+        uq.put(fn)
+
     def stop_now():
         """Ask the running job to stop. Whatever finished keeps its lyrics."""
         cancel.request()
@@ -451,7 +471,7 @@ def run():
 
     def worker(fn, after=None):
         def go():
-            busy(True)
+            ui(lambda: busy(True))
             rc = None
             try:
                 rc = fn()
@@ -460,10 +480,10 @@ def run():
             except Exception as e:
                 log(f"!! {type(e).__name__}: {e}")
             finally:
-                busy(False)
+                ui(lambda: busy(False))
                 pq.put(FINISH)
                 if after:
-                    root.after(0, lambda: after(rc))
+                    ui(lambda: after(rc))
         threading.Thread(target=go, daemon=True).start()
 
     def do_argv(argv, after=None):
@@ -968,6 +988,265 @@ def run():
     run_buttons += [bex, bem]
     lfr.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
     areas["lyricsfiles"].pack(fill="both", expand=True)
+
+    # ==================================================== Quality tab
+    # yt-dlp's raw format list is unusable (a 4K video reports 127 rows:
+    # every stream split into 18 CDN variants, plus doubles of the same
+    # resolution). This tab shows it collapsed, with filters, an automatic
+    # pick and a manual click-to-choose.
+    qtab = ttk.Frame(nb)
+    nb.add(qtab, text="  Quality  ")
+    ttk.Label(qtab, text="Pick a quality by its real file size:").pack(
+        anchor="w", padx=8, pady=(8, 0))
+    qrow = ttk.Frame(qtab)
+    qrow.pack(fill="x", padx=8, pady=(0, 4))
+    ttk.Label(qrow, text="Video URL:").pack(side="left")
+    qurl = tk.StringVar(value="")
+    ttk.Entry(qrow, textvariable=qurl, width=58).pack(
+        side="left", padx=6, fill="x", expand=True)
+    bql = ttk.Button(qrow, text="Load qualities", command=lambda: q_load())
+    bql.pack(side="left", padx=4)
+    run_buttons.append(bql)
+
+    qf = ttk.LabelFrame(qtab, text="filters")
+    qf.pack(fill="x", padx=8, pady=(0, 4))
+    qres = tk.StringVar(value="any")
+    qcont = tk.StringVar(value="any")
+    qcodec = tk.StringVar(value="any")
+    qsize = tk.StringVar(value="")
+    qsort = tk.StringVar(value="size_desc")
+    qaudio = tk.BooleanVar(value=False)
+    qcollapse = tk.BooleanVar(value=True)
+    qdedupe = tk.BooleanVar(value=True)
+    _f1 = ttk.Frame(qf)
+    _f1.pack(fill="x", padx=4, pady=2)
+    ttk.Label(_f1, text="Max height:").pack(side="left")
+    c = ttk.Combobox(_f1, textvariable=qres, width=7, state="readonly",
+                     values=["any", "2160", "1440", "1080", "720", "480",
+                             "360", "240", "144"])
+    c.pack(side="left", padx=(2, 10))
+    c.bind("<<ComboboxSelected>>", lambda e: q_draw())
+    ttk.Label(_f1, text="Container:").pack(side="left")
+    c = ttk.Combobox(_f1, textvariable=qcont, width=8, state="readonly",
+                     values=["any", "mp4", "webm", "mkv"])
+    c.pack(side="left", padx=(2, 10))
+    c.bind("<<ComboboxSelected>>", lambda e: q_draw())
+    ttk.Label(_f1, text="Codec:").pack(side="left")
+    c = ttk.Combobox(_f1, textvariable=qcodec, width=8, state="readonly",
+                     values=["any", "avc1", "vp9", "vp09", "av01", "opus",
+                             "mp4a"])
+    c.pack(side="left", padx=(2, 10))
+    c.bind("<<ComboboxSelected>>", lambda e: q_draw())
+    ttk.Label(_f1, text="Max size:").pack(side="left")
+    e = ttk.Entry(_f1, textvariable=qsize, width=8)
+    e.pack(side="left", padx=(2, 2))
+    e.bind("<Return>", lambda ev: q_draw())
+    ttk.Button(_f1, text="Apply", command=lambda: q_draw()).pack(
+        side="left", padx=6)
+    _f2 = ttk.Frame(qf)
+    _f2.pack(fill="x", padx=4, pady=2)
+    ttk.Checkbutton(_f2, text="Merge variant splits",
+                    variable=qcollapse, command=lambda: q_draw()).pack(
+        side="left", padx=4)
+    ttk.Checkbutton(_f2, text="Hide same-quality doubles",
+                    variable=qdedupe, command=lambda: q_draw()).pack(
+        side="left", padx=4)
+    ttk.Checkbutton(_f2, text="Show audio-only tracks",
+                    variable=qaudio, command=lambda: q_draw()).pack(
+        side="left", padx=4)
+    ttk.Label(_f2, text="Sort:").pack(side="left", padx=(12, 0))
+    c = ttk.Combobox(_f2, textvariable=qsort, width=16, state="readonly",
+                     values=list(formats.SORTS))
+    c.pack(side="left", padx=2)
+    c.bind("<<ComboboxSelected>>", lambda ev: q_draw())
+
+    qm = ttk.LabelFrame(qtab, text="choose")
+    qm.pack(fill="x", padx=8, pady=(0, 4))
+    qmode = tk.StringVar(value="auto")
+    qpreset = tk.StringVar(value=formats.AUTO_LABELS["best"])
+    _m1 = ttk.Frame(qm)
+    _m1.pack(fill="x", padx=4, pady=2)
+    ttk.Radiobutton(_m1, text="Auto:", variable=qmode, value="auto",
+                    command=lambda: q_draw()).pack(side="left")
+    c = ttk.Combobox(_m1, textvariable=qpreset, width=26, state="readonly",
+                     values=[formats.AUTO_LABELS[m] for m in
+                             formats.AUTO_MODES])
+    c.pack(side="left", padx=4)
+    c.bind("<<ComboboxSelected>>", lambda e: q_draw())
+    ttk.Radiobutton(_m1, text="Manual: click a row below",
+                    variable=qmode, value="manual",
+                    command=lambda: q_draw()).pack(side="left", padx=(14, 0))
+
+    qcols = ("id", "what", "container", "video", "codec", "size", "variants")
+    qwrap = ttk.Frame(qtab)
+    qwrap.pack(fill="both", expand=True, padx=8)
+    qtree = ttk.Treeview(qwrap, columns=qcols, show="headings", height=10)
+    qsb = ttk.Scrollbar(qwrap, orient="vertical", command=qtree.yview)
+    qtree.configure(yscrollcommand=qsb.set)
+    qsb.pack(side="right", fill="y")
+    qtree.pack(side="left", fill="both", expand=True)
+    for cid, txt, wd in (
+            ("id", "id", 70), ("what", "what", 86), ("container", "container", 80),
+            ("video", "video", 60), ("codec", "codec", 66), ("size", "size", 88),
+            ("variants", "variants", 92)):
+        qtree.heading(cid, text=txt)
+        qtree.column(cid, width=wd, anchor="w")
+    qtree.bind("<<TreeviewSelect>>", lambda ev: q_picked(ev))
+    qtree.bind("<Double-1>", lambda ev: q_download())
+
+    qinfo = tk.StringVar(value="Paste a video URL above and press "
+                              "“Load qualities”.")
+    ttk.Label(qtab, textvariable=qinfo, foreground="#06a",
+              wraplength=980, justify="left").pack(anchor="w", padx=8,
+                                                   pady=(4, 0))
+    qcmd = ttk.Frame(qtab)
+    qcmd.pack(fill="x", padx=8, pady=(2, 8))
+    qfmt = tk.StringVar(value="")
+    ttk.Entry(qcmd, textvariable=qfmt, state="readonly").pack(
+        side="left", fill="x", expand=True, padx=(0, 6))
+    ttk.Button(qcmd, text="Copy command",
+               command=lambda: q_copy()).pack(side="left", padx=2)
+    bqd = ttk.Button(qcmd, text="Download this quality",
+                     command=lambda: q_download())
+    bqd.pack(side="left", padx=2)
+    run_buttons.append(bqd)
+
+    q_rows = []
+    q_iids = {}
+
+    def q_cap():
+        return formats.parse_size(qsize.get()) if qsize.get().strip() else None
+
+    def q_visible():
+        h = qres.get().strip()
+        return formats.apply_filters(
+            q_rows,
+            max_height=int(h) if h.isdigit() else None,
+            container=None if qcont.get() == "any" else qcont.get(),
+            codec=None if qcodec.get() == "any" else qcodec.get(),
+            max_bytes=q_cap(),
+            include_audio=bool(qaudio.get()),
+            collapse=bool(qcollapse.get()),
+            dedupe=bool(qdedupe.get()),
+            sort=qsort.get())
+
+    def q_pool():
+        """The visible rows plus the audio tracks the filters hid."""
+        vis = q_visible()
+        return formats.with_audio_pool(vis, q_rows)
+
+    def q_picked(_ev=None):
+        ids = list(qtree.selection() or [])
+        if not ids:
+            return
+        r = q_iids.get(ids[-1])
+        if not r:
+            return
+        qmode.set("manual")
+        row, audio = formats.pair_with_audio(r, q_rows, q_cap())
+        sel = formats.selector_for(row, audio)
+        qfmt.set(sel)
+        cap = q_cap()
+        total = formats.total_bytes(row, audio)
+        extra = ""
+        if cap and total and total > cap:
+            extra = (f"  (over your {formats.human_bytes(cap)} cap by "
+                     f"{formats.human_bytes(total - cap)})")
+        audio_txt = (f" + {audio['acodec']} audio" if audio
+                     else " (audio included)")
+        qinfo.set(f"manual: {row['height'] or '-'}p {row['vcodec'] or '-'} "
+                  f"{row['ext']} ~ {formats.human_bytes(row['bytes'])}"
+                  f"{audio_txt}{extra}  ->  -f {sel}")
+
+    def q_draw(_ev=None):
+        rows = q_visible()
+        qtree.delete(*qtree.get_children())
+        q_iids.clear()
+        for r in rows:
+            what = {"audio": "audio only", "both": "video+audio",
+                    "file": "whole file"}.get(r["kind"], "video only")
+            res = f"{r['height']}p" if r["height"] else "-"
+            if r["fps"] and r["fps"] not in (25, 30):
+                res += str(r["fps"])
+            n = r.get("variants", 1)
+            iid = qtree.insert("", "end", values=(
+                r["id"], what, r["ext"], res, r["vcodec"] or r["acodec"] or "-",
+                formats.human_bytes(r["bytes"]),
+                f"{n} merged" if n > 1 else ""))
+            q_iids[iid] = r
+        if qmode.get() == "auto":
+            preset = next((m for m in formats.AUTO_MODES
+                           if formats.AUTO_LABELS[m] == qpreset.get()), "best")
+            sel, v, a, why = formats.auto_pick(q_pool(), mode=preset,
+                                               max_bytes=q_cap())
+            qfmt.set(sel or "")
+            qinfo.set(("auto: " if sel else "auto: nothing matched — ") + why)
+        else:
+            q_picked()
+        qinfo.set(qinfo.get() + f"     [{len(rows)} of {len(q_rows)} shown]")
+
+    def q_args(selector):
+        vals = dict(panes["get"].values())
+        vals["format_selector"] = selector
+        vals["keep_video"] = True
+        url = qurl.get().strip()
+        return uicmd.build_argv("get", vals, positionals=[url] if url else [],
+                                parser=build_parser())
+
+    def q_download():
+        if not qfmt.get():
+            messagebox.showwarning("musictool",
+                                   "No quality chosen yet — load the list first.")
+            return
+        if not qurl.get().strip():
+            messagebox.showwarning("musictool", "Paste a video URL first.")
+            return
+        do_argv(q_args(qfmt.get()))
+
+    def q_copy():
+        if not qfmt.get():
+            return
+        cmd = uicmd.quote_cmd(q_args(qfmt.get()))   # already starts "musictool"
+        root.clipboard_clear()
+        root.clipboard_append(cmd)
+        log("copied: " + cmd)
+        qinfo.set("copied the full command to the clipboard")
+
+    def q_load():
+        url = qurl.get().strip()
+        if not url:
+            got = typed_urls()
+            if got:
+                url = got[0]
+                qurl.set(url)
+        if not url:
+            messagebox.showwarning("musictool", "Paste a video URL first.")
+            return
+        g = panes["get"].values()
+        opts = {"cookies": g.get("cookies"),
+                "cookies_from_browser": g.get("cookies_from_browser")}
+
+        def job():
+            return download.probe(url, opts)
+
+        def after(info):
+            if not isinstance(info, dict) or info.get("error"):
+                err = str((info or {}).get("error") or "no answer")
+                q_rows.clear()
+                qinfo.set("could not read the qualities: "
+                          + err.splitlines()[0][:240])
+                hint = download.ADVICE.get(download.classify_error(err))
+                if hint:
+                    qinfo.set(qinfo.get() + "\n-> " + hint)
+                q_draw()
+                return
+            q_rows[:] = formats.rows_from_info(info)
+            title = info.get("title") or url
+            log(f"{len(q_rows)} raw qualities for {title!r}")
+            q_draw()
+
+        qinfo.set(f"reading the qualities of {url} …")
+        worker(job, after=after)
 
     # ================================================== log pane (resizable)
     logf = ttk.LabelFrame(root, text="log")

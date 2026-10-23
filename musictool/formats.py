@@ -10,6 +10,8 @@ YouTube reports all three; a plain file over HTTP may report none, in which case
 the size column shows "?" rather than a guess.
 """
 
+import re
+
 NO_CODEC = ("none", "", None)
 
 
@@ -89,11 +91,13 @@ def rows_from_info(info):
 
 
 COLUMNS = ("id", "what", "container", "video", "audio", "size")
+COLUMNS_V = ("id", "what", "container", "video", "audio", "size", "variants")
 
 
 def table(rows, title=None):
     """An aligned text table, biggest first, with a 'what is it' column."""
     body = []
+    show_variants = any(r.get("variants", 1) > 1 for r in rows)
     for r in rows:
         if r["kind"] == "audio":
             what = "audio only"
@@ -106,9 +110,14 @@ def table(rows, title=None):
         res = (f"{r['height']}p" if r["height"] else "-")
         if r["fps"] and r["fps"] not in (25, 30):
             res += f"{r['fps']}"
-        body.append([r["id"], what, r["ext"], res,
-                     r["vcodec"] or r["acodec"] or "-", human_bytes(r["bytes"])])
-    head = list(COLUMNS)
+        row = [(r.get("base") or r["id"]) if show_variants else r["id"],
+               what, r["ext"], res,
+               r["vcodec"] or r["acodec"] or "-", human_bytes(r["bytes"])]
+        if show_variants:
+            n = r.get("variants", 1)
+            row.append(f"{n} merged" if n > 1 else "")
+        body.append(row)
+    head = list(COLUMNS_V if show_variants else COLUMNS)
     widths = [max(len(str(h)), *(len(str(b[i])) for b in body)) if body else len(str(h))
               for i, h in enumerate(head)]
     lines = []
@@ -160,7 +169,7 @@ def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
             fit = [r for r in auds if r["bytes"] and r["bytes"] <= max_bytes]
             if fit:
                 chosen = max(fit, key=lambda r: (r["abr"] or r["tbr"] or 0))
-        return chosen["id"], None, chosen, ""
+        return _selector(chosen, None), None, chosen, ""
 
     vids = [r for r in rows if r["kind"] in ("video", "both", "file")]
     if not vids:
@@ -190,9 +199,9 @@ def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
                      and chosen["bytes"] + r["bytes"] <= max_bytes]
             if small:
                 audio = max(small, key=lambda r: (r["abr"] or r["tbr"] or 0))
-        selector = f"{chosen['id']}+{audio['id']}"
+        selector = _selector(chosen, audio)
     else:
-        selector = chosen["id"]
+        selector = _selector(chosen, None)
     note = ""
     if height and chosen["height"] and chosen["height"] > height:
         note = (f"nothing at or below {height}p; smallest available is "
@@ -204,6 +213,237 @@ def pick(rows, height=None, max_bytes=None, audio_only=False, smallest=False):
                 f"nothing fits in {human_bytes(max_bytes)} -- closest is "
                 f"{human_bytes(total)}")
     return selector, chosen, audio, note
+
+
+
+# --------------------------------------------------------------------------
+# Making the list readable
+#
+# yt-dlp lists the same stream many times: YouTube's SABR/range delivery shows
+# up as 140-0 ... 140-17, i.e. eighteen rows for one audio track, and a video
+# often offers the same resolution twice at different bitrates. Both are noise
+# when you are trying to choose, so they are collapsed by default -- and the
+# collapse is a filter you can switch off, not something done behind your back.
+# --------------------------------------------------------------------------
+VARIANT_RE = re.compile(r"^(.+)-\d+$")
+
+RESOLUTIONS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
+CONTAINERS = ("mp4", "webm", "mkv", "m4a")
+CODECS = ("avc1", "vp9", "vp09", "av01", "hev1", "hvc1", "opus", "mp4a")
+
+# Auto presets, in the order they appear in the picker.
+AUTO_MODES = ("best", "compatible", "fit", "smallest", "audio")
+AUTO_LABELS = {
+    "best": "Best quality",
+    "compatible": "Most compatible (H.264/mp4 -- plays anywhere)",
+    "fit": "Best that fits my size limit",
+    "smallest": "Smallest file",
+    "audio": "Audio only",
+}
+
+
+def variant_base(fid):
+    """'140-7' -> '140'; an ordinary id is its own base."""
+    m = VARIANT_RE.match(str(fid or ""))
+    return m.group(1) if m else (fid or "?")
+
+
+def collapse_variants(rows):
+    """One row per real stream, keeping the biggest variant of each."""
+    groups = {}
+    for r in rows:
+        groups.setdefault((variant_base(r["id"]), r["kind"], r["ext"]),
+                          []).append(r)
+    out = []
+    for (base, _kind, _ext), g in groups.items():
+        best = dict(max(g, key=lambda r: (r["bytes"] or 0, r["tbr"] or 0)))
+        best["base"] = base
+        best["variants"] = len(g)
+        out.append(best)
+    out.sort(key=lambda r: (r["bytes"] or -1, r["height"] or -1), reverse=True)
+    return out
+
+
+def dedupe_quality(rows):
+    """Same resolution/fps/codec/container twice -> keep the smaller file.
+
+    Two rows with identical video characteristics are the same quality, so the
+    smaller one is simply the better encode. Audio is matched on codec and
+    bitrate for the same reason.
+    """
+    seen = {}
+    for r in rows:
+        if r["kind"] == "audio":
+            key = ("audio", r["acodec"], r["ext"], round(r["abr"] or r["tbr"] or 0))
+        else:
+            key = (r["height"], r["fps"], r["vcodec"], r["ext"])
+        cur = seen.get(key)
+        if cur is None or (r["bytes"] or 0) < (cur["bytes"] or 1 << 62):
+            r = dict(r)
+            r["also"] = (cur.get("also", 0) + 1) if cur else r.get("also", 0)
+            seen[key] = r
+    out = list(seen.values())
+    out.sort(key=lambda r: (r["bytes"] or -1, r["height"] or -1), reverse=True)
+    return out
+
+
+SORTS = ("size_desc", "size_asc", "resolution", "container")
+
+
+def apply_filters(rows, max_height=None, container=None, codec=None,
+                  max_bytes=None, include_audio=False, collapse=True,
+                  dedupe=True, sort="size_desc"):
+    """The readable list: collapsed, de-duplicated, then narrowed."""
+    out = list(rows or [])
+    if collapse:
+        out = collapse_variants(out)
+    if dedupe:
+        out = dedupe_quality(out)
+    if not include_audio:
+        out = [r for r in out if r["kind"] != "audio"]
+    if max_height:
+        out = [r for r in out if not r["height"] or r["height"] <= max_height]
+    if container and container != "any":
+        out = [r for r in out if r["ext"] == container]
+    if codec and codec != "any":
+        out = [r for r in out
+               if (r["vcodec"] or "").startswith(codec)
+               or (r["acodec"] or "").startswith(codec)]
+    if max_bytes:
+        out = [r for r in out if not r["bytes"] or r["bytes"] <= max_bytes]
+    if sort == "size_asc":
+        out.sort(key=lambda r: (r["bytes"] is None, r["bytes"] or 0))
+    elif sort == "resolution":
+        out.sort(key=lambda r: (r["height"] or 0, r["fps"] or 0), reverse=True)
+    elif sort == "container":
+        out.sort(key=lambda r: (r["ext"], -(r["height"] or 0)))
+    else:
+        out.sort(key=lambda r: (r["bytes"] or -1, r["height"] or -1), reverse=True)
+    return out
+
+
+def with_audio_pool(rows, all_rows):
+    """`rows` (a filtered table) plus the audio tracks it filtered out.
+
+    A table that hides audio-only tracks must not stop the picker from
+    pairing a video with a real audio track -- otherwise yt-dlp is told to
+    mux a 1080p stream with the 360p combined format just because that was
+    the only thing left in the pool.
+    """
+    keep = {id(r) for r in rows}
+    return list(rows) + [r for r in all_rows
+                         if id(r) not in keep and r["kind"] != "video"]
+
+
+def pair_with_audio(row, rows, max_bytes=None):
+    """Public wrapper over _pair: the audio track to go with `row`."""
+    return _pair(row, rows, max_bytes)
+
+
+def selector_for(row, audio):
+    """Public wrapper over _selector: the -f string for `row` (+ `audio`)."""
+    return _selector(row, audio)
+
+
+def total_bytes(row, audio=None):
+    """Public wrapper over _total: the bytes the download will take."""
+    return _total(row, audio)
+
+
+def _pair(row, rows, max_bytes=None):
+    """A video row plus the best audio track to go with it."""
+    if row["kind"] != "video":
+        return row, None
+    audio = _best_audio(rows)
+    if audio is None:
+        return row, None
+    if max_bytes and row["bytes"] and audio["bytes"] and \
+            row["bytes"] + audio["bytes"] > max_bytes:
+        small = [r for r in rows if r["kind"] == "audio" and r["bytes"]
+                 and row["bytes"] + r["bytes"] <= max_bytes]
+        if small:
+            audio = max(small, key=lambda r: (r["abr"] or r["tbr"] or 0))
+    return row, audio
+
+
+def _ref(r):
+    """How to name one stream on a -f line.
+
+    A collapsed row was measured as one concrete variant (251-17). yt-dlp
+    usually also knows the plain itag, so ask for that first and fall back
+    to the variant: `251/251-17`. Whichever it takes, it is the whole track.
+    """
+    base = r.get("base") or variant_base(r["id"])
+    return f"{base}/{r['id']}" if base != r["id"] else r["id"]
+
+
+def _selector(row, audio):
+    return f"{_ref(row)}+{_ref(audio)}" if audio else _ref(row)
+
+
+def _total(row, audio):
+    return (row["bytes"] or 0) + ((audio["bytes"] or 0) if audio else 0)
+
+
+def auto_pick(rows, mode="best", max_bytes=None):
+    """Choose for the user and say why. -> (selector, row, audio, why)
+
+    `rows` should already be filtered. Nothing here guesses: when the pool is
+    empty the answer is None plus the reason, so the UI can say so.
+    """
+    all_rows = rows or []
+    if mode == "audio":
+        auds = _audio_pool(all_rows)
+        if not auds:
+            return None, None, None, "no audio track offered"
+        best = max(auds, key=lambda r: (r["abr"] or r["tbr"] or 0))
+        if max_bytes:
+            fit = [r for r in auds if r["bytes"] and r["bytes"] <= max_bytes]
+            if fit:
+                best = max(fit, key=lambda r: (r["abr"] or r["tbr"] or 0))
+        return (_selector(best, None), best, None,
+                f"best audio: {best['acodec']} {best['ext']} "
+                f"~ {human_bytes(best['bytes'])}")
+
+    vids = [r for r in all_rows if r["kind"] in ("video", "both", "file")]
+    if not vids:
+        return None, None, None, ("nothing matches those filters"
+                                  if all_rows else "no formats reported")
+    if mode == "smallest":
+        chosen = min(vids, key=lambda r: (r["bytes"] is None, r["bytes"] or 0))
+        why = f"smallest file ~ {human_bytes(chosen['bytes'])}"
+    elif mode == "compatible":
+        compat = [r for r in vids
+                  if (r["vcodec"] or "").startswith(("avc1", "hvc1", "hev1"))
+                  or r["kind"] in ("both", "file")]
+        pool = compat or vids
+        chosen = max(pool, key=_rank)
+        why = (f"tallest H.264/mp4 (plays on anything, no conversion) "
+               f"~ {human_bytes(chosen['bytes'])}")
+        if not compat:
+            why = ("no H.264 in this list; took the best available "
+                   f"{chosen['vcodec'] or chosen['ext']} instead")
+    else:                                   # best / fit
+        pool = vids
+        if max_bytes:
+            fit = [r for r in pool if r["bytes"] and r["bytes"] <= max_bytes]
+            if fit:
+                pool = fit
+        chosen = max(pool, key=_rank)
+        if mode == "fit" and max_bytes:
+            why = (f"best under {human_bytes(max_bytes)}: "
+                   f"{chosen['height'] or '?'}p ~ {human_bytes(chosen['bytes'])}")
+        else:
+            why = (f"best quality: {chosen['height'] or '?'}p "
+                   f"{chosen['vcodec'] or chosen['ext']} "
+                   f"~ {human_bytes(chosen['bytes'])}")
+    row, audio = _pair(chosen, all_rows, max_bytes)
+    total = _total(row, audio)
+    if audio:
+        why += f"  +  {audio['acodec']} audio -> ~ {human_bytes(total)} total"
+    if max_bytes and total and total > max_bytes:
+        why += f"  (over the {human_bytes(max_bytes)} limit -- nothing fits)"
+    return _selector(row, audio), row, audio, why
 
 
 def describe_choice(chosen, audio=None):

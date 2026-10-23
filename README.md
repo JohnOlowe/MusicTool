@@ -78,7 +78,7 @@ python musictool.py gui          # graphical interface
 |---|---|
 | `get URL...` | download, embedding each file's lyrics as it lands |
 | `check URL...` | is this reachable, or does YouTube want a login? (no cookies used) |
-| `formats URL...` | every quality on offer, with its size, plus the command to take one |
+| `formats URL...` | the qualities on offer (variant splits merged), with sizes, plus the command to take one |
 | `lyrics PATH...` | fetch/fix lyrics for existing files or folders |
 | `scan PATH...` | offline state report (`--json` for scripting) |
 | `duplicates PATH...` | find files sharing the same lyrics; `--fix` re-fetches |
@@ -106,6 +106,13 @@ drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
 that fits under it) · `-f 137+140` (a raw yt-dlp selector, overrides both) ·
 `--merge-format mkv|mp4|webm|mov` · `--subs` · `--sub-langs en,es` ·
 `--remote-components ejs:github` · `--keep-video` (without it you get audio only)
+
+### Listing options (`formats`)
+
+`--auto best|compatible|fit|smallest|audio` (it says why) · `--max-size 1G` ·
+`--quality 1080` · `--container mp4|webm|mkv` · `--codec avc1|vp9|av01|opus` ·
+`--sort size_desc|size_asc|resolution|container` · `--show-audio` ·
+`--all-formats` (every raw row, nothing merged)
 
 ### Lyrics options
 
@@ -151,24 +158,70 @@ python musictool.py formats "https://youtube.com/watch?v=XXXX" --keep-video
 ```
 
 ```
-    Elevation Worship - Praise  (3:45)
-id   what         container  video    audio  size
----  -----------  ---------  -------  -----  --------
-248  video only   webm       1080p60  vp9    80.1 MiB
-137  video only   mp4        1080p    avc1   66.8 MiB
-136  video only   mp4        720p     avc1   31.5 MiB
-18   video+audio  mp4        360p     avc1   13.4 MiB
-251  audio only   webm       -        opus   4.2 MiB
-140  audio only   m4a        -        mp4a   3.4 MiB
+    Long worship mix  (60:00)
+id   what        container  video  audio  size       variants
+---  ----------  ---------  -----  -----  ---------  --------
+625  video only  mp4        2160p  vp09   7.9 GiB    3 merged
+313  video only  webm       2160p  vp9    5.9 GiB    3 merged
+401  video only  mp4        2160p  av01   1.7 GiB
+137  video only  mp4        1080p  avc1   619.9 MiB
+609  video only  mp4        720p   vp09   896.5 MiB
+136  video only  mp4        720p   avc1   314.7 MiB
+160  video only  mp4        144p   avc1   14.3 MiB
+    (107 rows from yt-dlp collapsed to 7: variant splits and same-quality
+     doubles are merged -- --all-formats shows every row)
 
     to take this one:
-      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 248+251 --merge-format mkv
+      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 625/625-2+251/251-17
 ```
 
 Sizes are yt-dlp's own numbers: `filesize`, or `filesize_approx`, or bitrate x
 duration when YouTube reports neither. Storyboards and other non-media entries
 are filtered out. Video-only streams are paired with a real audio track -- never
 with another combined file, which would drag a second video track along.
+
+### Why the list is shorter than yt-dlp's
+
+YouTube does not serve one file per quality. Every stream is offered as a set of
+near-identical CDN copies with suffixed ids (`140-0`, `140-1`, ... `140-17`), so a
+single 4K video reports **127 rows** for what is really a dozen choices. That list
+is unusable, so musictool merges it before showing it to you:
+
+- **variant splits** -- the 18 copies of one stream become one row, sized by the
+  biggest of them, with a `variants` column saying how many were merged;
+- **same-quality doubles** -- two rows at the same resolution, codec and
+  container are the same quality twice, so the smaller (better) encode stays;
+- **audio-only tracks** are hidden, because they are not something you pick on
+  their own -- they are what the video row gets paired with.
+
+Nothing is thrown away: `--all-formats` prints every raw row, and
+`--show-audio` puts the audio tracks back in the table.
+
+### Filtering it, or letting it choose
+
+```bash
+musictool formats URL --keep-video --auto best          # tallest available
+musictool formats URL --keep-video --auto compatible    # H.264/mp4: plays anywhere
+musictool formats URL --keep-video --auto fit --max-size 1G
+musictool formats URL --keep-video --auto smallest
+musictool formats URL --keep-video --auto audio
+musictool formats URL --keep-video --container mp4 --codec vp9
+musictool formats URL --keep-video --max-size 700M --sort size_asc --show-audio
+```
+
+`--auto` prints the choice **and the reason**:
+
+```
+    auto (compatible): tallest H.264/mp4 (plays on anything, no conversion)
+                       ~ 619.9 MiB  +  opus audio -> ~ 673.3 MiB total
+      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 137/137-0+251/251-17
+```
+
+A selector like `137/137-0` means "the plain itag, or that exact copy of it" --
+whichever yt-dlp has, it downloads the whole stream, never a slice of one.
+
+The **Quality** tab in the GUI does all of this with dropdowns and one click;
+see [GUI](#gui).
 
 Or skip the reading and just say what you want:
 
@@ -507,8 +560,29 @@ override the tags in your files.
 python musictool.py gui
 ```
 
-Six tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
-**Tools**, **Lyrics files** — over the same code paths as the CLI.
+Seven tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
+**Tools**, **Lyrics files**, **Quality** — over the same code paths as the CLI.
+
+### The Quality tab
+
+Paste a video URL, press **Load qualities**, and the tab shows the collapsed
+list — not the 127 rows yt-dlp reports. From there:
+
+- **Filters** on one line: max height, container, codec, a size cap, and the
+  sort order, plus *Merge variant splits*, *Hide same-quality doubles* and
+  *Show audio-only tracks*. Every change re-renders the table immediately.
+- **Auto** — pick a preset (*Best quality*, *Most compatible (H.264/mp4)*,
+  *Best that fits my size limit*, *Smallest file*, *Audio only*) and it fills in
+  the `-f` and tells you why it chose it, including the total size with audio.
+- **Manual** — click a row and it becomes the choice instead; the row's audio
+  partner and total size are shown underneath.
+- The `-f` box at the bottom holds the result. **Copy command** puts the whole
+  `musictool get ...` line on your clipboard, **Download this quality** runs it
+  with the settings from the Download tab. Double-clicking a row downloads it.
+
+If YouTube refuses the request the tab says why and repeats the fix from
+`check` — it does not leave you staring at an empty table.
+
 
 **Every CLI option is in the GUI, and it stays that way automatically.** The
 widgets are generated from the argparse parser itself, and running a job builds the
@@ -638,7 +712,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 560 assertions, 0 failures**
+**Verified by running the code — 618 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes
@@ -680,7 +754,7 @@ accepted.
   through to `lrclib`.
 - **The GUI's pixels.** tkinter is not installed in this sandbox, so the window was
   never *drawn*. Everything except the drawing is now executed for real against
-  `tests/tkstub.py`: `gui.run()` builds all five tabs, every button is invoked, and
+  `tests/tkstub.py`: `gui.run()` builds all seven tabs, every button is invoked, and
   the argv each one produces is captured and asserted — including ticking the
   quick-strip `--allow-unsynced` box, loading the file list, skipping a highlighted
   file, redoing everything with `--force`, refusing to run with nothing ticked, and

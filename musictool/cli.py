@@ -121,6 +121,20 @@ def build_parser():
     fm = sub.add_parser(
         "formats", help="list the qualities a video offers, with their sizes")
     fm.add_argument("urls", nargs="+")
+    fm.add_argument("--all-formats", action="store_true",
+                    help="show every row yt-dlp reports, including the "
+                         "duplicate variant splits and same-quality doubles")
+    fm.add_argument("--container", choices=["mp4", "webm", "mkv"],
+                    help="only this container")
+    fm.add_argument("--codec", help="only this codec, e.g. avc1, vp9, av01, opus")
+    fm.add_argument("--show-audio", action="store_true",
+                    help="include the audio-only tracks in the table")
+    fm.add_argument("--sort", choices=["size_desc", "size_asc", "resolution",
+                                       "container"], default="size_desc")
+    fm.add_argument("--auto", choices=formats.AUTO_MODES,
+                    help="suggest a quality for you: best, compatible "
+                         "(H.264/mp4), fit (best under --max-size), "
+                         "smallest, audio")
     _add_quality_flags(fm)
     _add_download_flags(fm)
 
@@ -283,11 +297,30 @@ def cmd_formats(args):
                 print(f"    -> {download.ADVICE[kind]}")
             rc = 1
             continue
-        rows = formats.rows_from_info(info)
+        raw = formats.rows_from_info(info)
+        shown = formats.apply_filters(
+            raw,
+            max_height=None,
+            container=getattr(args, "container", None),
+            codec=getattr(args, "codec", None),
+            max_bytes=formats.parse_size(o.get("max_size")),
+            include_audio=bool(getattr(args, "show_audio", False))
+            or not o.get("keep_video"),
+            collapse=not getattr(args, "all_formats", False),
+            dedupe=not getattr(args, "all_formats", False),
+            sort=getattr(args, "sort", "size_desc"))
         dur = _duration(info.get("duration"))
         print(formats.table(
-            rows, f"    {info.get('title') or info.get('id')}"
-                  + (f"  ({dur})" if dur else "")))
+            shown, f"    {info.get('title') or info.get('id')}"
+                   + (f"  ({dur})" if dur else "")))
+        if len(shown) < len(raw):
+            print(f"    ({len(raw)} rows from yt-dlp collapsed to {len(shown)}: "
+                  f"variant splits and same-quality doubles are merged -- "
+                  f"--all-formats shows every row)")
+        # the *table* is the filtered list; the *picker* also gets the audio
+        # tracks the table hid, or a 1080p video would be paired with the
+        # 360p combined format just because the real audio was filtered out.
+        rows = formats.with_audio_pool(shown, raw)
         if not rows:
             print("    no formats reported")
             rc = 1
@@ -306,6 +339,16 @@ def cmd_formats(args):
                   f"     # {formats.describe_choice(v, a)}")
         if note:
             print(f"    note: {note}")
+        auto = getattr(args, "auto", None)
+        if auto:
+            asel, av, aa, why = formats.auto_pick(rows, mode=auto,
+                                                  max_bytes=cap)
+            if asel:
+                print(f"\n    auto ({auto}): {why}")
+                print(f"      musictool get \"{url}\" --keep-video -f {asel}"
+                      f"{' --merge-format ' + o['merge_format'] if o.get('merge_format') else ''}")
+            else:
+                print(f"\n    auto ({auto}): nothing to pick -- {why}")
     return rc
 
 

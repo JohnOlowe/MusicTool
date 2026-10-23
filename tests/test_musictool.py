@@ -809,10 +809,10 @@ def check_named(w, prefix):
 
 
 check("run() builds a window", root is not None and root.looped)
-check("all six tabs exist (incl. Lyrics files)",
+check("all seven tabs exist (incl. Quality)",
       [t.get("text", "").strip() for t in nb.tabs] ==
       ["Download", "Fix lyrics", "Scan & duplicates", "Report", "Tools",
-       "Lyrics files"],
+       "Lyrics files", "Quality"],
       str([t.get("text", "").strip() for t in nb.tabs]))
 
 check("tabs and log share a vertical PanedWindow",
@@ -1878,7 +1878,20 @@ def run_fmt(*args):
 r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video")
 check("formats lists the qualities with their sizes",
       r.returncode == 0 and "1080p60" in r.stdout and "80.1 MiB" in r.stdout
-      and "audio only" in r.stdout, r.stdout[-400:])
+      and "collapsed to" in r.stdout, r.stdout[-400:])
+r_aud = run_fmt("formats", "http://x/watch?v=abc", "--keep-video",
+                "--show-audio")
+check("--show-audio brings the audio tracks back into the table",
+      "audio only" in r_aud.stdout and "opus" in r_aud.stdout,
+      r_aud.stdout[-300:])
+r_all = run_fmt("formats", "http://x/watch?v=abc", "--keep-video",
+                "--all-formats", "--show-audio")
+check("--all-formats shows every raw row",
+      "collapsed to" not in r_all.stdout
+      and len([l for l in r_all.stdout.splitlines()
+               if l.strip()[:1].isdigit()]) == 6,
+      str(len([l for l in r_all.stdout.splitlines()
+               if l.strip()[:1].isdigit()])))
 check("formats tells you the exact command to take one",
       "-f 248+251" in r.stdout or "-f 137+251" in r.stdout, r.stdout[-300:])
 r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video", "--max-size", "40M")
@@ -1967,6 +1980,270 @@ check("check/formats have GUI widgets too",
       {x["dest"] for x in uicmd.widget_specs("check")} >= {"with_cookies"}
       and {x["dest"] for x in uicmd.widget_specs("formats")} >=
       {"quality", "max_size"})
+
+
+# =========================================================== 26. quality picker
+print("\n--- 26. the streamlined quality picker (auto, manual, filters) ---")
+
+# the shape YouTube really reports for one 4K video: every itag split into
+# 18 CDN variants (140-0..140-17, 251-0..251-17, ...), which is why a single
+# video lists 127 rows and is impossible to read.
+_vids = [(625, "mp4", 2160, "vp09", 8.5e9), (313, "webm", 2160, "vp9", 6.3e9),
+         (620, "mp4", 1440, "vp09", 4.3e9), (401, "mp4", 2160, "av01", 1.8e9),
+         (271, "webm", 1440, "vp9", 1.8e9), (270, "mp4", 1080, "avc1", 2.1e9),
+         (137, "mp4", 1080, "avc1", 6.5e8), (136, "mp4", 720, "avc1", 3.3e8),
+         (609, "mp4", 720, "vp09", 9.4e8), (160, "mp4", 144, "avc1", 1.5e7)]
+_auds = [(251, "webm", "opus", 160), (140, "m4a", "mp4a", 128),
+         (250, "webm", "opus", 70), (139, "m4a", "mp4a", 48)]
+_big = []
+for fid, ext, h, vc, sz in _vids:
+    for n in range(18):
+        _big.append({"format_id": f"{fid}-{n}", "ext": ext, "vcodec": vc + ".x",
+                     "acodec": "none", "height": h, "fps": 30,
+                     "filesize": int(sz) + n * 1000})
+for fid, ext, ac, abr in _auds:
+    for n in range(18):
+        _big.append({"format_id": f"{fid}-{n}", "ext": ext, "vcodec": "none",
+                     "acodec": ac + ".x", "abr": abr,
+                     "filesize": 56_000_000 + n * 1000})
+BIG = F.rows_from_info({"duration": 3600, "formats": _big})
+check("a real 4K list really is unreadable",
+      len(BIG) == 14 * 18, str(len(BIG)))
+check("variant ids are recognised",
+      F.variant_base("251-17") == "251" and F.variant_base("251") == "251"
+      and F.variant_base("bv1.2.3") == "bv1.2.3",
+      F.variant_base("bv1.2.3"))
+_coll = F.collapse_variants(BIG)
+check("18 copies of one stream collapse into one row",
+      len(_coll) == 14, str(len(_coll)))
+_c251 = [r for r in _coll if F.variant_base(r["id"]) == "251"][0]
+check("the collapsed row keeps the best variant and says how many",
+      _c251["variants"] == 18 and _c251["id"] == "251-17",
+      f"{_c251['id']} {_c251['variants']}")
+check("the collapsed size is the whole track, not a slice",
+      _c251["bytes"] == 56_000_000 + 17 * 1000, str(_c251["bytes"]))
+_ded = F.dedupe_quality(_coll)
+
+
+def bid(r):
+    """The itag a row really is, whatever variant we measured."""
+    return F.variant_base(r["id"])
+
+
+_db = {bid(r) for r in _ded}
+check("same quality twice keeps the smaller file",
+      "137" in _db and "270" not in _db, str(sorted(_db)))
+check("...but a different container survives dedupe",
+      "620" in _db and "271" in _db)
+check("the table shows the plain itag, not the variant suffix",
+      " 137 " in " " + F.table(F.apply_filters(BIG)) or
+      "\n137 " in F.table(F.apply_filters(BIG)),
+      F.table(F.apply_filters(BIG))[:120])
+check("...but the selector names the variant it actually measured",
+      F.selector_for([r for r in F.apply_filters(BIG)
+                      if bid(r) == "137"][0], None).startswith("137/137-"),
+      F.selector_for([r for r in F.apply_filters(BIG)
+                      if bid(r) == "137"][0], None))
+check("252 rows become a list you can actually read",
+      len(F.apply_filters(BIG)) < 20, str(len(F.apply_filters(BIG))))
+check("turning collapse+dedupe off gives every row back",
+      len(F.apply_filters(BIG, collapse=False, dedupe=False,
+                          include_audio=True)) == 252)
+check("audio tracks stay hidden unless you ask",
+      all(r["kind"] != "audio" for r in F.apply_filters(BIG))
+      and any(r["kind"] == "audio" for r in F.apply_filters(BIG,
+                                                           include_audio=True)))
+check("a height filter really filters",
+      {bid(r) for r in F.apply_filters(BIG, max_height=720)} <=
+      {"136", "160", "609"},
+      str(sorted({bid(r) for r in F.apply_filters(BIG, max_height=720)})))
+check("a container filter really filters",
+      {r["ext"] for r in F.apply_filters(BIG, container="webm")} == {"webm"},
+      str({r["ext"] for r in F.apply_filters(BIG, container="webm")}))
+check("a codec filter really filters",
+      all((r["vcodec"] or "").startswith("av01")
+          for r in F.apply_filters(BIG, codec="av01"))
+      and len(F.apply_filters(BIG, codec="av01")) == 1)
+check("a size cap drops the giants",
+      all(r["bytes"] <= 1_000_000_000 for r in
+          F.apply_filters(BIG, max_bytes=1_000_000_000)))
+check("sorting works both ways",
+      bid(F.apply_filters(BIG, sort="size_asc")[0]) == "160"
+      and bid(F.apply_filters(BIG, sort="size_desc")[0]) == "625",
+      bid(F.apply_filters(BIG, sort="size_asc")[0]))
+check("sorting by resolution puts the tallest first",
+      F.apply_filters(BIG, sort="resolution")[0]["height"] == 2160)
+SM = F.rows_from_info({"duration": 200, "formats": [
+    {"format_id": "22", "ext": "mp4", "vcodec": "avc1.40", "height": 720,
+     "acodec": "mp4a.40.2", "filesize": 30_000_000}]})
+check("the table names the variants it merged",
+      "18 merged" in F.table(F.apply_filters(BIG))
+      and "variants" in F.table(F.apply_filters(BIG)))
+check("...and only adds that column when it actually merged something",
+      "variants" not in F.table(SM) and "merged" not in F.table(SM))
+
+# --- the presets: it has to say why
+_pool = F.apply_filters(BIG, include_audio=True)
+check("auto: best takes the tallest",
+      bid(F.auto_pick(_pool)[1]) == "625", str(F.auto_pick(_pool)[0]))
+check("auto: compatible takes H.264/mp4 so nothing needs converting",
+      bid(F.auto_pick(_pool, mode="compatible")[1]) == "137"
+      and "H.264" in F.auto_pick(_pool, mode="compatible")[3],
+      str(F.auto_pick(_pool, mode="compatible")[0]))
+check("auto: fit takes the best under the cap",
+      bid(F.auto_pick(_pool, mode="fit", max_bytes=1_000_000_000)[1]) == "137",
+      str(F.auto_pick(_pool, mode="fit", max_bytes=1_000_000_000)[0]))
+check("auto: smallest takes the smallest",
+      bid(F.auto_pick(_pool, mode="smallest")[1]) == "160")
+check("auto: audio takes opus, not a video file",
+      bid(F.auto_pick(_pool, mode="audio")[1]) == "251",
+      str(F.auto_pick(_pool, mode="audio")[0]))
+check("every preset explains itself",
+      all(F.auto_pick(_pool, mode=m)[3] for m in F.AUTO_MODES),
+      str(F.AUTO_MODES))
+check("a preset with nothing to choose from says so",
+      F.auto_pick([], mode="best")[0] is None
+      and F.auto_pick([], mode="best")[3])
+
+# --- manual: a clicked row becomes a selector, with audio paired properly
+_row = [r for r in F.apply_filters(BIG) if bid(r) == "137"][0]
+_sel = F.selector_for(*F.pair_with_audio(_row, _pool))
+check("clicking a row gives a ready -f", _sel.startswith("137"), _sel)
+check("a filtered table still pairs with a REAL audio track",
+      F.selector_for(*F.pair_with_audio(
+          _row, F.with_audio_pool(F.apply_filters(BIG), BIG)))
+      == "137/137-17+251/251-17",
+      F.selector_for(*F.pair_with_audio(
+          _row, F.with_audio_pool(F.apply_filters(BIG), BIG))))
+_noaud = F.pair_with_audio(_row, F.apply_filters(BIG, include_audio=False))[1]
+check("hiding the audio rows must not pair video with a combined format",
+      _noaud is None or _noaud["kind"] == "audio",
+      str(_noaud and _noaud["id"]))
+check("total_bytes adds the audio to the video",
+      F.total_bytes(_row) == _row["bytes"]
+      and F.total_bytes(*F.pair_with_audio(_row, _pool))
+      > _row["bytes"])
+
+# --- the same thing through the CLI
+r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video",
+            "--container", "mp4")
+check("formats --container mp4 filters the table",
+      "webm" not in r.stdout.split("to take this one")[0], r.stdout[-300:])
+r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video", "--codec", "vp9")
+check("formats --codec vp9 filters the table",
+      "avc1" not in r.stdout.split("to take this one")[0], r.stdout[-300:])
+r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video", "--auto",
+            "compatible")
+check("formats --auto compatible recommends the playable one",
+      "auto (compatible)" in r.stdout and "H.264" in r.stdout, r.stdout[-300:])
+r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video", "--auto",
+            "smallest")
+check("formats --auto smallest recommends the smallest",
+      "auto (smallest)" in r.stdout and "-f 18" in r.stdout, r.stdout[-300:])
+r = run_fmt("formats", "http://x/watch?v=abc", "--keep-video",
+            "--sort", "size_asc")
+check("formats --sort size_asc lists smallest first",
+      r.stdout.index("18   ") < r.stdout.index("248  "), r.stdout[-400:])
+
+# --- and through the GUI's Quality tab
+def _qw(w, k):
+    """widgets of a kind inside w (the section-17 `kinds` was rebound above)"""
+    return [x for x in w.walk() if x.kind == k]
+
+
+def _qbtn(w, text):
+    for x in _qw(w, "button"):
+        if x.options.get("text") == text:
+            return x
+    raise KeyError(f"no button {text!r}")
+
+
+_q = nb.tab_for("Quality")
+check("the Quality tab exists and is reachable", _q is not None)
+_qt = [w for w in _q.walk() if isinstance(w, tkstub.Treeview)]
+check("the picker is a table you can click", len(_qt) == 1)
+check("the table shows id, quality, container, codec, size and variants",
+      list(_qt[0].options.get("columns", ())) ==
+      ["id", "what", "container", "video", "codec", "size", "variants"],
+      str(_qt[0].options.get("columns")))
+_cbs = {w.options.get("text") for w in _qw(_q, "checkbutton")}
+check("the filters are on the tab, not in a menu",
+      {"Merge variant splits", "Hide same-quality doubles",
+       "Show audio-only tracks"} <= _cbs, str(_cbs))
+_rbs = {w.options.get("text", "") for w in _qw(_q, "radiobutton")}
+check("auto and manual are both there",
+      any(t.startswith("Auto") for t in _rbs)
+      and any(t.startswith("Manual") for t in _rbs), str(_rbs))
+_combos = [w.options.get("values") for w in _qw(_q, "combobox")]
+_pre = next((v for v in _combos if v and F.AUTO_LABELS["best"] in list(v)), [])
+check("every preset is offered",
+      [F.AUTO_LABELS[m] for m in F.AUTO_MODES] == list(_pre), str(_pre))
+check("the height filter is a dropdown, not a guess",
+      any(v and "1080" in [str(x) for x in v] for v in _combos))
+check("the codec filter knows the codecs that matter",
+      any(v and "av01" in [str(x) for x in v] for v in _combos))
+check("loading and downloading are both one click",
+      _qbtn(_q, "Load qualities") is not None
+      and _qbtn(_q, "Download this quality") is not None)
+check("...and the command can be copied",
+      _qbtn(_q, "Copy command") is not None)
+
+# pressing Load must NOT touch tkinter from the worker thread: the callback
+# has to come back through the queue and be applied by pump().
+_real_probe = G.download.probe
+_seen = {}
+
+
+def _fake_probe(url, o):
+    _seen["thread"] = threading.current_thread().name
+    return YT
+
+
+G.download.probe = _fake_probe
+_qurl = [w for w in _q.walk() if w.kind == "entry"][0]
+_qurl.options["textvariable"].set("http://x/watch?v=abc")
+ARGV.clear()
+_qbtn(_q, "Load qualities").invoke()
+check("nothing in the worker path calls tkinter directly",
+      "root.after(0" not in _g3 and "uq.put" in _g3)
+check("...and did not touch the table from that thread",
+      _qt[0].order == [], str(_qt[0].order[:3]))
+for _cb in list(root.pending):
+    _cb()          # the main-thread half of the click: pump() drains the queue
+root.pending.clear()
+check("pump() then fills the table with the collapsed list",
+      len(_qt[0].order) == 4, str(len(_qt[0].order)))
+_vals = [_qt[0].nodes[i].get("values") for i in _qt[0].order]
+check("the table shows the biggest quality first",
+      _vals[0][0] == "248" and _vals[0][3] == "1080p60", str(_vals[0]))
+_qfmt = [w for w in _q.walk() if w.kind == "entry"
+         and w.options.get("state") == "readonly"][0]
+check("auto mode filled in a ready-to-use -f",
+      _qfmt.options["textvariable"].get() == "248+251", _qfmt.options["textvariable"].get())
+check("...and says why it picked it",
+      "auto:" in " ".join(str(w.options.get("textvariable").get())
+                          for w in _qw(_q, "label")
+                          if w.options.get("textvariable")), "no auto note")
+_qt[0].selection_set(_qt[0].order[1])
+_qt[0].fire("<<TreeviewSelect>>")
+check("clicking a row switches to manual and takes that quality",
+      _qfmt.options["textvariable"].get() == "137+251", _qfmt.options["textvariable"].get())
+_cli_main_now = G.cli_main
+G.cli_main = lambda argv: (ARGV.append(list(argv)), 0)[1]
+ARGV.clear()
+_qbtn(_q, "Download this quality").invoke()
+check("one click downloads the quality you picked",
+      len(ARGV) == 1 and "get" in ARGV[0]
+      and "137+251" in " ".join(ARGV[0]), str(ARGV[:1]))
+check("the download it runs keeps the video",
+      "--keep-video" in ARGV[0], str(ARGV[0])[:200])
+ARGV.clear()
+_qbtn(_q, "Copy command").invoke()
+check("copying gives the same command",
+      "137+251" in root.clipboard and root.clipboard.startswith("musictool get"),
+      root.clipboard[:160])
+G.cli_main = _cli_main_now
+G.download.probe = _real_probe
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

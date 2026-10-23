@@ -235,6 +235,7 @@ class Tk(Widget):
         self.title_text = ""
         self.geometry_text = ""
         self.looped = False
+        self.clipboard = ""
         ROOTS.append(self)
 
     def title(self, t=None):
@@ -252,6 +253,13 @@ class Tk(Widget):
 
     def mainloop(self, n=0):
         self.looped = True       # returns at once: the test drives it by hand
+
+    # --- clipboard: the Quality tab copies the command it built
+    def clipboard_clear(self):
+        self.clipboard = ""
+
+    def clipboard_append(self, text):
+        self.clipboard += text
 
 
 class Frame(Widget):

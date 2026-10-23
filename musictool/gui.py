@@ -581,10 +581,16 @@ def run():
     def busy(on):
         state = "disabled" if on else "normal"
         for w in run_buttons:
+            if w in queue_ok:
+                continue        # stays live: clicking it adds to the queue
             try:
                 w.configure(state=state)
             except Exception:
                 pass
+        try:                    # bget may not exist yet on the first pass
+            bget.configure(text=get_label())
+        except Exception:
+            pass
         # Stop deliberately keeps its state: it stays clickable while every
         # other button is greyed out, and while idle it can clear a request
         # you made by mistake.
@@ -641,9 +647,11 @@ def run():
                     ui(lambda: after(rc))
         threading.Thread(target=go, daemon=True).start()
 
-    def do_argv(argv, after=None):
-        """Run a CLI command on the worker thread, echoing it first."""
-        remember_all()          # what you ran is what comes back next time
+    # Jobs waiting their turn. Pasting more links mid-download used to be
+    # impossible -- the button was greyed out -- so now it queues.
+    pending = []
+
+    def _start(argv, after=None):
         cancel.reset()
         reset_progress()
         log("\n$ " + uicmd.quote_cmd(argv) + "\n")
@@ -652,7 +660,39 @@ def run():
             with contextlib.redirect_stdout(QueueStream(q)), \
                     contextlib.redirect_stderr(QueueStream(q)):
                 return cli_main(argv)
-        worker(job, after=after)
+
+        def finished(rc):
+            if after:
+                after(rc)
+            if not pending:
+                return
+            if cancel.requested():
+                log(f"\n==> stopped -- dropping the {len(pending)} queued "
+                    f"job(s) rather than starting them into a stop")
+                pending.clear()
+                return
+            nxt, cb = pending.pop(0)
+            log(f"\n==> next in the queue"
+                f"{f' ({len(pending)} more behind it)' if pending else ''}")
+            _start(nxt, cb)
+
+        worker(job, after=finished)
+
+    def do_argv(argv, after=None):
+        """Run a CLI command on the worker thread, echoing it first.
+
+        With a job already running it goes on the queue instead: you can keep
+        adding links while the first batch is still downloading.
+        """
+        remember_all()          # what you ran is what comes back next time
+        if running["n"]:
+            pending.append((list(argv), after))
+            log(f"\n+ queued: {uicmd.quote_cmd(argv)}")
+            log(f"  {len(pending)} job(s) waiting -- this starts the moment "
+                f"the current one finishes")
+            status.set(f"working... {len(pending)} queued")
+            return
+        _start(argv, after)
 
     def remember(**paths):
         """Persist any paths/URLs the user just used."""
@@ -700,6 +740,9 @@ def run():
     SAVED = dict(cfg.get("gui_opts") or {})
     EXTRA = dict(cfg.get("gui_extra") or {})
     run_buttons = []
+    # Buttons that must stay clickable mid-run, because clicking one now means
+    # "do this next" rather than "start a second download".
+    queue_ok = []
     path_combos = []
     url_combos = []
 
@@ -861,9 +904,10 @@ def run():
         panes["get"].apply(uicmd.MODE_VALUES[mode])
         describe_mode()
         try:
-            bget.configure(text="Download video"
-                           if uicmd.MODE_WHAT[mode] == "video"
-                           else "Download + lyrics")
+            # get_label() rather than the bare mode text: while a download is
+            # running the button means "queue this", and the pump refreshes
+            # this line every tick, which would otherwise talk it back.
+            bget.configure(text=get_label())
         except NameError:
             pass            # first apply happens before the buttons exist
 
@@ -995,6 +1039,15 @@ def run():
             os.path.expanduser(out or "."))))
 
     run_buttons += [bcheck, bfmt, bget]
+    queue_ok.append(bget)
+
+    def get_label():
+        # While a download is going the button means "queue this", and the
+        # pump's mode refresh must not talk it back into "Download".
+        if running["n"]:
+            return "Add to queue"
+        return ("Download video" if uicmd.MODE_WHAT[current_mode()] == "video"
+                else "Download + lyrics")
 
     # ================================================== Lyrics tab
     ly = ttk.Frame(nb)
@@ -1627,11 +1680,29 @@ def run():
     ttk.Label(ptext, textvariable=file_lbl, anchor="w",
               foreground="#444").pack(fill="x")
 
-    _saved_pw = int(cfg.get("progress_width") or 0)
-    if _saved_pw > 40:
-        root.after(150, lambda: pwrap.sashpos(0, _saved_pw))
+    # ttk.PanedWindow leaves the sash at 0 until it lays out, so the bars used
+    # to open invisible and only appear once you dragged the slider. Give them
+    # their width on the first layout that is wide enough, and never less than
+    # BARS_MIN -- the drag still works, it just cannot start from nothing.
+    BARS_MIN = 160
+    _pw_want = max(int(cfg.get("progress_width") or 0), 300)
+    _pw_mine = [False]          # True once you have dragged it yourself
+
+    def place_bars(_ev=None):
+        if _pw_mine[0]:
+            return
+        try:
+            avail = int(pwrap.winfo_width())
+            pwrap.sashpos(0, min(_pw_want, max(BARS_MIN, avail - 140)))
+        except Exception:
+            return              # not laid out yet -- the next <Configure> retries
+        pwrap.unbind("<Configure>")
+
+    root.after(120, place_bars)
+    pwrap.bind("<Configure>", place_bars)
 
     def save_pane_width(_ev=None):
+        _pw_mine[0] = True
         try:
             w = int(pwrap.sashpos(0))
         except Exception:
@@ -1649,22 +1720,40 @@ def run():
             return
         pstate.handle(ev)
         frac = pstate.fraction()
-        if frac is not None:
-            overall_bar.configure(value=round(frac * 100, 1))
-            overall_lbl.set(
-                f"playlist {frac * 100:5.1f}%   item {pstate.item} of "
-                f"{pstate.total}   ·   {pstate.elapsed_text()} elapsed, "
-                f"est. {pstate.eta_total() or '…'} left")
+        overall_bar.configure(value=round((frac if frac is not None
+                                           else pstate.pct / 100.0) * 100, 1))
+        if pstate.total:
+            head = f"video {pstate.item} of {pstate.total}"
+        elif pstate.batch_n:
+            head = f"video {pstate.batch_i} of {pstate.batch_n}"
         else:
-            overall_bar.configure(value=pstate.pct)
-            overall_lbl.set(f"single download {pstate.pct:5.1f}%"
-                            f"   ·   {pstate.elapsed_text()} elapsed")
+            head = "single download"
+        left = pstate.remaining()
+        eta = pstate.eta_total()
+        pct = (frac if frac is not None else pstate.pct / 100.0) * 100
+        bits = [head, f"{pct:5.1f}%"]
+        if pstate.total or pstate.batch_n:
+            bits.append("this is the last one" if left <= 1
+                        else f"{left - 1} still to go after this")
+        bits.append(f"{pstate.elapsed_text()} elapsed")
+        bits.append(f"about {eta} left in total" if eta
+                    else "timing the first file…")
+        overall_lbl.set("   ·   ".join(bits))
         file_bar.configure(value=pstate.pct)
-        # ntpath-style: a C:\Music\... path must not show up whole
-        name = os.path.basename(pstate.filename.replace("\\", "/")) \
-            if pstate.filename else "…"
-        file_lbl.set(f"{name}   {pstate.pct:5.1f}%   {pstate.speed}"
-                     f"   ETA {pstate.eta or '—'}")
+
+        def short(p):
+            # ntpath-style: a C:\Music\... path must not show up whole
+            return os.path.basename((p or "…").replace("\\", "/"))
+
+        if len(pstate.slots) > 1:
+            # Several videos at once: one line each, so nothing hides behind
+            # whichever one happened to report last.
+            file_lbl.set("   ".join(
+                f"{short(v.get('name'))} {v.get('pct', 0.0):4.1f}%"
+                for _k, v in sorted(pstate.slots.items())))
+        else:
+            file_lbl.set(f"{short(pstate.filename)}   {pstate.pct:5.1f}%"
+                         f"   {pstate.speed}   ETA {pstate.eta or '—'}")
 
     def reset_progress():
         pstate.reset()

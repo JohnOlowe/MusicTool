@@ -257,6 +257,55 @@ from the filename.
 `--list` is also the **List wrong-language files** button on the Download tab.
 
 
+### The progress panel, a queue, and more than one video at a time
+
+**The bars are there when you open the window.** They used to open collapsed —
+`ttk` leaves the divider at zero until it lays the window out, so you had to
+drag the slider to see anything. The first layout now gives them their width,
+and never less than 160px. Dragging still works and is still remembered; it just
+cannot start from nothing.
+
+**How many are left, and when will it be done.** Pasting four links used to
+report each one as a "single download", because yt-dlp only ever sees one URL
+at a time and cannot know three are queued behind it. musictool knows, so the
+panel now says:
+
+```
+video 2 of 5    26.0%   ·   3 still to go after this   ·   2m 10s elapsed   ·   about 6m 30s left in total
+Second.mp4    30.0%   2.0MiB/s   ETA 00:20
+```
+
+The projection is elapsed time scaled by how far through the run you are. On a
+playlist it uses the length YouTube reports; on a pasted list it uses the number
+of links. Before the first file has finished there is nothing to scale from, so
+it falls back to that file's own ETA rather than printing a confident zero.
+
+**Add more while it is downloading.** The Download button stays live during a
+run and turns into **Add to queue**: paste more links, click, and they wait
+their turn instead of being refused. The log says how many are waiting, and each
+one starts the moment the one before it finishes. Pressing Stop drops the queue
+rather than starting jobs into a stop.
+
+**Several videos at once.** `--jobs 2` runs two videos in parallel — worth
+trying when one download is not using your connection:
+
+```
+musictool get URL1 URL2 URL3 --jobs 3
+```
+
+```
+==> 3 video(s), 3 at a time
+[1] ==> https://youtu.be/...
+[2] ==> https://youtu.be/...
+```
+
+Each video still resolves its own quality and language, and every line is
+numbered so the logs do not interleave into noise. Capped at 8 — past three or
+four the gain flattens out and YouTube starts throttling. Note the difference
+from `--concurrent`: that splits *one* video into pieces, this runs *several*
+videos. In the GUI it is the **jobs** field under More Options.
+
+
 ## Commands
 
 | command | what it does |
@@ -1033,7 +1082,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 780 assertions, 0 failures**
+**Verified by running the code — 808 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

@@ -4,10 +4,12 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from . import cancel
 from . import config as configmod
-from . import download, formats, lyrics, providers, tags
+from . import download, formats, lyrics, progress, providers, tags
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
                    is_windows, js_runtime, pot_server_reachable, ytdlp_cmd,
@@ -42,6 +44,10 @@ def _add_download_flags(p):
     g.add_argument("--proxy")
     g.add_argument("--limit-rate", dest="rate_limit", help="e.g. 2M")
     g.add_argument("--concurrent", type=int, help="parallel fragment downloads")
+    g.add_argument("--jobs", type=int, default=1,
+                   help="videos to download at the same time (1-8, default 1). "
+                        "--concurrent splits one video into pieces; this runs "
+                        "several videos at once")
     g.add_argument("--retries", type=int, help="download attempts on network errors")
     g.add_argument("--net-max-wait", dest="net_max_wait", type=float,
                    help="seconds to keep retrying across a WiFi drop (default 240)")
@@ -491,30 +497,59 @@ def cmd_get(args):
 
     targets = []
     stopped = False
-    for url in args.urls:
-        if o.get("lyrics_only"):
-            continue
+    urls = [u for u in args.urls if not o.get("lyrics_only")]
+    n_jobs = max(1, min(8, int(getattr(args, "jobs", 1) or 1)))
+    started = [0]
+    lock = threading.Lock()
+
+    def one(url):
+        """One URL from start to finish -- safe to run beside the others."""
+        nonlocal stopped
+        with lock:
+            started[0] += 1
+            idx = started[0]
+        # Parallel runs prefix every line, or four logs interleave into noise.
+        say = print if n_jobs == 1 else (lambda m: print(f"[{idx}] {m}"))
         if cancel.requested():
-            stopped = True
-            break
-        print(f"\n==> {url}")
+            return
+        say(f"\n==> {url}")
         # Quality is resolved PER VIDEO. Format ids are not global: 140-4 is
         # the English track on one video and the Spanish original on the next,
         # and 614 may not exist at all. Resolving once for the whole batch and
         # reusing the selector is how a dubbed video slips through in the
         # wrong language while everything reports success.
         per = dict(o)
-        _resolve_quality(url, per)
+        _resolve_quality(url, per, log=say)
+        # yt-dlp only ever sees one URL, so it cannot tell the UI how many are
+        # queued behind it. musictool can.
+        progress.report({"type": "batch", "i": idx, "n": len(urls)})
         files, err = download.download(
-            url, per, on_file=lambda pth, vid, u=url: on_file(pth, vid, u))
-        targets += [p for p, _ in files]
+            url, per, log=say, tag="" if n_jobs == 1 else str(idx),
+            on_file=lambda pth, vid, u=url: on_file(pth, vid, u))
+        with lock:
+            # extend(), not +=: inside a nested function that would rebind the
+            # enclosing local and raise, and it is atomic enough under the lock.
+            targets.extend(p for p, _ in files)
         if err == cancel.CANCELLED:
             stopped = True
-            break
+            return
         if err:
-            print(f"!! {err}")
-            continue
-        print(f"    {len(files)} file(s)")
+            say(f"!! {err}")
+            return
+        say(f"    {len(files)} file(s)")
+
+    if n_jobs == 1:
+        for url in urls:
+            if cancel.requested():
+                stopped = True
+                break
+            one(url)
+    else:
+        print(f"\n==> {len(urls)} video(s), {n_jobs} at a time")
+        with ThreadPoolExecutor(max_workers=n_jobs) as pool:
+            list(pool.map(one, urls))
+        if cancel.requested():
+            stopped = True
     if stopped:
         if targets:
             print(f"\n==> {cancel.CANCELLED}: keeping the {len(targets)} file(s) "

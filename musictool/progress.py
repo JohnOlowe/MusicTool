@@ -138,6 +138,9 @@ class State:
         self.item = 0            # current 1-based item
         self.total = None        # playlist length once yt-dlp tells us
         self.done_items = 0      # fully finished items
+        self.batch_i = 0         # 1-based URL this run is on (batch count)
+        self.batch_n = 0         # URLs in this run -- yt-dlp never sees these
+        self.slots = {}          # tag -> live stats, one per parallel download
         self.filename = ""
         self.pct = 0.0           # current file 0..100
         self.speed = ""
@@ -150,23 +153,59 @@ class State:
             self.item = ev["i"]
             self.total = ev["n"]
             self.pct = 0.0
+            # Being on item 3 means 1 and 2 are done, even though yt-dlp has
+            # not printed a "done" line for them yet.
+            self.done_items = max(self.done_items, ev["i"] - 1)
         elif t == "file":
             self.filename = ev["name"]
+            if ev.get("tag"):
+                self.slots.setdefault(ev["tag"], {})["name"] = ev["name"]
         elif t == "pct":
             self.pct = ev["pct"]
             if ev.get("speed"):
                 self.speed = ev["speed"]
             if ev.get("eta"):
                 self.eta = ev["eta"]
+            if ev.get("tag"):
+                slot = self.slots.setdefault(ev["tag"], {})
+                slot["pct"] = ev["pct"]
+                if ev.get("speed"):
+                    slot["speed"] = ev["speed"]
+                if ev.get("name"):
+                    slot["name"] = ev["name"]
+        elif t == "batch":
+            # musictool counts the URLs it was handed; yt-dlp only ever sees
+            # one at a time, so without this a batch of four reports no total.
+            self.batch_i = ev["i"]
+            self.batch_n = ev["n"]
+            if not self.total:
+                self.pct = 0.0
         elif t == "done":
             self.done_items = max(self.done_items, self.item)
             self.pct = 100.0
+            if ev.get("tag"):
+                self.slots.pop(ev["tag"], None)
 
     def fraction(self):
-        """0..1 of the whole playlist (current file's pct counted fractionally)."""
-        if not self.total:
-            return None
-        return min(1.0, (self.done_items + self.pct / 100.0) / self.total)
+        """0..1 of the whole run (current file's pct counted fractionally).
+
+        A playlist tells us its own length; a pasted list of separate links
+        does not, so the batch count stands in for it.
+        """
+        if self.total:
+            return min(1.0, (self.done_items + self.pct / 100.0) / self.total)
+        if self.batch_n:
+            done = max(0, self.batch_i - 1)
+            return min(1.0, (done + self.pct / 100.0) / self.batch_n)
+        return None
+
+    def remaining(self):
+        """How many videos are still to come, including the one in flight."""
+        if self.total:
+            return max(0, self.total - self.done_items)
+        if self.batch_n:
+            return max(0, self.batch_n - max(0, self.batch_i - 1))
+        return 0
 
     def elapsed(self):
         """Seconds since the run started."""
@@ -179,15 +218,26 @@ class State:
         return parse_eta(self.eta)
 
     def eta_total(self):
-        """Elapsed-time estimate of how long the whole run still has to go."""
-        if not self.total:
-            return ""
-        frac = self.fraction() or 0.0
+        """How long the whole run still has to go, as far as we can tell.
+
+        Best case we know the total, so elapsed time scales up. Failing that,
+        the average time per finished video times what is left, plus this
+        file's own ETA. With nothing finished yet, the file's ETA is all there
+        is -- and saying so beats printing a confident wrong number.
+        """
         elapsed = time.time() - self.started
-        if frac <= 0.0:
-            return ""
-        remaining = elapsed * (1.0 - frac) / frac
-        return fmt_minutes(remaining)
+        frac = self.fraction() or 0.0
+        # Scaling elapsed time up needs a few seconds of elapsed time to be
+        # worth anything: at t=0 it would promise "0m 00s left" for a run that
+        # has barely started, which is worse than saying it does not know yet.
+        if frac > 0.0 and (self.total or self.batch_n) and elapsed >= 5.0:
+            return fmt_minutes(elapsed * (1.0 - frac) / frac)
+        left = self.remaining()
+        file_eta = self.eta_file_seconds() or 0
+        if self.batch_i > 1 and left:
+            per = elapsed / max(1, self.batch_i - 1)
+            return fmt_minutes(per * (left - 1) + file_eta)
+        return fmt_minutes(file_eta) if file_eta else ""
 
 
 # ---------------------------------------------------------------- hook

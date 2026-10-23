@@ -460,21 +460,26 @@ def _run_once(args, log, on_line=None, on_file=None):
     return results, None
 
 
-def _make_on_line(log):
+def _make_on_line(log, tag=""):
     """Forward readable lines to the log; send every event to the progress hook.
 
     The per-percent \r redraws would flood the log, so those go only to the
     hook (the GUI bar). Item/file/done and unrecognised (error) lines are logged.
+
+    `tag` marks every event with the download it came from, so several running
+    at once can each have their own line in the UI instead of fighting over one.
     """
     def on_line(seg):
         ev = progress.parse_ytdlp_line(seg)
+        if ev is not None and tag:
+            ev["tag"] = tag
         progress.report(ev)
         if ev is None or ev["type"] in ("item", "file", "done"):
             log("    " + seg)
     return on_line
 
 
-def download(url, o, log=print, on_file=None):
+def download(url, o, log=print, on_file=None, tag=""):
     """Download and return [(filepath, video_id)].
 
     Survives WiFi drops: yt-dlp is given --continue so a partial file resumes,
@@ -496,7 +501,7 @@ def download(url, o, log=print, on_file=None):
         args.append("--simulate")
     log("  $ " + " ".join(_q(a) for a in args))
     sleeps = iter(net_sleeps(float(o.get("net_max_wait", 240))))
-    on_line = _make_on_line(log)
+    on_line = _make_on_line(log, tag)
     while True:
         results, err = _run_once(args, log, on_line, on_file)
         if err is None:

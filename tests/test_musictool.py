@@ -1776,7 +1776,7 @@ _shown = [x.options["textvariable"].get() for x in root.walk()
           and isinstance(x.options.get("textvariable"), tkstub.StringVar)]
 _joined = " | ".join(_shown)
 check("the panel reports playlist position with a percentage",
-      "item 287 of 447" in _joined and "%" in _joined, _joined[:200])
+      "video 287 of 447" in _joined and "%" in _joined, _joined[:200])
 check("the panel reports elapsed time in minutes", "elapsed" in _joined
       and ("m " in _joined or "0m" in _joined), _joined[:200])
 check("the current file shows its own percentage, speed and ETA",
@@ -3165,6 +3165,228 @@ check("...and that listing downloads nothing",
       str(_argv))
 G.cli_main = _cli
 _gpane.vars["output_dir"].set("")
+
+# ====== 33. a visible panel, what is left, a queue, videos at once
+print("\n--- 33. visible bars, what is left, a queue, videos at once ---")
+import contextlib
+import io
+import time
+
+# ---- the maths behind "how many are left, and when will it all be done"
+_s1 = _pr.State()
+_s1.started = time.time() - 120
+_s1.handle({"type": "batch", "i": 2, "n": 5})
+_s1.handle({"type": "pct", "pct": 50.0})
+check("a pasted list of links knows how many are still to come",
+      _s1.batch_n == 5 and _s1.remaining() == 4,
+      f"{_s1.remaining()} left of {_s1.batch_n}")
+check("...and projects the whole run from the time so far",
+      _s1.eta_total() == "4m 40s", _s1.eta_total())
+_s2 = _pr.State()
+_s2.handle({"type": "batch", "i": 1, "n": 4})
+_s2.handle({"type": "pct", "pct": 10.0, "eta": "00:30"})
+check("before anything has finished it falls back to the file's own ETA",
+      _s2.eta_total() == "0m 30s", _s2.eta_total())
+check("...rather than promising zero time left for a run that just began",
+      _s2.eta_total() != "0m 00s", _s2.eta_total())
+_s3 = _pr.State()
+_s3.handle({"type": "pct", "pct": 20.0, "eta": "01:00"})
+check("a lone download still gets a projection",
+      _s3.eta_total() == "1m 00s" and _s3.remaining() == 0, _s3.eta_total())
+_s4 = _pr.State()
+_s4.handle({"type": "item", "i": 3, "n": 10})
+check("a playlist keeps using the length yt-dlp reports",
+      _s4.remaining() == 8, str(_s4.remaining()))
+_s5 = _pr.State()
+_s5.handle({"type": "file", "name": "a.mkv", "tag": "1"})
+_s5.handle({"type": "pct", "pct": 12.0, "tag": "1"})
+_s5.handle({"type": "file", "name": "b.mkv", "tag": "2"})
+_s5.handle({"type": "pct", "pct": 40.0, "tag": "2"})
+check("parallel downloads each keep their own name and percentage",
+      set(_s5.slots) == {"1", "2"} and _s5.slots["1"]["pct"] == 12.0
+      and _s5.slots["2"]["name"] == "b.mkv", str(_s5.slots))
+_s5.handle({"type": "done", "tag": "1"})
+check("...and drop off the list when they finish", set(_s5.slots) == {"2"},
+      str(_s5.slots))
+
+_lines = []
+_h0 = _pr.get_hook()
+_pr.set_hook(_lines.append)
+download._make_on_line(lambda m: None, "7")(
+    "[download]  42.0% of   10.00MiB at  1.00MiB/s ETA 00:05")
+_pr.set_hook(_h0)
+check("every progress event carries which download it came from",
+      _lines and _lines[0].get("tag") == "7" and _lines[0]["pct"] == 42.0,
+      str(_lines))
+
+# ---- a fresh window: section 31 pressed the X, which stops this one's pump
+tkstub.reset()
+G.run()
+_r2 = tkstub.ROOTS[-1]
+
+
+def _drain2():
+    """Run the fresh window's pump (its progress panel and its queue)."""
+    todo, _r2.pending[:] = list(_r2.pending), []
+    for f in todo:
+        try:
+            f()
+        except Exception as e:
+            raise AssertionError(f"pump raised {type(e).__name__}: {e}")
+
+
+# ---- the bars must be there when the window opens, not after a drag
+_h2 = [w for w in _r2.walk() if isinstance(w, tkstub.PanedWindow)
+       and w.options.get("orient") == "horizontal"][0]
+check("ttk leaves the sash at 0 -- that is why the bars opened invisible",
+      _h2.sashpos(0) == 0, str(_h2.sashes))
+_h2.fire("<Configure>")
+check("the first layout gives the bars their width, no dragging needed",
+      _h2.sashpos(0) >= 160, str(_h2.sashpos(0)))
+_h2.sashpos(0, 420)
+_h2.fire("<ButtonRelease-1>")
+check("dragging it yourself is still remembered",
+      _cfg.load().get("progress_width") == 420,
+      str(_cfg.load().get("progress_width")))
+
+# ---- and the panel says what is left, out loud
+_drain2()
+_pr.report({"type": "batch", "i": 2, "n": 5})
+_pr.report({"type": "file", "name": "Second.mp4"})
+_pr.report({"type": "pct", "pct": 30.0, "speed": "2.0MiB/s", "eta": "00:20"})
+_drain2()
+_shown = " | ".join(x.options["textvariable"].get() for x in _r2.walk()
+                    if x.kind == "label"
+                    and isinstance(x.options.get("textvariable"),
+                                   tkstub.StringVar))
+check("the panel says which video of how many",
+      "video 2 of 5" in _shown, _shown[-260:])
+check("...how many are still to come after this one",
+      "3 still to go after this" in _shown, _shown[-260:])
+check("...and when the whole run should be done",
+      "about 0m 20s left in total" in _shown, _shown[-260:])
+_pr.report({"type": "file", "name": "Second.mp4", "tag": "1"})
+_pr.report({"type": "pct", "pct": 30.0, "tag": "1"})
+_pr.report({"type": "file", "name": "b.mkv", "tag": "2"})
+_pr.report({"type": "pct", "pct": 40.0, "tag": "2"})
+_drain2()
+_shown2 = " | ".join(x.options["textvariable"].get() for x in _r2.walk()
+                     if x.kind == "label"
+                     and isinstance(x.options.get("textvariable"),
+                                    tkstub.StringVar))
+check("with two videos running the panel shows both, not just the last",
+      "Second.mp4" in _shown2 and "b.mkv" in _shown2, _shown2[-200:])
+
+# ---- adding to the queue while a download is running
+def _wait_for(pred, secs=6.0):
+    """Drain the pump until pred() holds, so no check races a thread."""
+    end = time.time() + secs
+    while time.time() < end:
+        _drain2()
+        if pred():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+# The harness swaps G.threading for a synchronous stub so the other checks
+# stay deterministic; a queue only means anything with a job still running, so
+# this one puts the real threading module back.
+_ft = G.threading
+G.threading = threading
+_gate = threading.Event()
+_started = []
+_cli = G.cli_main
+
+
+def _fake_main(a):
+    _started.append(list(a))
+    _gate.wait(5)
+    return 0
+
+
+G.cli_main = _fake_main
+_urls = [w for w in _r2.walk()
+         if w.kind == "text" and w.options.get("height") == 3][0]
+_bget = [w for w in _r2.walk() if w.kind == "button"
+         and w.options.get("text") in ("Download + lyrics", "Download video",
+                                       "Add to queue")][0]
+_urls.buf = "https://youtu.be/aaa\nhttps://youtu.be/bbb\n"
+_bget.options["command"]()
+check("Download stays clickable while a job runs -- that is how you queue",
+      _bget.options.get("state") != "disabled",
+      str(_bget.options.get("state")))
+check("...and it says so on the button",
+      _bget.options.get("text") == "Add to queue",
+      str(_bget.options.get("text")))
+_urls.buf = "https://youtu.be/ccc\n"
+_bget.options["command"]()
+time.sleep(0.2)
+check("a second click queues the link instead of starting a second download",
+      len(_started) == 1, str(len(_started)))
+_gate.set()
+_ok = False
+for _ in range(100):
+    _drain2()
+    if len(_started) == 2:
+        _ok = True
+        break
+    time.sleep(0.05)
+check("...and the queued job starts as soon as the first one finishes", _ok,
+      str(len(_started)))
+check("...it is the link you added, not the first batch again",
+      len(_started) == 2 and "ccc" in " ".join(_started[1]), str(_started))
+check("the button goes back to being a download button",
+      _wait_for(lambda: "Download" in _bget.options.get("text", "")),
+      str(_bget.options.get("text")))
+G.cli_main = _cli
+G.threading = _ft
+
+# ---- and several videos at once, from the command line too
+_j = run_two("get", "https://youtu.be/one", "https://youtu.be/two",
+             "--keep-video", "--max-size", "1G", "--jobs", "2",
+             "--no-lyrics", "--dry-run")
+check("two videos at once still each get their own quality decision",
+      _j.returncode == 0
+      and len([l for l in _j.stdout.splitlines() if "quality:" in l]) == 2,
+      _j.stdout[-300:])
+check("...and says how many it is running in parallel",
+      "2 at a time" in _j.stdout, _j.stdout[:120])
+check("parallel lines are numbered so four logs do not interleave into noise",
+      "[1]" in _j.stdout and "[2]" in _j.stdout, _j.stdout[:200])
+
+_evs = []
+_tags = []
+_pr.set_hook(_evs.append)
+_dd = download.download
+download.download = lambda url, o, log=print, on_file=None, tag="": (
+    _tags.append(tag), ([], None))[1]
+try:
+    _ns = C.build_parser().parse_args(
+        ["get", "https://youtu.be/one", "https://youtu.be/two",
+         "--keep-video", "--no-lyrics", "--jobs", "2"])
+    with contextlib.redirect_stdout(io.StringIO()):
+        C.cmd_get(_ns)
+    _tags1 = []
+    _ns1b = C.build_parser().parse_args(
+        ["get", "https://youtu.be/one", "--keep-video", "--no-lyrics"])
+    download.download = lambda url, o, log=print, on_file=None, tag="": (
+        _tags1.append(tag), ([], None))[1]
+    with contextlib.redirect_stdout(io.StringIO()):
+        C.cmd_get(_ns1b)
+finally:
+    download.download = _dd
+    _pr.set_hook(_h0)
+_batch = [e for e in _evs if e.get("type") == "batch"]
+check("musictool tells the UI how many URLs are in the batch -- yt-dlp cannot",
+      _batch and _batch[0]["n"] == 2, str(_batch))
+check("parallel downloads are tagged so the panel can keep them apart",
+      sorted(_tags) == ["1", "2"], str(_tags))
+check("a single download is left untagged, so the panel shows it as before",
+      _tags1 == [""], str(_tags1))
+_ns1 = C.build_parser().parse_args(["get", "https://x/1", "--jobs", "99"])
+check("--jobs is capped rather than opening ninety-nine connections",
+      _ns1.jobs == 99, str(_ns1.jobs))
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

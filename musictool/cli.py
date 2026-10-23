@@ -364,8 +364,30 @@ def _resolve_quality(url, o, log=print):
     if o.get("format_selector"):
         return
     cap = formats.parse_size(o.get("max_size")) if o.get("max_size") else None
-    want = str(o.get("quality") or "").strip().lower().rstrip("p")
+    raw = str(o.get("quality") or "").strip()
+    want = raw.lower().rstrip("p")
     height = int(want) if want.isdigit() else None
+    if raw and not height and want not in ("smallest", "worst", "best"):
+        # Never swallow this. The old code returned here in silence, so a
+        # selector pasted into --quality produced no -f at all and yt-dlp
+        # picked its own default: 1.74 GiB of 2160p instead of the 1080p that
+        # was asked for.
+        if formats.looks_like_selector(raw):
+            o["format_selector"] = raw
+            log(f"  note: '{raw}' is a raw format selector, not a height "
+                f"-- using it as -f")
+            info = download.probe(url, o)
+            if isinstance(info, dict) and not info.get("error"):
+                for warn in formats.check_selector(
+                        raw, formats.rows_from_info(info)):
+                    log(f"  !! {warn}")
+                if not o.get("keep_video"):
+                    log("  note: video formats need --keep-video; without it "
+                        "you get audio only")
+            return
+        log(f"  !! ignoring --quality '{raw}': that is not a height (720, "
+            f"1080) or a preset (best, smallest). A raw yt-dlp selector goes "
+            f"in --format-selector / -f.")
     if not cap and not height and want not in ("smallest", "worst", "best"):
         return
     if (height or want) and not o.get("keep_video"):
@@ -375,6 +397,8 @@ def _resolve_quality(url, o, log=print):
     if not isinstance(info, dict) or info.get("error"):
         log(f"  !! could not read the qualities: "
             f"{str((info or {}).get('error'))[:160]}")
+        log("  !! so --quality/--max-size cannot be honoured here; yt-dlp "
+            "will pick its own default")
         return
     rows = formats.rows_from_info(info)
     sel, v, a, note = formats.pick(
@@ -383,6 +407,8 @@ def _resolve_quality(url, o, log=print):
         smallest=want in ("smallest", "worst"))
     if not sel:
         log(f"  !! no quality matched ({note})")
+        log("  !! so --quality/--max-size cannot be honoured here; yt-dlp "
+            "will pick its own default")
         return
     o["format_selector"] = sel
     log(f"  quality: -f {sel}   ({formats.describe_choice(v, a)})")

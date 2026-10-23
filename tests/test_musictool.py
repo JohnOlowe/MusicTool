@@ -2086,11 +2086,11 @@ check("the table shows the plain itag, not the variant suffix",
       " 137 " in " " + F.table(F.apply_filters(BIG)) or
       "\n137 " in F.table(F.apply_filters(BIG)),
       F.table(F.apply_filters(BIG))[:120])
+_r137 = [r for r in F.apply_filters(BIG) if bid(r) == "137"][0]
 check("...but the selector names the variant it actually measured",
-      F.selector_for([r for r in F.apply_filters(BIG)
-                      if bid(r) == "137"][0], None).startswith("137/137-"),
-      F.selector_for([r for r in F.apply_filters(BIG)
-                      if bid(r) == "137"][0], None))
+      F.selector_for(_r137, None) == _r137["id"] == "137-17"
+      and "/" not in F.selector_for(_r137, None),
+      F.selector_for(_r137, None))
 check("252 rows become a list you can actually read",
       len(F.apply_filters(BIG)) < 20, str(len(F.apply_filters(BIG))))
 check("turning collapse+dedupe off gives every row back",
@@ -2159,7 +2159,7 @@ check("clicking a row gives a ready -f", _sel.startswith("137"), _sel)
 check("a filtered table still pairs with a REAL audio track",
       F.selector_for(*F.pair_with_audio(
           _row, F.with_audio_pool(F.apply_filters(BIG), BIG)))
-      == "137/137-17+251/251-17",
+      == "137-17+251-17",
       F.selector_for(*F.pair_with_audio(
           _row, F.with_audio_pool(F.apply_filters(BIG), BIG))))
 _noaud = F.pair_with_audio(_row, F.apply_filters(BIG, include_audio=False))[1]
@@ -2544,6 +2544,114 @@ check("lyrics come with music and stay away from video",
       "--no-lyrics" in _gav["video_single"] and "--no-lyrics" not in _gav["music_single"])
 check("the four modes are four different commands",
       len({tuple(a) for a in _gav.values()}) == 4)
+
+# ============ 29. the quality you asked for is the quality you get
+# Real incident: "1080p vp9 + mp4a ~ 644.7 MiB" was announced, and a 52 MiB
+# .m4a arrived, because the selector offered an id that video does not serve.
+print("\n--- 29. the selector asks for ids the video actually serves ---")
+from musictool import cli as C  # noqa: E402
+
+_INC = {"duration": 3379, "formats": [
+    {"format_id": "248", "ext": "webm", "vcodec": "vp9", "acodec": "none",
+     "height": 1080, "tbr": 1400, "filesize": 621000000},
+    {"format_id": "137", "ext": "mp4", "vcodec": "avc1", "acodec": "none",
+     "height": 1080, "tbr": 950, "filesize": 418000000},
+    {"format_id": "401", "ext": "mp4", "vcodec": "av01", "acodec": "none",
+     "height": 2160, "tbr": 4200, "filesize": 1868000000},
+    {"format_id": "140-0", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 54700000},
+    {"format_id": "140-7", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 54900000},
+    {"format_id": "251-1", "ext": "webm", "vcodec": "none", "acodec": "opus",
+     "abr": 130, "filesize": 44200000},
+]}
+_inc = F.collapse_variants(F.rows_from_info(_INC))
+_ids = {r["id"] for r in F.rows_from_info(_INC)}
+check("this video serves no format called '140' -- only '140-0' and '140-7'",
+      "140" not in _ids and "140-0" in _ids, str(sorted(_ids)))
+_s1, _v1, _a1, _n1 = F.pick(_inc, max_bytes=800 * 1024 * 1024)
+_s2 = F.auto_pick(_inc, "best")[0]
+check("the chosen pair names ids that exist",
+      all(part in _ids for part in _s1.replace("/", "+").split("+")), _s1)
+check("...and offers no '/' fallback to quietly downgrade with",
+      "/" not in _s1 and "/" not in _s2, f"{_s1} | {_s2}")
+check("the video that was announced is the video in the selector",
+      _s1.startswith(_v1["id"] + "+"), f"{_s1} vs {_v1['id']}")
+
+# yt-dlp's own parser is the only real judge of a -f line
+try:
+    from yt_dlp import YoutubeDL as _YDL
+except ImportError:
+    _YDL = None
+
+
+def _ytdlp_says(sel, info=_INC):
+    """What yt-dlp itself would download for this selector."""
+    ydl = _YDL({"quiet": True, "simulate": True})
+    fmts = [{"format_id": f["format_id"], "ext": f["ext"],
+             "vcodec": f.get("vcodec", "none"), "acodec": f.get("acodec", "none"),
+             "height": f.get("height"), "width": f.get("width", 1920),
+             "fps": f.get("fps", 30), "tbr": f.get("tbr", 0),
+             "abr": f.get("abr", 0), "filesize": f.get("filesize"),
+             "format": f["format_id"], "protocol": "https", "preference": None,
+             "language": None, "format_note": None, "dynamic_range": None}
+            for f in info["formats"]]
+    got = [f["format_id"]
+           for f in ydl.build_format_selector(sel)({"formats": fmts,
+                                                    "extractor": "youtube"})]
+    return got
+
+
+if _YDL is None:
+    print("  SKIP  yt-dlp not installed -- cannot ask the real parser")
+else:
+    check("yt-dlp agrees the old shape handed back audio only",
+          _ytdlp_says("248+140/140-0") == ["140-0"],
+          str(_ytdlp_says("248+140/140-0")))
+    check("and that the fixed shape really pairs the video with the audio",
+          "+" in (_ytdlp_says(_s1) or [""])[0], str(_ytdlp_says(_s1)))
+
+_irows = F.rows_from_info(_INC)
+_w1 = F.check_selector("248+140/140-0", _irows)
+check("a selector naming an id the video does not serve is called out",
+      any("serves no format called 140" in w for w in _w1), str(_w1))
+check("...and so is the fallback that would quietly win instead",
+      any("fallback after it" in w for w in _w1), str(_w1))
+check("a selector built from real ids passes clean",
+      F.check_selector("248+140-0", _irows) == [],
+      str(F.check_selector("248+140-0", _irows)))
+check("an audio-only fallback is named as one",
+      any("audio track on its own" in w
+          for w in F.check_selector("248+140-0/140-7", _irows)),
+      str(F.check_selector("248+140-0/140-7", _irows)))
+check("with no format list there is nothing to judge, so it stays quiet",
+      F.check_selector("248+140/140-0", []) == [])
+
+# --- and a selector pasted into --quality is used, not dropped
+check("a raw selector is recognised as one",
+      F.looks_like_selector("248+140/140-0") and F.looks_like_selector("137+140")
+      and F.looks_like_selector("bv*+ba/b")
+      and not F.looks_like_selector("1080") and not F.looks_like_selector(""))
+_o1 = {"quality": "248+140-0", "max_size": "", "keep_video": True}
+_log1 = []
+C._resolve_quality("https://youtu.be/ZLRwjygiCTE", _o1, log=_log1.append)
+check("pasting a selector into --quality uses it instead of ignoring it",
+      _o1.get("format_selector") == "248+140-0"
+      and any("raw format selector" in m for m in _log1),
+      f"{_o1.get('format_selector')} | {_log1}")
+_o2 = {"quality": "banana", "max_size": "", "keep_video": True}
+_log2 = []
+C._resolve_quality("https://youtu.be/ZLRwjygiCTE", _o2, log=_log2.append)
+check("nonsense in --quality is refused out loud, not swallowed",
+      _o2.get("format_selector") is None
+      and any("ignoring --quality" in m for m in _log2),
+      f"{_o2.get('format_selector')} | {_log2}")
+_o3 = {"quality": "1080", "max_size": "", "keep_video": True}
+_log3 = []
+C._resolve_quality("https://youtu.be/ZLRwjygiCTE", _o3, log=_log3.append)
+check("when the qualities cannot be read, it says whose default you get",
+      any("yt-dlp will pick its own default" in m for m in _log3)
+      or bool(_o3.get("format_selector")), str(_log3))
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

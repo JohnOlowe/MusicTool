@@ -367,14 +367,68 @@ def _pair(row, rows, max_bytes=None):
 
 
 def _ref(r):
-    """How to name one stream on a -f line.
+    """How to name one stream on a -f line: by the id yt-dlp actually served.
 
-    A collapsed row was measured as one concrete variant (251-17). yt-dlp
-    usually also knows the plain itag, so ask for that first and fall back
-    to the variant: `251/251-17`. Whichever it takes, it is the whole track.
+    `base` ('140' out of '140-7') is only a grouping key for the collapsed
+    table -- for a video like that, YouTube serves no format called '140' at
+    all. Offering `140/140-0` on a `-f` line is worse than useless, because
+    `/` binds looser than `+`:
+
+        -f 248+140/140-0   ->  (248+140) / (140-0)
+
+    The first branch cannot match (there is no `140`), so yt-dlp silently
+    falls through to the second and hands back the audio track on its own.
+    That is how "1080p vp9 + mp4a ~ 644.7 MiB" arrived as a 52 MiB .m4a while
+    `--keep-video` was set and nothing looked wrong. One concrete id per
+    stream, so the pair either matches or yt-dlp says so out loud.
     """
-    base = r.get("base") or variant_base(r["id"])
-    return f"{base}/{r['id']}" if base != r["id"] else r["id"]
+    return str(r["id"])
+
+
+def check_selector(selector, rows):
+    """Judge a raw -f expression against the formats this video really serves.
+
+    -> a list of warnings, empty when the selector is fine. yt-dlp happily
+    accepts a selector that cannot match and then falls back to something you
+    did not ask for, so the check happens here, before the download, where it
+    can still be acted on.
+    """
+    out = []
+    have = {str(r["id"]) for r in rows or []}
+    if not have:
+        return out                      # nothing to judge it against
+    text = str(selector or "")
+    ids = [t for t in re.findall(r"[0-9][0-9A-Za-z._-]*", text)]
+    missing = [t for t in ids if t not in have]
+    if missing:
+        out.append("this video serves no format called "
+                   + ", ".join(sorted(set(missing)))
+                   + " (it has " + ", ".join(sorted(have)[:6]) + ")")
+    if "/" in text:
+        head = text.split("/")[0]
+        if any(t not in have for t in re.findall(r"[0-9][0-9A-Za-z._-]*", head)):
+            out.append("nothing before the '/' can match, so yt-dlp will "
+                       "silently take the fallback after it")
+        elif not any(r["kind"] in ("video", "both", "file")
+                     for r in rows or []
+                     if str(r["id"]) in re.findall(
+                         r"[0-9][0-9A-Za-z._-]*", text.split("/")[-1])):
+            out.append("the fallback is an audio track on its own")
+    return out
+
+
+SELECTOR_CHARS = "+/,[]()"
+
+
+def looks_like_selector(text):
+    """True when a value is a raw yt-dlp -f expression, not a height.
+
+    `--quality` wants 720 or 1080; the picker and our own `formats` output
+    print things like `248+140-0`. Telling those apart lets a pasted selector
+    be used instead of quietly ignored.
+    """
+    t = str(text or "").strip()
+    return bool(t) and any(c in t for c in SELECTOR_CHARS)
 
 
 def _selector(row, audio):

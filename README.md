@@ -290,6 +290,59 @@ Each costs one metadata request and prints what it chose
 ceiling it says so rather than quietly taking something bigger. An explicit `-f`
 always wins and skips the lookup.
 
+### The `-f` line, and the trap that handed back audio instead of video
+
+`formats` prints a ready command, and `get --quality/--max-size` prints the
+selector it chose:
+
+```
+  quality: -f 248+251-1   (1080p vp9 + opus ~ 634.4 MiB)
+```
+
+Every id there is one this video actually serves. That matters more than it
+looks, because YouTube does not serve the plain itag for range-delivered
+streams: the audio track is `140-0` … `140-17`, and there is **no** format
+called `140`. An older build offered `base/variant` as a convenience:
+
+```
+-f 248+140/140-0        # looks reasonable, is not
+```
+
+`/` binds looser than `+`, so yt-dlp reads that as `(248+140) / (140-0)`.
+The first branch cannot match — there is no `140` — and it silently falls
+through to the second, which is the audio track alone. The result was a
+52 MiB `.m4a` where a 644 MiB 1080p video was promised, with `--keep-video`
+set and no error anywhere. Asking yt-dlp's own parser confirms it:
+
+| `-f` | yt-dlp downloads |
+|---|---|
+| `248+140/140-0` | `140-0` — **audio only** |
+| `248+140-0` | `248+140-0` — video + audio |
+
+So a selector now names one concrete id per stream, with no `/` fallback to
+fall through. If a stream has gone by the time you download, yt-dlp says
+`requested format is not available` out loud, which is what you want.
+
+Two related guards, both added after a real 1.74 GiB surprise:
+
+- **`--quality` can no longer be ignored.** It takes a height (`720`, `1080`)
+  or a preset (`best`, `smallest`). Paste a raw selector into it and it is
+  used as `-f`, with a note saying so; paste nonsense and it says
+  `!! ignoring --quality 'banana'` instead of quietly downloading yt-dlp's
+  own default.
+- **An adopted selector is checked against the real format list** before the
+  download starts:
+
+```
+  note: '248+140/140-0' is a raw format selector, not a height -- using it as -f
+  !! this video serves no format called 140 (it has 137, 140-0, 140-7, 248, 251-1, 401)
+  !! nothing before the '/' can match, so yt-dlp will silently take the fallback after it
+```
+
+When the qualities cannot be read at all — no network, a blocked video — the
+log says `yt-dlp will pick its own default`, so an unapplied `--max-size` is
+never a silent one.
+
 ### Your previous yt-dlp command, in musictool
 
 ```bash
@@ -790,7 +843,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 690 assertions, 0 failures**
+**Verified by running the code — 705 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

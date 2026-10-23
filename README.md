@@ -221,6 +221,41 @@ the chapters, the tags. Nothing is re-encoded, so it takes seconds per file.
 * In the GUI it is the **Fix language in existing files** button on the
   Download tab — same folder field, same language setting.
 
+**Which files are affected?** You do not need to dig the links out of an old
+terminal log — musictool wrote each one down when it downloaded the file
+(`.musictool-index.json`, in the same folder). So it can read them straight back
+off your disk:
+
+```
+musictool relang "C:\Music\Videos" --list
+```
+
+```
+3 file(s) checked, looking for en audio
+
+NOT in en -- these are the ones to fix (1):
+  spa   Sermon 04.mkv
+        https://youtu.be/vid1
+
+already en (1):
+  eng   Sermon 03.mkv
+
+musictool never downloaded these, so there is no link to give (1):
+  ?     something-else.m4a
+  re-download them by hand, or add them to .musictool-index.json
+
+Put the en audio into those 1 file(s) without re-downloading the video:
+  musictool relang "C:\Music\Videos"
+```
+
+It reads the language tag inside each file and nothing else — **no downloads,
+no network** — so it works even while YouTube is refusing to talk to you, and it
+will not hand you a link it does not actually have. Files musictool did not
+download have no entry in the index, and it says so rather than guessing one
+from the filename.
+
+`--list` is also the **List wrong-language files** button on the Download tab.
+
 
 ## Commands
 
@@ -998,7 +1033,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 773 assertions, 0 failures**
+**Verified by running the code — 780 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

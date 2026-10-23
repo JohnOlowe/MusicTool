@@ -921,6 +921,9 @@ def run():
                    if uicmd.MODE_WHAT[current_mode()] == "video"
                    else "Download + lyrics")
     bget.pack(side="left", padx=4)
+    blist = ttk.Button(brow, text="List wrong-language files",
+                       command=lambda: go_relang(list_only=True))
+    blist.pack(side="left", padx=4)
     blang = ttk.Button(brow, text="Fix language in existing files",
                        command=lambda: go_relang())
     blang.pack(side="left", padx=4)
@@ -950,7 +953,7 @@ def run():
         do_argv(uicmd.build_argv("formats", vals, positionals=[u[0]],
                                  parser=build_parser()))
 
-    def go_relang():
+    def go_relang(list_only=False):
         """Put the right language in files that are already downloaded.
 
         Downloads only the audio track -- tens of MiB, not the hundreds the
@@ -966,6 +969,9 @@ def run():
             return
         argv = ["relang", d,
                 "--audio-lang", (vals.get("audio_lang") or "en").strip() or "en"]
+        if list_only:
+            do_argv(argv + ["--list"])   # reads the files only -- no download
+            return
         if vals.get("cookies"):
             argv += ["--cookies", vals["cookies"]]
         if vals.get("cookies_from_browser") not in (None, "", "off"):

@@ -3083,6 +3083,63 @@ check("a file musictool never downloaded is reported, not guessed at",
       "no videoId" in _z.stdout and "no videoId" in _z.stdout.splitlines()[-1],
       _z.stdout[-200:])
 
+# --- "which ones are they?" -- the list comes off the disk, not off a log
+_RL2 = os.path.join(WORK, "rl2")
+shutil.rmtree(_RL2, ignore_errors=True)
+os.makedirs(_RL2)
+for _nm, _lg in (("show.mkv", "spa"), ("right.mkv", "eng")):
+    _m = subprocess.run([FF, "-y", "-v", "error", "-f", "lavfi",
+                         "-i", "testsrc=size=160x120:rate=10:duration=1",
+                         "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                         "-map", "0:v", "-map", "1:a", "-c:v", "libx264",
+                         "-c:a", "aac", "-metadata:s:a:0", f"language={_lg}",
+                         os.path.join(_RL2, _nm)],
+                        capture_output=True, text=True)
+    assert _m.returncode == 0, _m.stderr[-200:]
+shutil.copy(os.path.join(_RL2, "show.mkv"), os.path.join(_RL2, "orphan.m4a"))
+json.dump({"show.mkv": {"video_id": "vid1", "url": "https://youtu.be/vid1"},
+           "right.mkv": {"video_id": "vid2", "url": "https://youtu.be/vid2"}},
+          open(os.path.join(_RL2, ".musictool-index.json"), "w"))
+# a yt-dlp that leaves a mark if anyone runs it: listing must not touch it
+_NOBIN = os.path.join(WORK, "nobin")
+os.makedirs(_NOBIN, exist_ok=True)
+_MARK = os.path.join(WORK, "yt-dlp-was-called")
+open(os.path.join(_NOBIN, "yt-dlp"), "w").write(
+    "#!/bin/sh\ntouch " + _MARK + "\nexit 1\n")
+os.chmod(os.path.join(_NOBIN, "yt-dlp"), 0o755)
+_NOENV = dict(ENV, PATH=_NOBIN + os.pathsep + ENV["PATH"])
+if os.path.exists(_MARK):
+    os.remove(_MARK)
+_l = subprocess.run([sys.executable, ENTRY, "relang", _RL2, "--list"],
+                    capture_output=True, text=True, env=_NOENV)
+check("a listing names the files that are in the wrong language...",
+      _l.returncode == 0 and "NOT in en" in _l.stdout
+      and "show.mkv" in _l.stdout.split("NOT in en")[1].split("already")[0],
+      _l.stdout[-400:])
+check("...and gives you the link each one came from",
+      "https://youtu.be/vid1" in _l.stdout, _l.stdout[-400:])
+_orph = _l.stdout.split("no link to give")[1]
+check("...without inventing a link for a file musictool never downloaded",
+      "orphan.m4a" in _orph and "youtu.be" not in _orph
+      and _l.stdout.count("youtu.be/vid1") == 1, _orph[-200:])
+check("...it reads the files only: nothing was touched",
+      F.same_language(download.audio_track_lang(os.path.join(_RL2, "show.mkv")),
+                      "es")
+      and not os.path.isdir(os.path.join(_RL2, ".musictool-relang"))
+      and not os.path.exists(_MARK),
+      download.audio_track_lang(os.path.join(_RL2, "show.mkv")))
+_RL3 = os.path.join(WORK, "rl3")
+shutil.rmtree(_RL3, ignore_errors=True)
+os.makedirs(_RL3)
+shutil.copy(os.path.join(_RL2, "right.mkv"), os.path.join(_RL3, "right.mkv"))
+json.dump({"right.mkv": {"video_id": "vid2", "url": "https://youtu.be/vid2"}},
+          open(os.path.join(_RL3, ".musictool-index.json"), "w"))
+_ok = subprocess.run([sys.executable, ENTRY, "relang", _RL3, "--list"],
+                     capture_output=True, text=True, env=_NOENV)
+check("and when nothing needs fixing it says so instead of printing a list",
+      _ok.returncode == 0 and "NOT in en: none" in _ok.stdout
+      and "already en (1)" in _ok.stdout, _ok.stdout[-250:])
+
 # --- and the GUI has a button for it, because that is where this is done
 _argv = []
 _cli = G.cli_main
@@ -3097,6 +3154,15 @@ check("...and it re-languages the folder you are downloading to, in your languag
       _argv and _argv[0][0] == "relang" and _argv[0][1] == _RL
       and "--audio-lang" in _argv[0]
       and _argv[0][_argv[0].index("--audio-lang") + 1] == "en", str(_argv))
+_argv.clear()
+_gpane.vars["output_dir"].set(_RL2)
+_wl = [w for w in root.walk() if w.kind == "button"
+       and "List wrong-language" in w.options.get("text", "")]
+check("the GUI can show you the list too", len(_wl) == 1, str(len(_wl)))
+_wl[0].invoke()
+check("...and that listing downloads nothing",
+      _argv and _argv[0][:2] == ["relang", _RL2] and "--list" in _argv[0],
+      str(_argv))
 G.cli_main = _cli
 _gpane.vars["output_dir"].set("")
 

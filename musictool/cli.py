@@ -209,6 +209,9 @@ def build_parser():
                          "language it already has")
     rl.add_argument("--dry-run", dest="dry_run", action="store_true",
                     help="say what would change and download nothing")
+    rl.add_argument("--list", action="store_true",
+                    help="just list what language each file is in and the "
+                         "link it came from (no downloads, no network)")
     sub.add_parser("doctor", help="check that yt-dlp, ffmpeg and tkinter are available")
     sub.add_parser("gui", help="launch the graphical interface")
     return ap
@@ -872,6 +875,63 @@ def _collect_media(paths, log=print):
     return out
 
 
+def _relang_report(files, lang):
+    """Which language is each file actually in, and where did it come from?
+
+    Reads only the files and the index musictool wrote when it downloaded
+    them -- no network, no downloads, so it works even while YouTube is
+    refusing to talk to you.
+    """
+    wrong, right, unknown, noid = [], [], [], []
+    for path in files:
+        name = os.path.basename(path)
+        entry = download.load_index(os.path.dirname(path) or ".").get(name)
+        url = (entry or {}).get("url") or ""
+        have = download.audio_track_lang(path)
+        if not url:
+            noid.append((name, have))
+        elif not have:
+            unknown.append((name, url))
+        elif formats.same_language(have, lang):
+            right.append((name, have, url))
+        else:
+            wrong.append((name, have, url))
+
+    def block(title, rows, show_url=True):
+        print(f"\n{title} ({len(rows)}):")
+        for name, have, url in rows:
+            print(f"  {have or '?':<5} {name}")
+            if show_url and url:
+                print(f"        {url}")
+
+    print(f"\n{len(files)} file(s) checked, looking for {lang} audio")
+    if wrong:
+        block(f"NOT in {lang} -- these are the ones to fix", wrong)
+    else:
+        print(f"\nNOT in {lang}: none -- every file with a language tag is "
+              f"already {lang}")
+    if right:
+        block(f"already {lang}", right, show_url=False)
+    if unknown:
+        print(f"\nno language tag, cannot tell ({len(unknown)}):")
+        for name, url in unknown:
+            print(f"  ?     {name}\n        {url}")
+        print("  (these may well be fine -- pass --force to relang to replace "
+              "the audio anyway)")
+    if noid:
+        print(f"\nmusictool never downloaded these, so there is no link to "
+              f"give ({len(noid)}):")
+        for name, have in noid:
+            print(f"  {have or '?':<5} {name}")
+        print("  re-download them by hand, or add them to "
+              ".musictool-index.json")
+    if wrong:
+        print(f"\nPut the {lang} audio into those {len(wrong)} file(s) without "
+              "re-downloading the video:")
+        print(f"  musictool relang \"{os.path.dirname(files[0]) or '.'}\"")
+    return 0
+
+
 def cmd_relang(args):
     """Put the right language in files you have already downloaded.
 
@@ -885,6 +945,8 @@ def cmd_relang(args):
     if not files:
         print("nothing to do: no media files in those paths")
         return 1
+    if args.list:
+        return _relang_report(files, lang)
     o = {"cookies": args.cookies or "",
          "cookies_from_browser": args.cookies_from_browser or "off",
          "proxy": args.proxy or "", "no_playlist": True}

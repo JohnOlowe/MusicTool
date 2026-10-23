@@ -292,6 +292,27 @@ is easier -- use a file when the browser you use is one yt-dlp cannot read, or
 when you want a fixed login that survives browser updates. A file always wins when
 both are set.
 
+### The sign-in cascade, decoded
+
+Adding cookies sets off a chain of *different* failures that all look like "YouTube
+hates me". Each has its own fix, so `check`, `get` and `formats` name the one you
+actually hit instead of printing a bare `ERROR:`:
+
+| what YouTube / yt-dlp said | what it really means | the fix |
+|---|---|---|
+| `Sign in again to continue` | the exported `cookies.txt` was flagged as a hijacked session and killed. Refreshing the page will not bring it back. | re-export from a fresh incognito login, or drop the file and use `--cookies-from-browser firefox` |
+| `Failed to decrypt with DPAPI` | Chrome/Edge lock their cookies with App-Bound Encryption; yt-dlp cannot open them | log in to YouTube in **Firefox** and use `--cookies-from-browser firefox` |
+| `Could not copy Chrome cookie database` | the browser still holds the file open (on Windows, Edge keeps background processes alive via Startup Boost) | close it *properly*, kill the leftovers in Task Manager, retry |
+| `Login with OAuth is no longer supported` | yt-dlp dropped the old TV/OAuth login | `--cookies-from-browser firefox`, or a `cookies.txt` |
+| `No supported JavaScript runtime` / `n challenge solving failed` | YouTube's n-challenge needs a JS engine; yt-dlp only enables deno by default | install deno or node, add `--js-runtimes node` and `--remote-components ejs:github` |
+| `The page needs to be reloaded` | the bot wall, usually because the JS challenge went unsolved | same as above |
+| `[pot:bgutil:http] ... 127.0.0.1:4416` | the **bgutil PO-token plugin** is installed but its server is not running. It is not yt-dlp's own solver. | start the plugin's server, or uninstall the plugin |
+| `Requested format is not available` | that itag is not offered to your account/client -- nothing to do with Premium | `musictool formats URL --show-audio --all-formats` to see what is really there |
+
+`musictool doctor` reports the two things that cause the middle of that table:
+whether a JS runtime is on your PATH, and whether a PO-token server is answering on
+port 4416.
+
 **Resuming where you stopped.** With 286 of 447 already downloaded, either let
 yt-dlp skip what exists (`--archive archive.txt` from the start, so it knows), or
 ask for the rest by position: `--items 287-447`. A file interrupted mid-download
@@ -716,7 +737,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 624 assertions, 0 failures**
+**Verified by running the code — 648 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

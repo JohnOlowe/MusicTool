@@ -34,7 +34,25 @@ BLOCKERS = (
     ("join this channel", "members"),
     ("video unavailable", "unavailable"),
     ("no longer available", "unavailable"),
+    # --- the ones that are not really about the video at all. These are the
+    #     failures a cookies.txt / anti-bot setup produces, and each of them
+    #     has a different fix, so they must not all land in "bot".
+    ("sign in again to continue", "session"),
+    ("sign in again", "session"),
+    ("failed to decrypt with dpapi", "dpapi"),
+    ("could not copy chrome cookie database", "cookies_locked"),
+    ("login with oauth is no longer supported", "oauth_gone"),
+    ("no supported javascript runtime", "js_runtime"),
+    ("n challenge solving failed", "js_runtime"),
+    ("pot:bgutil", "pot_server"),
+    ("127.0.0.1:4416", "pot_server"),
+    ("the page needs to be reloaded", "reload"),
+    ("requested format is not available", "no_format"),
 )
+
+# Chromium-derived browsers share one cookie format and one encryption lock,
+# which is why the error message says "Chrome" even for Edge/Brave/Vivaldi.
+CHROMIUM = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera", "whale")
 
 ADVICE = {
     "bot": ("YouTube wants a logged-in session. Use --cookies-from-browser "
@@ -47,11 +65,49 @@ ADVICE = {
     "unavailable": "YouTube says this video is unavailable or removed.",
     "network": ("Could not reach YouTube at all -- check the connection, then "
                 "try again (this is not a block)."),
+    "session": ("Your exported cookies.txt was flagged as a hijacked session "
+                "and killed -- refreshing the page will not bring it back. "
+                "Re-export from a fresh incognito login, or skip the file "
+                "entirely and use --cookies-from-browser firefox."),
+    "dpapi": ("Chrome and Edge encrypt their cookies with App-Bound "
+              "Encryption, which yt-dlp cannot open. Log in to YouTube in "
+              "Firefox and use --cookies-from-browser firefox -- Firefox has "
+              "no such lock. (Edge reports this as a 'Chrome' error because "
+              "it is the same code underneath.)"),
+    "cookies_locked": ("The browser is still holding its cookie database "
+                       "open. Close it completely -- on Windows Edge keeps "
+                       "background processes alive (Startup Boost), so kill "
+                       "them in Task Manager or turn Startup Boost off -- "
+                       "then run the command again."),
+    "oauth_gone": ("yt-dlp dropped the TV/OAuth login. Use "
+                   "--cookies-from-browser firefox, or an exported "
+                   "cookies.txt with --cookies."),
+    "js_runtime": ("YouTube's n-challenge needs a JavaScript runtime. Install "
+                   "deno (the default) or node, pass --js-runtimes node if "
+                   "you use node, and add --remote-components ejs:github so "
+                   "yt-dlp is allowed to fetch the solver script."),
+    "pot_server": ("The bgutil PO-token plugin is installed but its server is "
+                   "not answering on 127.0.0.1:4416. Start it (docker run -p "
+                   "4416:4416 brainicism/bgutil-ytdlp-pot-provider) or "
+                   "uninstall the plugin -- this is a plugin, not yt-dlp's "
+                   "own JS solver."),
+    "reload": ("That is the bot wall talking. It almost always means the JS "
+               "challenge was not solved: install deno or node and add "
+               "--remote-components ejs:github (see 'js runtime' in "
+               "musictool doctor)."),
+    "no_format": ("That itag is not offered to your account or client. List "
+                  "what is really there with: musictool formats URL "
+                  "--show-audio --all-formats"),
 }
 
 
 def classify_error(text):
-    """'bot', 'age', 'private', 'members', 'unavailable', 'network', 'unknown'."""
+    """The failure kind, so each one gets its own fix.
+
+    'bot', 'age', 'private', 'members', 'unavailable', 'network', 'unknown',
+    plus the cookie/anti-bot ones: 'session', 'dpapi', 'cookies_locked',
+    'oauth_gone', 'js_runtime', 'pot_server', 'reload', 'no_format'.
+    """
     t = (text or "").lower()
     for needle, kind in BLOCKERS:
         if needle in t:

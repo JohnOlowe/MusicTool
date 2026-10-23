@@ -221,6 +221,29 @@ def cookie_stores(browser, user_dir):
             os.path.join(user_dir, "Default", "Cookies")]
 
 
+def js_runtime():
+    """The JavaScript runtime yt-dlp can use to solve YouTube's n-challenge.
+
+    yt-dlp only enables deno by default; node has to be opted in with
+    --js-runtimes node. -> (name, path) or (None, None).
+    """
+    for name in ("deno", "node"):
+        path = shutil.which(name)
+        if path:
+            return name, path
+    return None, None
+
+
+def pot_server_reachable(host="127.0.0.1", port=4416, timeout=0.4):
+    """Is the bgutil PO-token provider answering? (It is a separate server.)"""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def detect_browser(platform=None, env=None):
     """The browser most likely holding the user's YouTube login.
 

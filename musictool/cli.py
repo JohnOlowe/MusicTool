@@ -10,7 +10,8 @@ from . import config as configmod
 from . import download, formats, lyrics, providers, tags
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
-                   is_windows, ytdlp_cmd, USER_AGENT)
+                   is_windows, js_runtime, pot_server_reachable, ytdlp_cmd,
+                   USER_AGENT)
 
 PROG = "musictool"
 
@@ -804,6 +805,20 @@ def cmd_doctor(_args):
     print("cookies   :", (f"can read your {name} login  ({store})" if name else
                           "no browser cookie database found -- use --cookies "
                           "with an exported cookies.txt if YouTube asks to sign in"))
+    if name in download.CHROMIUM:
+        print("            note: " + name + " encrypts its cookies with "
+              "App-Bound Encryption -- if yt-dlp says 'Failed to decrypt "
+              "with DPAPI', log in to YouTube in Firefox and use "
+              "--cookies-from-browser firefox")
+    js, jspath = js_runtime()
+    print("js runtime:", (f"{js}  ({jspath})" if js else
+                          "MISSING  ->  install deno (yt-dlp's default) or "
+                          "node; without one the n-challenge fails and "
+                          "YouTube answers 'The page needs to be reloaded'"))
+    print("pot server:", ("reachable on 127.0.0.1:4416"
+                          if pot_server_reachable() else
+                          "not running (only needed if the bgutil PO-token "
+                          "plugin is installed)"))
     if not have_ffmpeg():
         ok = False
     try:

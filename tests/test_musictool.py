@@ -1824,6 +1824,7 @@ check("once it finishes, Stop goes back to being harmless",
 # ============================ 25. no-cookie access check + quality by size
 print("\n--- 25. 'am I blocked?' and choosing a quality by its size ---")
 from musictool import formats as F  # noqa: E402
+from musictool import download as D  # noqa: E402   # section 27 alias
 
 YT = {"id": "abc", "title": "Elevation Worship - Praise", "duration": 225,
       "formats": [
@@ -2287,6 +2288,75 @@ check("copying gives the same command",
       root.clipboard[:160])
 G.cli_main = _cli_main_now
 G.download.probe = _real_probe
+
+
+# ==================== 27. the sign-in / anti-bot cascade, named and explained
+print("\n--- 27. every failure from the YouTube sign-in cascade has a fix ---")
+
+_CASCADE = [
+    ("Sign in again to continue to YouTube", "session"),
+    ("ERROR: Failed to decrypt with DPAPI. See "
+     "https://github.com/yt-dlp/yt-dlp/issues/10927", "dpapi"),
+    ("Could not copy Chrome cookie database. See "
+     "https://github.com/yt-dlp/yt-dlp/issues/7271", "cookies_locked"),
+    ("ERROR: [youtube:tab] PLxx: Login with OAuth is no longer supported.",
+     "oauth_gone"),
+    ("WARNING: [youtube] No supported JavaScript runtime could be found. "
+     "Only deno is enabled by default", "js_runtime"),
+    ("WARNING: [youtube] vEIU3k25kJY: n challenge solving failed", "js_runtime"),
+    ("WARNING: [youtube] [pot:bgutil:http] Error reaching GET "
+     "http://127.0.0.1:4416/ping", "pot_server"),
+    ("ERROR: [youtube] vEIU3k25kJY: The page needs to be reloaded.", "reload"),
+    ("ERROR: [youtube] RCZy7FhLtkw: Requested format is not available.",
+     "no_format"),
+]
+for _text, _kind in _CASCADE:
+    check(f"'{_kind}' is recognised ({_text[:34]}...)",
+          D.classify_error(_text) == _kind, D.classify_error(_text))
+check("none of them fall through to 'unknown'",
+      all(D.classify_error(t) != "unknown" for t, _ in _CASCADE))
+check("every new kind comes with a fix, not just a name",
+      all(download.ADVICE.get(k) for _, k in _CASCADE),
+      str([k for _, k in _CASCADE if not download.ADVICE.get(k)]))
+check("the DPAPI fix points at Firefox, because that is the only way out",
+      "firefox" in download.ADVICE["dpapi"].lower()
+      and "App-Bound" in download.ADVICE["dpapi"])
+check("the cookie-database fix says to really close the browser",
+      "Startup Boost" in download.ADVICE["cookies_locked"])
+check("the PO-token fix says it is a plugin server, not yt-dlp itself",
+      "4416" in download.ADVICE["pot_server"]
+      and "plugin" in download.ADVICE["pot_server"])
+check("the JS-runtime fix names both the runtime and the solver script",
+      "--js-runtimes" in download.ADVICE["js_runtime"]
+      and "--remote-components ejs:github" in download.ADVICE["js_runtime"])
+check("a hijacked cookies.txt is not confused with a plain bot wall",
+      D.classify_error("Sign in again to continue") !=
+      D.classify_error("Sign in to confirm you're not a bot"))
+check("...and the old verdicts still stand",
+      D.classify_error("Sign in to confirm you're not a bot") == "bot"
+      and D.classify_error("Confirm your age") == "age"
+      and D.classify_error("Private video") == "private"
+      and D.classify_error("HTTP Error 404: Not Found") == "unknown")
+
+check("Edge is Chromium, so it hits the same lock as Chrome",
+      "edge" in download.CHROMIUM and "chrome" in download.CHROMIUM
+      and "brave" in download.CHROMIUM)
+check("Firefox is not in that list -- that is the whole point",
+      "firefox" not in download.CHROMIUM)
+
+check("the JS runtime probe answers a (name, path) pair",
+      (lambda r: isinstance(r, tuple) and len(r) == 2)(util.js_runtime()),
+      str(util.js_runtime()))
+check("the PO-token probe answers yes/no without hanging",
+      isinstance(util.pot_server_reachable(timeout=0.05), bool),
+      str(util.pot_server_reachable(timeout=0.05)))
+_r = run_fmt("doctor")
+check("doctor reports the JS runtime",
+      "js runtime:" in _r.stdout, _r.stdout[-300:])
+check("doctor reports the PO-token server",
+      "pot server:" in _r.stdout, _r.stdout[-300:])
+check("doctor still reports the cookie situation",
+      "cookies   :" in _r.stdout, _r.stdout[-300:])
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

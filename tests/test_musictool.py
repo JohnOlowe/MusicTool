@@ -1676,8 +1676,12 @@ _g2 = open(os.path.join(ROOT, "musictool", "gui.py"), encoding="utf-8").read()
 check("there is a Stop button wired to cancel",
       "stop_now" in _g2 and "cancel.request()" in _g2
       and 'text="Stop"' in _g2)
-check("Stop is only live while a job runs",
-      'state="normal" if on else "disabled"' in _g2)
+check("the run state never greys Stop out",
+      'state="normal" if on else "disabled"' not in _g2)
+check("the button is not orphaned by a stale rebinding",
+      "stop_btn = None" not in _g2)
+check("a run greys the other buttons out at once, not a pump tick later",
+      "ui(lambda: busy(True))" not in _g2 and "busy(True)" in _g2)
 check("every job starts un-cancelled", "cancel.reset()" in _g2)
 check("the bar/text split is user-draggable",
       "ttk.PanedWindow" in _g2 and "sashpos" in _g2)
@@ -1733,13 +1737,19 @@ check("dragging the sash moves it",
 _stop = [x for x in root.walk()
          if x.kind == "button" and x.options.get("text") == "Stop"]
 check("there is exactly one Stop button", len(_stop) == 1, str(len(_stop)))
-check("Stop is greyed out while nothing runs",
-      _stop and _stop[0].options.get("state") == "disabled",
+check("Stop is clickable while nothing runs -- you can always press it",
+      _stop and _stop[0].options.get("state") != "disabled",
       str(_stop[0].options.get("state")) if _stop else "missing")
 _cx.reset()
 _stop[0].options["command"]()
-check("pressing Stop asks the running job to cancel", _cx.requested())
+check("with nothing running it does not arm a stop for the next run",
+      not _cx.requested(), "the flag was left set")
+_cx.request()                       # a request left over from an earlier run
+_stop[0].options["command"]()
+check("...and it clears a stale stop request instead of keeping it",
+      not _cx.requested())
 _cx.reset()
+
 
 # push real events through the hook the GUI registered, then run its pump
 check("the GUI registered a progress hook", _pr.get_hook() is not None)
@@ -1777,6 +1787,39 @@ _br = [x for x in root.walk()
        if x.kind == "button" and x.options.get("text") == "Browse..."]
 check("path fields have Browse buttons", len(_br) >= 4, str(len(_br)))
 _cx.reset()
+
+# Stop pressed *during* a run: the stubbed command presses the button from
+# inside the job, which is the only way to be inside that window when the
+# harness runs workers inline.
+_cli_now = G.cli_main
+_getb = [x for x in root.walk() if x.kind == "button"
+         and x.options.get("text") == "Download + lyrics"]
+
+
+def _cli_that_stops(argv):
+    ARGV.append(list(argv))
+    _stop[0].options["command"]()      # the user hits Stop mid-download
+    return 0
+
+
+G.cli_main = _cli_that_stops
+_utxt = [w for w in nb.tab_for("Download").walk() if w.kind == "text"][0]
+_utxt.insert("end", "http://x/watch?v=abc\n")
+_cx.reset()
+ARGV.clear()
+_getb[0].invoke()
+check("while a job is in flight, Stop really asks it to cancel",
+      len(ARGV) == 1 and _cx.requested(),
+      f"job ran={len(ARGV)} flag={_cx.requested()}")
+_drain()           # let the log queue reach the log pane
+check("...and says so rather than claiming nothing is running",
+      any("stopping" in w.buf for w in root.walk() if w.kind == "text"),
+      "no stopping message")
+G.cli_main = _cli_now
+_cx.reset()
+_stop[0].options["command"]()
+check("once it finishes, Stop goes back to being harmless",
+      not _cx.requested())
 
 # ============================ 25. no-cookie access check + quality by size
 print("\n--- 25. 'am I blocked?' and choosing a quality by its size ---")

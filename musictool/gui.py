@@ -451,11 +451,9 @@ def run():
                 w.configure(state=state)
             except Exception:
                 pass
-        if stop_btn is not None:
-            try:
-                stop_btn.configure(state="normal" if on else "disabled")
-            except Exception:
-                pass
+        # Stop deliberately keeps its state: it stays clickable while every
+        # other button is greyed out, and while idle it can clear a request
+        # you made by mistake.
         status.set("stopping..." if cancel.requested() else
                    ("working..." if on else "idle"))
 
@@ -463,15 +461,37 @@ def run():
         """Queue a widget touch for the main thread (pump runs it)."""
         uq.put(fn)
 
+    # How many jobs are in flight. This is data, not a widget, so the worker
+    # updates it directly: Stop must know the truth the moment a job starts
+    # and the moment it ends, not a pump tick later.
+    running = {"n": 0}
+
     def stop_now():
-        """Ask the running job to stop. Whatever finished keeps its lyrics."""
+        """Ask the running job to stop. Whatever finished keeps its lyrics.
+
+        Always available. With nothing running it says so instead of quietly
+        arming a stop that the next run would inherit.
+        """
+        if not running["n"]:
+            if cancel.requested():
+                cancel.reset()
+                log("cleared a stop request left over from the last run")
+            else:
+                log("nothing is running -- there is nothing to stop")
+            status.set("idle")
+            return
         cancel.request()
         log("\nstopping -- the current file finishes, then the run ends "
             "(files already downloaded keep their lyrics)")
 
     def worker(fn, after=None):
+        # Called from a button, i.e. the main thread, so grey the other
+        # buttons out here rather than a pump tick later: there should be no
+        # window in which a second run can be started.
+        running["n"] += 1
+        busy(True)
+
         def go():
-            ui(lambda: busy(True))
             rc = None
             try:
                 rc = fn()
@@ -480,6 +500,7 @@ def run():
             except Exception as e:
                 log(f"!! {type(e).__name__}: {e}")
             finally:
+                running["n"] = max(0, running["n"] - 1)
                 ui(lambda: busy(False))
                 pq.put(FINISH)
                 if after:
@@ -521,8 +542,9 @@ def run():
     bar.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
     ttk.Label(bar, textvariable=status).pack(side="left")
     ttk.Label(bar, textvariable=report_headline, foreground="#0a6").pack(side="right")
-    stop_btn = ttk.Button(bar, text="Stop", width=8, command=stop_now,
-                          state="disabled")
+    # Stop is the one control that must never be greyed out: it is what you
+    # reach for precisely when a run is going wrong.
+    stop_btn = ttk.Button(bar, text="Stop", width=8, command=stop_now)
     stop_btn.pack(side="right", padx=6)
 
     split = tk.PanedWindow(root, orient="vertical", sashwidth=9,
@@ -538,7 +560,6 @@ def run():
     panes = {}
     areas = {}
     run_buttons = []
-    stop_btn = None
     path_combos = []
     url_combos = []
 

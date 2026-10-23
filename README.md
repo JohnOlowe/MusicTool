@@ -343,8 +343,12 @@ on Android/Termux the OS won't allow an app to force-connect anyway).
 
 ## Stopping a run
 
-Press **Stop** (bottom right of the window, greyed out until something is running)
-or **Ctrl+C** in a terminal. The stop is cooperative, which is what makes it safe:
+Press **Stop** (bottom right of the window) or **Ctrl+C** in a terminal. Stop is
+**never** greyed out: it works while a run is going, and if you press it with
+nothing running it says so and clears any request left over from the last run,
+rather than quietly arming a stop that the next run would inherit.
+
+The stop is cooperative, which is what makes it safe:
 
 - the file currently downloading is not deleted -- its `.part` stays, so the next
   run resumes it;
@@ -712,7 +716,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 618 assertions, 0 failures**
+**Verified by running the code — 624 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

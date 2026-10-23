@@ -2344,6 +2344,14 @@ check("Edge is Chromium, so it hits the same lock as Chrome",
 check("Firefox is not in that list -- that is the whole point",
       "firefox" not in download.CHROMIUM)
 
+_r = run_fmt("get", "http://x/watch?v=abc", "-o", os.path.join(WORK, "JsOut"),
+             "--keep-video", "--js-runtimes", "node",
+             "--remote-components", "ejs:github", "--no-lyrics")
+check("--js-runtimes reaches yt-dlp, not just argparse",
+      "--js-runtimes node" in _r.stdout
+      and "--remote-components ejs:github" in _r.stdout, _r.stdout[-300:])
+check("--js-runtimes is in the GUI too",
+      "js_runtimes" in {x["dest"] for x in U.widget_specs("get")})
 check("the JS runtime probe answers a (name, path) pair",
       (lambda r: isinstance(r, tuple) and len(r) == 2)(util.js_runtime()),
       str(util.js_runtime()))

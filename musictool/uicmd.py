@@ -43,6 +43,7 @@ HINTS = {
     "format_selector": "an id from 'List qualities + sizes', e.g. 137+140",
     "merge_format": "mkv accepts every codec; mp4 is more compatible",
     "no_playlist": "download just this video, not the playlist it sits in",
+    "js_runtimes": "needed for YouTube's n-challenge when deno is not installed",
     "all_formats": "yt-dlp splits one stream into ~18 CDN variants; those are merged by default",
     "auto": "best, compatible (H.264/mp4), fit (best under the size limit), smallest, audio",
     "sort": "size_desc = biggest file first",
@@ -94,6 +95,7 @@ LABELS = {
     "embed_subs": "Embed subtitles",
     "sub_langs": "Subtitle languages",
     "remote_components": "Remote components (e.g. ejs:github)",
+    "js_runtimes": "JavaScript runtime (e.g. node)",
     "with_cookies": "Check using my cookies/login instead",
 }
 

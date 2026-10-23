@@ -75,6 +75,9 @@ def _add_quality_flags(p):
                    help="subtitle languages, e.g. en,es (default: what yt-dlp picks)")
     g.add_argument("--remote-components", dest="remote_components",
                    help="let yt-dlp fetch a component it needs, e.g. ejs:github")
+    g.add_argument("--js-runtimes", dest="js_runtimes",
+                   help="JavaScript runtime for YouTube's n-challenge, e.g. "
+                        "node (yt-dlp only enables deno by default)")
 
 
 def _add_lyrics_flags(p):
@@ -199,7 +202,7 @@ def _opts(args):
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
               "quality", "max_size", "format_selector", "merge_format",
-              "embed_subs", "sub_langs", "remote_components",
+              "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
               "retries", "net_max_wait", "download_archive", "lyrics_dir",
               "allow_unsynced", "delay",

@@ -230,6 +230,8 @@ def build_args(url, o):
         args += ["--merge-output-format", o["merge_format"]]
     if o.get("remote_components"):
         args += ["--remote-components", o["remote_components"]]
+    if o.get("js_runtimes"):
+        args += ["--js-runtimes", o["js_runtimes"]]
     # Keep the artist tag clean, exactly like the original shell script did.
     args += list(("--replace-in-metadata",) + TOPIC_FIX)
     args += ["--parse-metadata", "%(artist,uploader)s:%(meta_artist)s"]

@@ -105,7 +105,9 @@ drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
 `--quality 720` (or `1080`, `best`, `smallest`) · `--max-size 250M` (best quality
 that fits under it) · `-f 137+140` (a raw yt-dlp selector, overrides both) ·
 `--merge-format mkv|mp4|webm|mov` · `--subs` · `--sub-langs en,es` ·
-`--remote-components ejs:github` · `--keep-video` (without it you get audio only)
+`--remote-components ejs:github` · `--js-runtimes node` (YouTube's n-challenge
+needs a JS runtime; yt-dlp only enables deno by default) · `--keep-video`
+(without it you get audio only)
 
 ### Listing options (`formats`)
 
@@ -737,7 +739,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 648 assertions, 0 failures**
+**Verified by running the code — 652 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

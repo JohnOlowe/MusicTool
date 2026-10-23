@@ -131,12 +131,33 @@ class OptionsPane(ttk.Frame):
 
     COLUMNS = 2
 
-    def __init__(self, parent, sub, cfg):
+    def __init__(self, parent, sub, cfg, on_change=None):
         super().__init__(parent)
         self.sub = sub
         self.vars = {}
+        self.on_change = on_change
         self.parser = build_parser()
         self._build(cfg)
+
+    def touched(self):
+        """The user moved something by hand -- modes stop overriding it."""
+        if self.on_change:
+            self.on_change()
+
+    def apply(self, values):
+        """Set the widgets a mode has an opinion about; leave the rest alone.
+
+        Writes the variables directly, so it does not look like a user click
+        and does not re-arm the "the user is driving" flag.
+        """
+        for dest, val in values.items():
+            v = self.vars.get(dest)
+            if v is None:
+                continue
+            if isinstance(v, tk.BooleanVar):
+                v.set(bool(val))
+            else:
+                v.set("" if val is None else str(val))
 
     def _build(self, cfg):
         """Widgets come from uicmd.widget_specs, i.e. from the parser itself."""
@@ -164,11 +185,14 @@ class OptionsPane(ttk.Frame):
         f.pack(fill="x")
         ttk.Label(f, text=label + ":").pack(side="left")
         if kind == "choice":
-            ttk.Combobox(f, textvariable=v, width=10, state="readonly",
-                         values=spec["choices"]).pack(side="left", padx=4)
+            c = ttk.Combobox(f, textvariable=v, width=10, state="readonly",
+                             values=spec["choices"])
+            c.pack(side="left", padx=4)
+            c.bind("<<ComboboxSelected>>", lambda e: self.touched())
         else:
-            ttk.Entry(f, textvariable=v, width=18).pack(side="left", padx=4,
-                                                        fill="x", expand=True)
+            e = ttk.Entry(f, textvariable=v, width=18)
+            e.pack(side="left", padx=4, fill="x", expand=True)
+            e.bind("<KeyRelease>", lambda ev: self.touched())
         if spec.get("browse"):
             ttk.Button(f, text="Browse...", width=9,
                        command=lambda vv=v, w=spec["browse"]: self.browse(vv, w)
@@ -205,7 +229,8 @@ class OptionsPane(ttk.Frame):
         text = spec["label"]
         if spec["kind"] == "check_off":
             text = f"{text}  (untick = {spec['flag']})"
-        cb = ttk.Checkbutton(parent, text=text, variable=v)
+        cb = ttk.Checkbutton(parent, text=text, variable=v,
+                             command=self.touched)
         if row is None:
             cb.pack(anchor="w", padx=6, pady=1)
         else:
@@ -405,6 +430,14 @@ def run():
         q.put(str(msg))
 
     def pump():
+        # Reschedule before doing any work: one bad event must not be able to
+        # stop the loop, or the log and the progress bar freeze for the rest
+        # of the session (that is exactly what an exception here used to do).
+        root.after(120, pump)
+        try:
+            sync_mode()          # the mode follows the URL you just pasted
+        except Exception as e:                                  # noqa: BLE001
+            log(f"!! {type(e).__name__}: {e}")
         # callbacks queued by worker threads -- they must run here, on the
         # main thread, not in the thread that produced them.
         try:
@@ -442,7 +475,6 @@ def run():
             _apply_progress(newest_pct)
         if finished:
             _apply_progress(FINISH)
-        root.after(120, pump)
 
     def busy(on):
         state = "disabled" if on else "normal"
@@ -613,10 +645,117 @@ def run():
     ttk.Label(dl, text="↑ recently used URLs (select to insert)",
               foreground="#888").pack(anchor="w", padx=8)
 
+    # ================================================= the mode
+    # Two questions decide nine checkboxes, so ask those two and set the rest.
+    # "Music or video" and "one item or a playlist" are shown as a grid because
+    # they are independent: every combination is a mode that already exists.
+    user_touched = {"v": False}
+
+    def on_options_changed():
+        user_touched["v"] = True
+        describe_mode()
+
+    whatvar = tk.StringVar(value="music")
+    scopevar = tk.StringVar(value="single")
+    mode_desc = tk.StringVar(value="")
+
+    mbox = ttk.LabelFrame(dl, text="what are you downloading?")
+    mbox.pack(fill="x", padx=8, pady=(4, 2))
+    _wr = ttk.Frame(mbox)
+    _wr.pack(fill="x", padx=6, pady=(2, 0))
+    for val, txt in (("music", "Music  (audio + lyrics)"),
+                     ("video", "Video  (keep the picture)")):
+        ttk.Radiobutton(_wr, text=txt, value=val, variable=whatvar,
+                        command=lambda: mode_picked()).pack(side="left", padx=6)
+    _sr = ttk.Frame(mbox)
+    _sr.pack(fill="x", padx=6, pady=(0, 2))
+    for val, txt in (("single", "One item"),
+                     ("playlist", "A whole playlist")):
+        ttk.Radiobutton(_sr, text=txt, value=val, variable=scopevar,
+                        command=lambda: mode_picked()).pack(side="left", padx=6)
+    ttk.Label(dl, textvariable=mode_desc, foreground="#06a",
+              wraplength=900, justify="left").pack(anchor="w", padx=10)
+
     areas["get"] = ScrollArea(dl)
-    panes["get"] = OptionsPane(areas["get"].frame, "get", cfg)
-    panes["get"].quick_row(areas["get"].frame)     # first thing in the scroll
-    panes["get"].pack(fill="x")
+    panes["get"] = OptionsPane(areas["get"].frame, "get", cfg,
+                               on_change=on_options_changed)
+    # The handful of toggles worth seeing stay on the tab; the long tail of
+    # options (cookies, proxy, speed, retries, subtitle languages) hides behind
+    # one checkbox, because a mode has already set all of it sensibly.
+    quickbar = ttk.Frame(dl)
+    quickbar.pack(fill="x", padx=8)
+    panes["get"].quick_row(quickbar, text="fine-tune")
+    adv_open = tk.BooleanVar(value=False)
+    ttk.Checkbutton(
+        dl, text="More options  (cookies, proxy, speed limit, subtitles, "
+                 "retries, filename template\u2026)",
+        variable=adv_open, command=lambda: toggle_adv()).pack(anchor="w", padx=8)
+
+    def toggle_adv():
+        """The whole generated option grid appears and disappears as one unit,
+        so the tab does not show a tall empty box when it is not wanted."""
+        if adv_open.get():
+            areas["get"].pack(fill="both", expand=True)
+            panes["get"].pack(fill="x")
+        else:
+            panes["get"].pack_forget()
+            areas["get"].pack_forget()
+
+    def current_mode():
+        return uicmd.make_mode(whatvar.get(), scopevar.get())
+
+    def describe_mode():
+        mode = current_mode()
+        txt = uicmd.MODE_LABELS[mode] + ":  " + uicmd.MODE_SUMMARY[mode]
+        off = uicmd.mode_drift(panes["get"].values(), mode)
+        if off:
+            # the summary describes the mode, not the checkboxes -- so once
+            # they disagree it has to admit it rather than keep promising
+            txt += "   \u00b7  changed by hand: " + ", ".join(sorted(off))
+        mode_desc.set("\u2192  " + txt)
+
+    def apply_mode(mode):
+        """Set every checkbox the mode has an opinion about."""
+        whatvar.set(uicmd.MODE_WHAT[mode])
+        scopevar.set(uicmd.MODE_SCOPE[mode])
+        panes["get"].apply(uicmd.MODE_VALUES[mode])
+        describe_mode()
+        try:
+            bget.configure(text="Download video"
+                           if uicmd.MODE_WHAT[mode] == "video"
+                           else "Download + lyrics")
+        except NameError:
+            pass            # first apply happens before the buttons exist
+
+    def mode_picked():
+        """The user chose a mode by hand: obey it, and stop guessing."""
+        user_touched["v"] = False
+        apply_mode(current_mode())
+
+    def sync_mode():
+        """Follow the URL: a playlist link means a playlist run.
+
+        Skipped once you have touched an option by hand -- at that point you
+        are driving and the tab must not fight you.
+        """
+        u = [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]
+        joined = "\n".join(u)
+        if joined == url_seen["text"]:
+            return
+        url_seen["text"] = joined
+        if user_touched["v"]:
+            return
+        want = uicmd.mode_for(u, whatvar.get())
+        if uicmd.MODE_SCOPE[want] != scopevar.get():
+            apply_mode(want)
+
+    url_seen = {"text": ""}
+    # Switch the moment you paste, rather than on the next 120 ms tick -- and
+    # keep the tick as a belt-and-braces copy for URLs that arrive some other
+    # way (drag and drop, a script, a remembered session).
+    urls.bind("<KeyRelease>", lambda e: sync_mode())
+    urls.bind("<<Paste>>", lambda e: sync_mode())
+    apply_mode("music_single")
     grow = ttk.Frame(dl)
     brow = ttk.Frame(grow)
     brow.pack(pady=6)
@@ -628,9 +767,12 @@ def run():
     bfmt.pack(side="left", padx=4)
     bget = ttk.Button(brow, text="Download + lyrics",
                       command=lambda: go_get())
+    bget.configure(text="Download video"
+                   if uicmd.MODE_WHAT[current_mode()] == "video"
+                   else "Download + lyrics")
     bget.pack(side="left", padx=4)
     grow.pack(side="bottom", fill="x")
-    areas["get"].pack(fill="both", expand=True)
+    toggle_adv()          # closed to start with: the mode already set the rest
 
     def typed_urls():
         return [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]

@@ -849,8 +849,11 @@ check("'reset split' restores the startup layout",
 check("the log can be cleared", button(root, "Clear") is not None)
 
 def quick_strip(tab):
+    """The always-visible toggle strip (the Download tab calls it fine-tune,
+    because a mode has already set everything else)."""
     for w in tab.walk():
-        if w.kind == "labelframe" and w.options.get("text") == "quick options":
+        if w.kind == "labelframe" and w.options.get("text") in (
+                "quick options", "fine-tune"):
             return w
     raise KeyError("no pinned quick-options strip")
 
@@ -2365,6 +2368,182 @@ check("doctor reports the PO-token server",
       "pot server:" in _r.stdout, _r.stdout[-300:])
 check("doctor still reports the cookie situation",
       "cookies   :" in _r.stdout, _r.stdout[-300:])
+
+
+# ============================== 28. modes: the checkboxes set themselves
+print("\n--- 28. one mode chooses the checkboxes, not the other way round ---")
+
+check("there are exactly four modes, and they are a 2x2 grid",
+      len(U.MODES) == 4
+      and {U.MODE_WHAT[m] for m in U.MODES} == {"music", "video"}
+      and {U.MODE_SCOPE[m] for m in U.MODES} == {"single", "playlist"},
+      str(U.MODES))
+check("every mode is named on screen and says what it will do",
+      all(U.MODE_LABELS.get(m) and U.MODE_SUMMARY.get(m) for m in U.MODES))
+_gdests = {x["dest"] for x in U.widget_specs("get", parser=PARSER)}
+_bad = {d for m in U.MODES for d in U.MODE_VALUES[m] if d not in _gdests}
+check("every mode only sets options that really exist", not _bad, str(_bad))
+check("music takes the audio, video keeps the picture",
+      all(U.MODE_VALUES[m]["keep_video"] is (U.MODE_WHAT[m] == "video")
+          for m in U.MODES))
+check("music gets lyrics, video does not",
+      all(bool(U.MODE_VALUES[m]["no_lyrics"]) is (U.MODE_WHAT[m] == "video")
+          for m in U.MODES))
+check("a single stays a single, a playlist walks the list",
+      all(bool(U.MODE_VALUES[m]["no_playlist"]) is
+          (U.MODE_SCOPE[m] == "single") for m in U.MODES))
+check("playlists are numbered inside a folder of their own",
+      all("playlist_index" in U.MODE_VALUES[m]["template"]
+          for m in U.MODES if U.MODE_SCOPE[m] == "playlist")
+      and all("playlist_index" not in U.MODE_VALUES[m]["template"]
+              for m in U.MODES if U.MODE_SCOPE[m] == "single"))
+check("videos pick a real quality instead of leaving it to chance",
+      U.MODE_VALUES["video_single"]["quality"] == "1080"
+      and U.MODE_VALUES["video_single"]["merge_format"] == "mkv")
+
+# --- the URL decides single vs playlist, and it is not a guess
+check("a /playlist?list= URL is a playlist",
+      U.is_playlist_url("https://youtube.com/playlist?list=PLrOFa8sDv6jf"))
+check("...but watch?v=X&list=PL is ONE song, not 90 of them",
+      not U.is_playlist_url("https://music.youtube.com/watch?v=IZOn9KUy4qs"
+                            "&list=PLVuMx2J3_K6w"))
+check("a plain watch URL, a youtu.be and nothing at all are singles",
+      not U.is_playlist_url("https://music.youtube.com/watch?v=abc")
+      and not U.is_playlist_url("https://youtu.be/abc")
+      and not U.is_playlist_url(""))
+check("a playlist anywhere in the list makes it a playlist run",
+      U.mode_for(["https://youtu.be/a",
+                  "https://youtube.com/playlist?list=PLx"], "music")
+      == "music_playlist")
+check("the window can tell when you have changed the mode by hand",
+      U.mode_drift(dict(U.MODE_VALUES["music_single"]), "music_single") == []
+      and U.mode_drift(dict(U.MODE_VALUES["music_single"], no_playlist=False),
+                       "music_single") == ["no_playlist"])
+check("...and '4' means 4, so strings do not read as a change",
+      U.mode_drift({k: str(v) for k, v in U.MODE_VALUES["video_single"].items()},
+                   "video_single") == [])
+check("switching one axis keeps the other",
+      U.mode_switch("music_single", what="video") == "video_single"
+      and U.mode_switch("video_playlist", scope="single") == "video_single")
+
+# --- and the window
+def gbtn(text):
+    """`button()` is unusable this far down (the name `kinds` is a dict by
+    section 26), so look the button up directly."""
+    for w in _gtab.walk():
+        if w.kind == "button" and str(w.options.get("text")) == text:
+            return w
+
+
+_gtab = nb.tab_for("Download")
+_grb = [w for w in _gtab.walk() if w.kind == "radiobutton"]
+check("the two questions are on the tab, as four choices",
+      len(_grb) == 4, str([w.options.get("text") for w in _grb]))
+check("music and video are both offered",
+      {w.options.get("value") for w in _grb} >= {"music", "video", "single",
+                                                 "playlist"},
+      str({w.options.get("value") for w in _grb}))
+_gpane = next(w for w in root.walk()
+              if isinstance(w, G.OptionsPane) and w.sub == "get")
+_vrb = [w for w in _grb if w.options.get("value") == "video"][0]
+_srb = [w for w in _grb if w.options.get("value") == "playlist"][0]
+check("the default is music, one song",
+      _gpane.vars["keep_video"].get() is False
+      and _gpane.vars["no_lyrics"].get() is False
+      and _gpane.vars["no_playlist"].get() is True,
+      str(_gpane.values()))
+_vrb.invoke()
+check("choosing Video ticks keep-video and drops lyrics by itself",
+      _gpane.vars["keep_video"].get() is True
+      and _gpane.vars["no_lyrics"].get() is True
+      and _gpane.vars["embed_chapters"].get() is True
+      and _gpane.vars["merge_format"].get() == "mkv",
+      str(_gpane.values()))
+check("...and it is the SAME variable the option list shows",
+      _vrb.options["variable"] is not None
+      and _gpane.vars["keep_video"] is _gpane.vars["keep_video"])
+_sum = [w for w in _gtab.walk() if w.kind == "label"
+        and w.options.get("textvariable") is not None
+        and str(w.options["textvariable"].get()).startswith("\u2192")]
+_cur = str(_sum[0].options["textvariable"].get())
+check("the tab states in plain words what the mode will do",
+      len(_sum) == 1 and U.MODE_LABELS["video_single"] in _cur and "mkv" in _cur,
+      _cur)
+check("the button says what the mode will do",
+      gbtn("Download video") is not None,
+      str([w.options.get("text") for w in _gtab.walk() if w.kind == "button"]))
+_mrb = [w for w in _grb if w.options.get("value") == "music"][0]
+_mrb.invoke()
+check("choosing Music puts them back",
+      _gpane.vars["keep_video"].get() is False
+      and _gpane.vars["no_lyrics"].get() is False
+      and gbtn("Download + lyrics") is not None)
+check("...and the one-line summary follows it",
+      U.MODE_LABELS["music_single"]
+      in str(_sum[0].options["textvariable"].get()),
+      str(_sum[0].options["textvariable"].get()))
+
+# the long tail of options is one click away, not in your face
+_utxt = [w for w in _gtab.walk() if w.kind == "text"][0]
+_adv = [w for w in _gtab.walk() if w.kind == "checkbutton"
+        and str(w.options.get("text", "")).startswith("More options")]
+check("the rest of the options hide behind one checkbox", len(_adv) == 1)
+check("...and they start hidden, so the tab fits a short window",
+      _gpane.geo is None, str(_gpane.geo))
+_adv[0].invoke()
+check("ticking it brings them back",
+      _gpane.geo is not None and _gpane.geo[0] == "pack", str(_gpane.geo))
+_adv[0].invoke()
+check("unticking it puts them away again", _gpane.geo is None, str(_gpane.geo))
+
+# --- pasting a playlist URL moves the mode for you
+def _tick():
+    """Run one pump. Do not clear the queue: pump reschedules itself into it."""
+    for _cb in list(root.pending):
+        _cb()
+_utxt.insert("end", "https://youtube.com/playlist?list=PLrOFa8sDv6jfKx9\n")
+_utxt.fire("<KeyRelease>")     # exactly what typing a playlist URL does
+check("pasting a playlist URL switches to a playlist run on its own",
+      _srb.options["variable"].get() == "playlist"
+      and _gpane.vars["no_playlist"].get() is False
+      and "playlist_index" in _gpane.vars["template"].get(),
+      f"{_srb.options['variable'].get()} / {_gpane.vars['template'].get()}")
+# ...until you take the wheel
+_qc = [w for w in _gtab.walk() if w.kind == "checkbutton"
+       and w.options.get("text", "").startswith("This video only")]
+_qc[0].invoke()
+check("...and the summary admits it instead of carrying on promising",
+      "changed by hand" in str(_sum[0].options["textvariable"].get()),
+      str(_sum[0].options["textvariable"].get()))
+_utxt.insert("end", "https://youtube.com/playlist?list=PLsecond\n")
+_utxt.fire("<KeyRelease>")
+check("...but once you tick something by hand it stops guessing",
+      _gpane.vars["no_playlist"].get() is True,
+      str(_gpane.vars["no_playlist"].get()))
+_mrb.invoke()
+_srb2 = [w for w in _grb if w.options.get("value") == "single"][0]
+_srb2.invoke()
+check("and picking a mode by hand takes the wheel back",
+      _gpane.vars["no_playlist"].get() is True)
+
+# the real payoff: each mode is a different command, with the right flags
+_gav = {m: U.build_argv("get", dict(U.MODE_VALUES[m], output_dir="."),
+                        positionals=["URL"], parser=PARSER) for m in U.MODES}
+check("music pulls the audio out, video keeps it",
+      "--format" in _gav["music_single"] and "--keep-video" in _gav["video_single"]
+      and "--keep-video" not in _gav["music_single"])
+check("a single refuses the playlist, a playlist walks it",
+      "--no-playlist" in _gav["music_single"]
+      and "--no-playlist" not in _gav["music_playlist"])
+check("playlists number the files inside a folder of their own",
+      any("playlist_index" in a for a in _gav["video_playlist"]))
+check("videos ask for a height and a container",
+      _gav["video_single"][_gav["video_single"].index("--quality") + 1] == "1080"
+      and "--merge-format" in _gav["video_single"])
+check("lyrics come with music and stay away from video",
+      "--no-lyrics" in _gav["video_single"] and "--no-lyrics" not in _gav["music_single"])
+check("the four modes are four different commands",
+      len({tuple(a) for a in _gav.values()}) == 4)
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

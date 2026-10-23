@@ -72,6 +72,57 @@ python musictool.py scan ~/Music/Gospel
 python musictool.py gui          # graphical interface
 ```
 
+## The window: two questions instead of nine checkboxes
+
+`musictool gui` opens the **Download** tab as a single choice, because that is
+all the downloader actually needs to know before everything else falls out of
+it:
+
+| | **One item** | **A whole playlist** |
+|---|---|---|
+| **Music** (audio + lyrics) | `music_single` | `music_playlist` |
+| **Video** (keep the picture) | `video_single` | `video_playlist` |
+
+Pick one and the checkboxes set themselves — no reading, no ritual:
+
+- **Music · one song** — audio extracted to m4a, tags + cover embedded, lyrics
+  embedded as each file lands, `--no-playlist` so a `watch?v=…&list=…` link
+  cannot turn one song into ninety files.
+- **Music · playlist / album** — same, walking the whole playlist in order.
+- **Video · one video** — the picture kept in mkv, `1080` by default (or pick a
+  quality by its size under *More options*), chapters and subtitles on, lyrics
+  off, `--no-playlist`.
+- **Video · playlist** — same, files numbered inside a folder named after the
+  playlist.
+
+Three details make it behave:
+
+1. **The URL is read as you paste it.** A `/playlist?list=…` link moves the
+   window to a playlist run by itself. `watch?v=…&list=…` deliberately stays a
+   **single** — the `list=` there is the "up next" queue, not the thing you
+   asked for. The moment you tick anything by hand the window stops guessing
+   and leaves the checkboxes to you.
+2. **The rest of the options are one click away.** Cookies, proxy, speed
+   limit, retries, subtitle languages and the filename template sit behind
+   *More options*; the six toggles worth seeing stay on the tab. A mode has
+   already set all of them to something sensible.
+3. **The button says what will happen.** It reads *Download + lyrics* for
+   music and *Download video* for video, so the mode you are in is never a
+   surprise at the moment you press it.
+
+The same four modes are exactly what the CLI spells out longhand:
+
+```
+music_single     get URL --format m4a --audio-quality 4 --no-playlist
+music_playlist   get URL --format m4a --audio-quality 4 \
+                     --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
+video_single     get URL --keep-video --quality 1080 --merge-format mkv \
+                     --chapters --subs --no-lyrics --no-playlist
+video_playlist   get URL --keep-video --quality 1080 --merge-format mkv \
+                     --chapters --subs --no-lyrics \
+                     --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
+```
+
 ## Commands
 
 | command | what it does |
@@ -739,7 +790,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 652 assertions, 0 failures**
+**Verified by running the code — 690 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

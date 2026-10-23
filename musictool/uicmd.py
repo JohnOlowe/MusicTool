@@ -50,6 +50,136 @@ HINTS = {
     "show_audio": "the audio-only tracks, which normally get merged into the video choice",
 }
 
+# ---------------------------------------------------------------------------
+# Modes. Four of them, because two independent facts decide almost every
+# checkbox: are you taking MUSIC or a VIDEO, and is it ONE thing or a PLAYLIST.
+# A music single wants audio extracted, lyrics embedded and no playlist walk;
+# a video playlist wants the video kept, chapters and subs, numbered file names
+# and no lyrics at all. Asking the user to reach those conclusions by ticking
+# nine checkboxes is how the wrong combination gets downloaded 447 times.
+# ---------------------------------------------------------------------------
+
+MODES = ("music_single", "music_playlist", "video_single", "video_playlist")
+
+MODE_LABELS = {
+    "music_single": "Music \u00b7 one song",
+    "music_playlist": "Music \u00b7 playlist / album",
+    "video_single": "Video \u00b7 one video",
+    "video_playlist": "Video \u00b7 playlist",
+}
+
+MODE_SUMMARY = {
+    "music_single": ("audio extracted to m4a, tags + cover embedded, lyrics "
+                     "embedded as each file lands, this video only"),
+    "music_playlist": ("audio extracted to m4a, lyrics as they land, walking "
+                       "the whole playlist in order"),
+    "video_single": ("video kept in mkv with chapters and subtitles, no lyrics, "
+                     "this video only"),
+    "video_playlist": ("videos kept in mkv, numbered inside a folder named "
+                       "after the playlist, no lyrics"),
+}
+
+# Only the dests that a mode actually has an opinion about. Everything else is
+# left alone, so a saved config (proxy, cookies, speed limit) survives a switch.
+MODE_VALUES = {
+    "music_single": {
+        "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
+        "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
+        "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
+        "no_playlist": True, "playlist_items": "", "quality": "",
+        "max_size": "", "format_selector": "", "merge_format": "",
+        "template": "%(uploader)s - %(title)s.%(ext)s",
+    },
+    "music_playlist": {
+        "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
+        "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
+        "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
+        "no_playlist": False, "quality": "", "max_size": "",
+        "format_selector": "", "merge_format": "",
+        "template": "%(playlist_title)s/%(playlist_index)03d - "
+                    "%(title)s.%(ext)s",
+    },
+    "video_single": {
+        "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
+        "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
+        "no_lyrics": True, "lyrics_only": False, "no_playlist": True,
+        "playlist_items": "", "quality": "1080", "max_size": "",
+        "format_selector": "",
+        "template": "%(title)s.%(ext)s",
+    },
+    "video_playlist": {
+        "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
+        "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
+        "no_lyrics": True, "lyrics_only": False, "no_playlist": False,
+        "quality": "1080", "max_size": "", "format_selector": "",
+        "template": "%(playlist_title)s/%(playlist_index)03d - "
+                    "%(title)s.%(ext)s",
+    },
+}
+
+# The two things a mode name is built from, kept separate so the UI can show
+# them as a grid instead of a list of four.
+MODE_WHAT = {"music_single": "music", "music_playlist": "music",
+             "video_single": "video", "video_playlist": "video"}
+MODE_SCOPE = {"music_single": "single", "music_playlist": "playlist",
+              "video_single": "single", "video_playlist": "playlist"}
+
+
+def is_playlist_url(url):
+    """Is this URL a playlist, as opposed to one item that sits inside one?
+
+    `watch?v=XXX&list=PL...` is a single song with a playlist in the query
+    string -- treating it as a playlist is how 90 files get downloaded when
+    one was asked for. Only a bare /playlist?list= is really a playlist.
+    """
+    u = (url or "").split("#")[0]
+    if "list=" not in u:
+        return False
+    if "v=" in u or "/watch" in u or "/shorts/" in u or "/live/" in u:
+        return False
+    return "/playlist" in u or u.split("?", 1)[0].rstrip("/").endswith("list")
+
+
+def scope_of(url):
+    """'playlist' or 'single', from the URL rather than from a guess."""
+    return "playlist" if is_playlist_url(url) else "single"
+
+
+def make_mode(what, scope):
+    """The mode name for a (music|video, single|playlist) pair."""
+    name = f"{what}_{scope}"
+    return name if name in MODES else "music_single"
+
+
+def mode_for(urls, what="music"):
+    """The mode these URLs want. One playlist in the list means a playlist run."""
+    for u in urls or []:
+        if is_playlist_url(u):
+            return make_mode(what, "playlist")
+    return make_mode(what, "single")
+
+
+def mode_switch(mode, scope=None, what=None):
+    """The neighbouring mode when one axis changes."""
+    return make_mode(what or MODE_WHAT[mode], scope or MODE_SCOPE[mode])
+
+
+def mode_drift(values, mode):
+    """Which of the mode's settings the user has since changed by hand.
+
+    The window prints a one-line summary of what the mode will do; that line
+    must stop describing the run the moment it is no longer true.
+    """
+    out = []
+    for dest, want in MODE_VALUES[mode].items():
+        have = values.get(dest)
+        if have is None:
+            continue
+        if str(have).strip().lower() != str(want).strip().lower():
+            out.append(dest)
+    return out
+
+
 # Human wording for the generated widgets. Anything missing here falls back to
 # the dest with underscores turned into spaces, so a new flag is never nameless.
 LABELS = {

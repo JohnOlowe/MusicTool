@@ -297,9 +297,25 @@ class Checkbutton(Button):
             cmd()
         return v.get()
 
+    def invoke(self):
+        # clicking a checkbutton changes it; only then does the command run
+        if self.var is None:
+            cmd = self.options.get("command")
+            return cmd() if cmd else None
+        return self.toggle()
+
 
 class Radiobutton(Checkbutton):
     kind = "radiobutton"
+
+    def invoke(self):
+        # a real radiobutton selects itself before running its command
+        v = self.options.get("variable")
+        if v is not None:
+            v.set(self.options.get("value"))
+        cb = self.options.get("command")
+        if callable(cb):
+            cb()
 
 
 class Entry(Widget):

@@ -2803,6 +2803,134 @@ _rg = run_dub("get", "https://youtu.be/DUB1", "--keep-video", "--no-lyrics",
 check("a plain get carries the language filter to yt-dlp",
       "bv*+ba[language^=en]/bv*+ba/b" in _rg.stdout, _rg.stdout[-300:])
 
+# ====== 31. one scroll, folded options, and settings that come back
+print("\n--- 31. the tab scrolls as one, and nothing is lost on a restart ---")
+
+# `areas` is rebound further up, so find the scroll area from the pane itself
+_gbody = _gpane.master
+_garea = next(w for w in root.walk()
+              if isinstance(w, G.ScrollArea) and w.frame is _gbody)
+
+
+def _inside_area(w):
+    while w is not None:
+        if w is _gbody:
+            return True
+        w = getattr(w, "master", None)
+    return False
+
+
+_ut = [w for w in _gtab.walk() if w.kind == "text"][0]
+check("the URL box, the mode, the toggles and the options share ONE scroll",
+      _inside_area(_ut) and _inside_area(_vrb) and _inside_area(_qc[0])
+      and _inside_area(_gpane),
+      str([_inside_area(x) for x in (_ut, _vrb, _qc[0], _gpane)]))
+check("the run buttons stay pinned outside it, so they are always reachable",
+      not _inside_area(gbtn("Download + lyrics")))
+_had = _ut.buf
+_ut.buf = "https://youtu.be/one"
+check("the wheel over a short URL box scrolls the tab, not the box",
+      _garea._over_me(_ut) is True)
+_ut.buf = "\n".join("https://youtu.be/%d" % i for i in range(30))
+check("...but a box that really can scroll keeps the wheel for itself",
+      _garea._over_me(_ut) is False)
+_ut.buf = _had
+
+# --- folded: you see what has been set, not all forty-one rows
+_cells = [(d, c, sp) for _b, rows in _gpane._groups for (d, c, sp, _o) in rows]
+_vis = [d for d, c, _s in _cells if c.geo is not None]
+check("every option still exists behind the fold",
+      len(_cells) == len(U.widget_specs("get", parser=PARSER)),
+      f"{len(_cells)} cells")
+check("...and the untouched ones are folded away instead of filling the window",
+      0 < len(_vis) < len(_cells) // 2, f"{len(_vis)} of {len(_cells)} shown")
+check("the rows on screen are the ones with something in them",
+      {"output_dir", "template", "audio_format", "audio_lang"} <= set(_vis)
+      and not {"cookies", "proxy", "rate_limit", "download_archive"} & set(_vis),
+      str(_vis))
+check("...and a setting already on the fine-tune strip is not repeated",
+      not {"no_playlist", "keep_video", "no_lyrics", "force"} & set(_vis),
+      str(_vis))
+_gpane.vars["max_size"].set("800M")
+_gpane.touched()
+_vis2 = [d for d, c, _s in _cells if c.geo is not None]
+check("a value you type appears among them", "max_size" in _vis2, str(_vis2))
+_allbtn = [w for w in _gpane.walk() if w.kind == "button"
+           and str(w.options.get("text", "")).startswith("show all")]
+check("one button brings the whole list back", len(_allbtn) == 1
+      and str(_allbtn[0].options["text"]).endswith("options"),
+      str([w.options.get("text") for w in _allbtn]))
+_allbtn[0].invoke()
+check("...and then every option is on screen",
+      all(c.geo is not None for _d, c, _s in _cells))
+_allbtn[0].invoke()
+check("and folding them away again works",
+      any(c.geo is None for _d, c, _s in _cells))
+check("the sections are named for a reader, not for the parser",
+      {str(b.options.get("text")) for b, _r in _gpane._groups}
+      >= {"files, folders and access", "quality and format", "lyrics"},
+      str([b.options.get("text") for b, _r in _gpane._groups]))
+
+# --- saved, and really restored by a restart
+_cfg_path, _cfg.PATH = _cfg.PATH, os.path.join(WORK, "restart.json")
+try:
+    if os.path.exists(_cfg.PATH):
+        os.remove(_cfg.PATH)
+    _gpane.vars["max_size"].set("800M")
+    _gpane.vars["rate_limit"].set("3M")
+    _vrb.invoke()                    # video, one item
+    root.close_window()              # the X in the corner
+    _saved = _cfg.load()
+    check("closing the window saves what you had, not what you started with",
+          (_saved.get("gui_opts") or {}).get("get", {}).get("max_size") == "800M"
+          and (_saved.get("gui_opts") or {}).get("get", {}).get("rate_limit")
+          == "3M",
+          str((_saved.get("gui_opts") or {}).get("get")))
+    check("choosing a mode does not throw your size ceiling away",
+          (_saved.get("gui_opts") or {}).get("get", {}).get("max_size")
+          == "800M",
+          str((_saved.get("gui_opts") or {}).get("get", {}).get("max_size")))
+    check("...and the mode you were in",
+          (_saved.get("gui_extra") or {}).get("download_mode") == "video_single",
+          str(_saved.get("gui_extra")))
+    check("...and whether you had the options open",
+          "more_options" in (_saved.get("gui_extra") or {}),
+          str(_saved.get("gui_extra")))
+    check("...and the URL you had open",
+          "ZLRwjygiCTE" in str((_saved.get("gui_extra") or {}).get("urls"))
+          or bool((_saved.get("gui_extra") or {}).get("urls")),
+          str((_saved.get("gui_extra") or {}).get("urls"))[:80])
+
+    # the restart itself
+    _cfg2 = _cfg.load()
+    _p2 = G.OptionsPane(tkstub.Frame(), "get", _cfg2,
+                        saved=(_cfg2.get("gui_opts") or {}).get("get"))
+    check("a restart starts at 800M, with nothing to type again",
+          _p2.vars["max_size"].get() == "800M"
+          and _p2.vars["rate_limit"].get() == "3M",
+          f"{_p2.vars['max_size'].get()} / {_p2.vars['rate_limit'].get()}")
+    check("and a restored value is one of the rows you are shown",
+          _p2._compact() and _p2.vars["max_size"].get() == "800M"
+          and [c.geo for _d, c, sp, _o
+               in [r for _b, rr in _p2._groups for r in rr]
+               if _d == "max_size"][0] is not None)
+    _p4 = G.OptionsPane(tkstub.Frame(), "get", {})
+    _p4.vars["format_selector"].set("248+140-0")
+    _p4.vars["max_size"].set("800M")
+    _p4.vars["rate_limit"].set("3M")
+    _p4.apply(U.MODE_VALUES["music_single"])
+    check("a mode still clears the one thing that would override it",
+          _p4.vars["format_selector"].get() == ""
+          and _p4.vars["max_size"].get() == "800M"
+          and _p4.vars["rate_limit"].get() == "3M",
+          f"{_p4.vars['format_selector'].get()!r} / "
+          f"{_p4.vars['max_size'].get()!r} / {_p4.vars['rate_limit'].get()!r}")
+    _p3 = G.OptionsPane(tkstub.Frame(), "get", _cfg2)
+    check("without the saved values it would have gone back to the default",
+          _p3.vars["max_size"].get() == "", repr(_p3.vars["max_size"].get()))
+finally:
+    _cfg.PATH = _cfg_path
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

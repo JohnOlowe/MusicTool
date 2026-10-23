@@ -112,6 +112,14 @@ class Widget:
     def pack_forget(self):
         self.geo = None
 
+    def grid_remove(self):
+        # real tk keeps the remembered options so a bare grid() brings it back
+        self.geo = None
+        self.removed = True
+
+    def grid_info(self):
+        return {} if self.geo is None else {"in": self.geo[2]}
+
     grid_forget = pack_forget
 
     def grid_rowconfigure(self, *a, **k):
@@ -172,6 +180,15 @@ class Widget:
 
     def winfo_children(self):
         return list(self.children)
+
+    def protocol(self, name=None, func=None):
+        self.protocols[name] = func
+        return func
+
+    def close_window(self):
+        """What a real window manager does when you press the X."""
+        fn = self.protocols.get("WM_DELETE_WINDOW")
+        return fn() if fn else None
 
     def update_idletasks(self):
         pass
@@ -236,6 +253,7 @@ class Tk(Widget):
         self.geometry_text = ""
         self.looped = False
         self.clipboard = ""
+        self.protocols = {}
         ROOTS.append(self)
 
     def title(self, t=None):
@@ -359,6 +377,21 @@ class Text(Widget):
 
     def see(self, index):
         pass
+
+
+    def yview(self, *a):
+        """(first, last) visible fraction, like real tk.
+
+        A box with room for all of its text reports (0.0, 1.0) -- it cannot
+        scroll, which is what lets an enclosing scroll area keep the wheel.
+        """
+        if a:
+            return None
+        lines = str(self.buf).count("\n") + 1
+        cap = int(self.options.get("height") or 0) or lines
+        if lines <= cap:
+            return (0.0, 1.0)
+        return (0.0, round(cap / float(lines), 3))
 
 
 class Canvas(Widget):

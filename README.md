@@ -123,6 +123,51 @@ video_playlist   get URL --keep-video --quality 1080 --merge-format mkv \
                      --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
 ```
 
+### One scroll, folded options, and nothing to retype
+
+Three things about the window that used to cost clicks:
+
+**The whole tab scrolls as one.** The URL box, the mode, the fine-tune strip
+and the full option list all live inside a single scrolling surface, so the
+wheel moves the tab wherever the pointer is — you do not have to aim at the
+options first, and the part above *More options* moves with the part below it.
+Only the run buttons stay pinned. (A text box that genuinely cannot scroll —
+the three-line URL field — passes the wheel on; one with thirty URLs in it
+keeps it.)
+
+**Options you have not touched are folded away.** *More options* used to dump
+all forty-one settings on the screen at once. Now the grid shows the rows that
+have something in them — folder, filename template, audio format, language,
+speed limit if you set one — plus anything you have changed, and folds the
+blank rest behind one button:
+
+```
+   [ show all 41 options ]   31 more folded away
+   ┌ files, folders and access ────────────────┐
+   │ Folder: [...]      Filename: [...]         │
+   │ Audio format: m4a  Audio quality: 4        │
+   └────────────────────────────────────────────┘
+```
+
+Sections are named for a reader (*files, folders and access*, *quality and
+format*, *lyrics*), and a setting that is already on the fine-tune strip is not
+repeated in the grid.
+
+**Your values come back.** Every field on every tab, the mode you were in, the
+URLs you had open and whether you left the options expanded are written to the
+config file as you change them and again when you close the window or start a
+run — so a restart is not a form to fill in. `800M` is still `800M`.
+
+```
+~/.config/musictool/config.json     "gui_opts": { "get": { "max_size": "800M", … } }
+```
+
+Choosing a mode no longer wipes what you typed: a blank in a mode's settings
+means "no opinion", so your size ceiling, cookies and speed limit survive a
+switch from Music to Video. The single exception is a raw format selector,
+which overrides everything else — a mode always clears that rather than
+inheriting a stale one.
+
 ## Commands
 
 | command | what it does |
@@ -898,7 +943,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 733 assertions, 0 failures**
+**Verified by running the code — 755 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

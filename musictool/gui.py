@@ -109,7 +109,19 @@ class ScrollArea(ttk.Frame):
         while w is not None:
             if w is self.canvas or w is self.frame:
                 return True
-            if isinstance(w, (ttk.Treeview, tk.Text, tk.Listbox)):
+            if isinstance(w, (ttk.Treeview, tk.Listbox)):
+                return False
+            if isinstance(w, tk.Text):
+                # A short box that cannot scroll itself should not swallow the
+                # wheel: the three-line URL field is the first thing on the
+                # tab, and the tab is what you meant to scroll.
+                try:
+                    top, bottom = w.yview()
+                    if float(bottom) - float(top) >= 0.999:
+                        w = getattr(w, "master", None)
+                        continue
+                except Exception:                            # noqa: BLE001
+                    pass
                 return False
             w = getattr(w, "master", None)
         return False
@@ -126,21 +138,38 @@ class ScrollArea(ttk.Frame):
         self.canvas.yview_moveto(0.0)
 
 
+# The parser's own group titles are internal names; these are what a person
+# reading the window expects to see.
+GROUP_TITLES = {
+    "download": "files, folders and access",
+    "quality": "quality and format",
+    "lyrics": "lyrics",
+    "listing": "listing",
+    "paths": "paths",
+    "options": "options",
+}
+
+
 class OptionsPane(ttk.Frame):
     """Auto-generated widgets for every option of one subcommand."""
 
     COLUMNS = 2
 
-    def __init__(self, parent, sub, cfg, on_change=None):
+    def __init__(self, parent, sub, cfg, on_change=None, saved=None):
         super().__init__(parent)
         self.sub = sub
         self.vars = {}
         self.on_change = on_change
+        self.saved = dict(saved or {})
         self.parser = build_parser()
+        self.show_all = tk.BooleanVar(value=False)
+        self._groups = []      # [(labelframe, [(dest, cell, spec, grid opts)])]
+        self._count = tk.StringVar(value="")
         self._build(cfg)
 
     def touched(self):
         """The user moved something by hand -- modes stop overriding it."""
+        self._compact()        # a value you just changed is worth showing
         if self.on_change:
             self.on_change()
 
@@ -154,33 +183,105 @@ class OptionsPane(ttk.Frame):
             v = self.vars.get(dest)
             if v is None:
                 continue
+            if val in ("", None) and dest not in uicmd.MODE_RESET:
+                # A blank is "the mode has no opinion", not "empty this out":
+                # your size ceiling, cookies and speed limit survive a mode
+                # switch instead of having to be typed again.
+                continue
             if isinstance(v, tk.BooleanVar):
                 v.set(bool(val))
             else:
                 v.set("" if val is None else str(val))
+        self._compact()
 
     def _build(self, cfg):
         """Widgets come from uicmd.widget_specs, i.e. from the parser itself."""
         specs = uicmd.widget_specs(self.sub, cfg, self.parser)
         groups = {}
         for spec in specs:
+            if spec["dest"] in self.saved:
+                # Start where you left off, not at the CLI default: a restart
+                # must not be a form to fill in all over again.
+                spec = dict(spec, default=self.saved[spec["dest"]])
             groups.setdefault(spec["group"], []).append(spec)
+        # The fine-tune strip above already carries these, so the grid does
+        # not repeat them -- one place to look for each setting.
+        self._quick_dests = {q["dest"] for q in
+                             uicmd.quick_specs(self.sub, parser=self.parser)}
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", padx=8, pady=(2, 0))
+        self._all_btn = ttk.Button(bar, command=self._toggle_all)
+        self._all_btn.pack(side="left")
+        ttk.Label(bar, textvariable=self._count, foreground="#888").pack(
+            side="left", padx=8)
         for title, items in groups.items():
-            box = ttk.LabelFrame(self, text=title)
+            box = ttk.LabelFrame(self, text=GROUP_TITLES.get(title, title))
             box.pack(fill="x", padx=6, pady=4)
-            for col, spec in enumerate(items):
-                self._widget(box, spec, col)
+            self._groups.append((box, [self._widget(box, sp) for sp in items]))
+        self._compact()
 
-    def _widget(self, parent, spec, col):
+    # ---------------------------------------------------------- folding
+    def _toggle_all(self):
+        self.show_all.set(not self.show_all.get())
+        self._compact()
+
+    def _worth_showing(self, dest, spec):
+        """Does this row earn its place on the screen?
+
+        A toggle earns it by being on when it starts off (or the reverse); a
+        field earns it by having something in it, or by differing from where
+        it started. Blank, untouched fields are the bulk of the forty-odd
+        options and are what made the old grid a wall.
+        """
+        v = self.vars.get(dest)
+        if v is None:
+            return False
+        if dest in getattr(self, "_quick_dests", ()):
+            return False            # already on the fine-tune strip
+        want = spec["default"]
+        if isinstance(v, tk.BooleanVar):
+            return bool(v.get()) != bool(want)
+        have = str(v.get() or "").strip()
+        want = "" if want in (None, "") else str(want).strip()
+        return bool(have) or have != want
+
+    def _compact(self):
+        """Show the rows that have something in them; fold the rest away.
+
+        A mode, or the values restored from last session, decide most of these
+        forty-odd options, and most of them are blank. What stays on screen is
+        the handful with a value in them plus anything you have changed; the
+        rest sit behind one button -- reachable, but not filling the window.
+        """
+        shown = hidden = 0
+        for _box, rows in self._groups:
+            n = 0
+            for dest, cell, spec, gopts in rows:
+                if self.show_all.get() or self._worth_showing(dest, spec):
+                    row, col = divmod(n, self.COLUMNS)
+                    cell.grid(row=row, column=col, **gopts)
+                    n += 1
+                else:
+                    cell.grid_remove()
+                    hidden += 1
+            shown += n
+        self._all_btn.configure(text=f"show all {shown + hidden} options")
+        self._count.set("" if not hidden
+                        else f"{hidden} more folded away")
+        return shown
+
+    def _widget(self, parent, spec):
+        """One option in its own cell, so a row can be folded or re-flowed.
+
+        -> (dest, cell, spec, grid options)
+        """
         dest, kind, label = spec["dest"], spec["kind"], spec["label"]
         start = spec["default"]
-        row, column = divmod(col, self.COLUMNS)
-        if kind in ("check", "check_off"):
-            self._toggle(parent, spec, row=row, column=column)
-            return
-        v = tk.StringVar(value="" if start in (None, "") else str(start))
         outer = ttk.Frame(parent)
-        outer.grid(row=row, column=column, sticky="we", padx=6, pady=2)
+        if kind in ("check", "check_off"):
+            self._toggle(outer, spec)
+            return (dest, outer, spec, {"sticky": "w", "padx": 6, "pady": 1})
+        v = tk.StringVar(value="" if start in (None, "") else str(start))
         f = ttk.Frame(outer)
         f.pack(fill="x")
         ttk.Label(f, text=label + ":").pack(side="left")
@@ -201,6 +302,7 @@ class OptionsPane(ttk.Frame):
             ttk.Label(outer, text=spec["hint"], foreground="#888",
                       wraplength=340, justify="left").pack(anchor="w")
         self.vars[dest] = v
+        return (dest, outer, spec, {"sticky": "we", "padx": 6, "pady": 2})
 
     def browse(self, var, what):
         """Fill a path field from a real dialog instead of by typing it."""
@@ -541,6 +643,7 @@ def run():
 
     def do_argv(argv, after=None):
         """Run a CLI command on the worker thread, echoing it first."""
+        remember_all()          # what you ran is what comes back next time
         cancel.reset()
         reset_progress()
         log("\n$ " + uicmd.quote_cmd(argv) + "\n")
@@ -591,9 +694,43 @@ def run():
     url_history_values = uicmd.recent_paths(cfg, key="recent_urls")
     panes = {}
     areas = {}
+    # Everything you set in the window last time, keyed by tab. Restored below
+    # into the widgets themselves, and rewritten whenever anything moves, so a
+    # restart is never a form to fill in again.
+    SAVED = dict(cfg.get("gui_opts") or {})
+    EXTRA = dict(cfg.get("gui_extra") or {})
     run_buttons = []
     path_combos = []
     url_combos = []
+
+    _save_pending = {"t": False}
+
+    def remember_all():
+        """Persist every widget in the window, on every tab.
+
+        Written straight to the config file rather than on exit, so a crash or
+        a killed process loses nothing either.
+        """
+        try:
+            opts = {sub: dict(pane.values()) for sub, pane in panes.items()}
+            extra = {"urls": urls.get("1.0", "end").strip(),
+                     "download_mode": current_mode(),
+                     "more_options": bool(adv_open.get()),
+                     "show_all_options": bool(panes["get"].show_all.get())}
+            configmod.remember(gui_opts=opts, gui_extra=extra)
+        except Exception as e:                                 # noqa: BLE001
+            log(f"!! could not save your settings: {type(e).__name__}: {e}")
+
+    def remember_soon():
+        """Coalesce a burst of edits into one write."""
+        if _save_pending["t"]:
+            return
+        _save_pending["t"] = True
+
+        def _go():
+            _save_pending["t"] = False
+            remember_all()
+        root.after(400, _go)
 
     def refresh_history():
         vals = uicmd.recent_paths(cfg)
@@ -634,15 +771,22 @@ def run():
     # ================================================== Download tab
     dl = ttk.Frame(nb)
     nb.add(dl, text="  Download  ")
-    ttk.Label(dl, text="URL(s), one per line — video or playlist:").pack(
+    # ONE scrolling surface for the whole tab. The URL box, the mode, the
+    # fine-tune strip and the full option list all live inside it, so the wheel
+    # scrolls the tab wherever the pointer is -- you do not have to aim at the
+    # options first -- and the part above "More options" moves with the part
+    # below it instead of staying stuck. Only the run buttons are pinned.
+    areas["get"] = ScrollArea(dl)
+    body = areas["get"].frame
+    ttk.Label(body, text="URL(s), one per line — video or playlist:").pack(
         anchor="w", padx=8, pady=(8, 2))
-    urls = tk.Text(dl, height=3)
+    urls = tk.Text(body, height=3)
     urls.pack(fill="x", padx=8)
-    ucb = ttk.Combobox(dl, values=url_history_values, state="readonly", width=70)
+    ucb = ttk.Combobox(body, values=url_history_values, state="readonly", width=70)
     ucb.pack(fill="x", padx=8, pady=2)
     ucb.bind("<<ComboboxSelected>>", lambda e: urls.insert("end", ucb.get() + "\n"))
     url_combos.append(ucb)
-    ttk.Label(dl, text="↑ recently used URLs (select to insert)",
+    ttk.Label(body, text="↑ recently used URLs (select to insert)",
               foreground="#888").pack(anchor="w", padx=8)
 
     # ================================================= the mode
@@ -654,12 +798,13 @@ def run():
     def on_options_changed():
         user_touched["v"] = True
         describe_mode()
+        remember_soon()
 
     whatvar = tk.StringVar(value="music")
     scopevar = tk.StringVar(value="single")
     mode_desc = tk.StringVar(value="")
 
-    mbox = ttk.LabelFrame(dl, text="what are you downloading?")
+    mbox = ttk.LabelFrame(body, text="what are you downloading?")
     mbox.pack(fill="x", padx=8, pady=(4, 2))
     _wr = ttk.Frame(mbox)
     _wr.pack(fill="x", padx=6, pady=(2, 0))
@@ -673,33 +818,28 @@ def run():
                      ("playlist", "A whole playlist")):
         ttk.Radiobutton(_sr, text=txt, value=val, variable=scopevar,
                         command=lambda: mode_picked()).pack(side="left", padx=6)
-    ttk.Label(dl, textvariable=mode_desc, foreground="#06a",
+    ttk.Label(body, textvariable=mode_desc, foreground="#06a",
               wraplength=900, justify="left").pack(anchor="w", padx=10)
 
-    areas["get"] = ScrollArea(dl)
-    panes["get"] = OptionsPane(areas["get"].frame, "get", cfg,
-                               on_change=on_options_changed)
+    panes["get"] = OptionsPane(body, "get", cfg, on_change=on_options_changed,
+                               saved=SAVED.get("get"))
     # The handful of toggles worth seeing stay on the tab; the long tail of
     # options (cookies, proxy, speed, retries, subtitle languages) hides behind
     # one checkbox, because a mode has already set all of it sensibly.
-    quickbar = ttk.Frame(dl)
+    quickbar = ttk.Frame(body)
     quickbar.pack(fill="x", padx=8)
     panes["get"].quick_row(quickbar, text="fine-tune")
-    adv_open = tk.BooleanVar(value=False)
+    adv_open = tk.BooleanVar(value=bool(EXTRA.get("more_options")))
     ttk.Checkbutton(
-        dl, text="More options  (cookies, proxy, speed limit, subtitles, "
-                 "retries, filename template\u2026)",
+        body, text="More options  (cookies, proxy, speed limit, subtitles, "
+                   "retries, filename template\u2026)",
         variable=adv_open, command=lambda: toggle_adv()).pack(anchor="w", padx=8)
 
     def toggle_adv():
-        """The whole generated option grid appears and disappears as one unit,
-        so the tab does not show a tall empty box when it is not wanted."""
         if adv_open.get():
-            areas["get"].pack(fill="both", expand=True)
             panes["get"].pack(fill="x")
         else:
             panes["get"].pack_forget()
-            areas["get"].pack_forget()
 
     def current_mode():
         return uicmd.make_mode(whatvar.get(), scopevar.get())
@@ -731,6 +871,7 @@ def run():
         """The user chose a mode by hand: obey it, and stop guessing."""
         user_touched["v"] = False
         apply_mode(current_mode())
+        remember_all()
 
     def sync_mode():
         """Follow the URL: a playlist link means a playlist run.
@@ -748,8 +889,17 @@ def run():
         want = uicmd.mode_for(u, whatvar.get())
         if uicmd.MODE_SCOPE[want] != scopevar.get():
             apply_mode(want)
+        remember_soon()
 
     url_seen = {"text": ""}
+    _mode0 = str(EXTRA.get("download_mode") or "")
+    if _mode0 in uicmd.MODES:
+        apply_mode(_mode0)
+    _urls0 = str(EXTRA.get("urls") or "").strip()
+    if _urls0:
+        urls.insert("end", _urls0 + "\n")
+        url_seen["text"] = "\n".join(
+            [x.strip() for x in _urls0.splitlines() if x.strip()])
     # Switch the moment you paste, rather than on the next 120 ms tick -- and
     # keep the tick as a belt-and-braces copy for URLs that arrive some other
     # way (drag and drop, a script, a remembered session).
@@ -772,6 +922,7 @@ def run():
                    else "Download + lyrics")
     bget.pack(side="left", padx=4)
     grow.pack(side="bottom", fill="x")
+    areas["get"].pack(fill="both", expand=True)
     toggle_adv()          # closed to start with: the mode already set the rest
 
     def typed_urls():
@@ -818,7 +969,8 @@ def run():
     lvar = path_field(ly, cfg.get("output_dir", "."))
 
     areas["lyrics"] = ScrollArea(ly)
-    panes["lyrics"] = OptionsPane(areas["lyrics"].frame, "lyrics", cfg)
+    panes["lyrics"] = OptionsPane(areas["lyrics"].frame, "lyrics", cfg,
+                                  saved=SAVED.get("lyrics"))
     panes["lyrics"].quick_row(areas["lyrics"].frame)
 
     def lyrics_options():
@@ -871,7 +1023,7 @@ def run():
 
     areas["duplicates"] = ScrollArea(sc)
     panes["duplicates"] = OptionsPane(areas["duplicates"].frame, "duplicates",
-                                      cfg)
+                                      cfg, saved=SAVED.get("duplicates"))
     panes["duplicates"].quick_row(areas["duplicates"].frame)
 
     def dupe_options():
@@ -1068,7 +1220,8 @@ def run():
     nb.add(tl, text="  Tools  ")
     areas["tools"] = ScrollArea(tl)
     tframe = areas["tools"].frame
-    panes["providers"] = OptionsPane(tframe, "providers", cfg)
+    panes["providers"] = OptionsPane(tframe, "providers", cfg,
+                                     saved=SAVED.get("providers"))
     panes["providers"].pack(fill="x")
 
     def go_providers():
@@ -1121,9 +1274,11 @@ def run():
     lfvar = path_field(lf, cfg.get("output_dir", "."))
 
     areas["lyricsfiles"] = ScrollArea(lf)
-    panes["extract"] = OptionsPane(areas["lyricsfiles"].frame, "extract", cfg)
+    panes["extract"] = OptionsPane(areas["lyricsfiles"].frame, "extract", cfg,
+                                   saved=SAVED.get("extract"))
     panes["extract"].pack(fill="x")
-    panes["embed"] = OptionsPane(areas["lyricsfiles"].frame, "embed", cfg)
+    panes["embed"] = OptionsPane(areas["lyricsfiles"].frame, "embed", cfg,
+                                 saved=SAVED.get("embed"))
     panes["embed"].pack(fill="x")
 
     def go_files(sub):
@@ -1536,6 +1691,11 @@ def run():
     log("each run prints the exact command it used, so you can copy it.")
     log("Tick files on the Fix lyrics tab to run a subset; untick to skip.\n")
 
+    def _on_close():
+        remember_all()          # closing the window saves, it does not discard
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
     root.update_idletasks()
     reset_split()
     root.mainloop()

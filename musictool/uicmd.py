@@ -182,6 +182,13 @@ def mode_drift(values, mode):
     return out
 
 
+# A blank in MODE_VALUES means "no opinion" -- keep whatever the user typed,
+# so choosing Video does not throw away the 800M ceiling they set. These few
+# are the exception: they silently override everything else, so a mode always
+# clears them rather than inheriting a stale one.
+MODE_RESET = ("format_selector", "playlist_items", "quality")
+
+
 # Human wording for the generated widgets. Anything missing here falls back to
 # the dest with underscores turned into spaces, so a new flag is never nameless.
 LABELS = {

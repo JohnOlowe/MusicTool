@@ -193,6 +193,22 @@ def build_parser():
     c.add_argument("value", nargs="?")
     c.add_argument("--reset", action="store_true")
 
+    rl = sub.add_parser(
+        "relang",
+        help="replace a downloaded file's audio with another language, "
+             "without downloading the video again")
+    rl.add_argument("paths", nargs="+", help="files or folders to repair")
+    rl.add_argument("--audio-lang", dest="audio_lang", default="en",
+                    help="the language you want (default en)")
+    rl.add_argument("--cookies", help="cookies.txt, if YouTube asks")
+    rl.add_argument("--cookies-from-browser", dest="cookies_from_browser",
+                    help="auto | off | firefox | chrome | edge ...")
+    rl.add_argument("--proxy", help="proxy URL, e.g. socks5://127.0.0.1:1080")
+    rl.add_argument("--force", action="store_true",
+                    help="replace even when the file does not say what "
+                         "language it already has")
+    rl.add_argument("--dry-run", dest="dry_run", action="store_true",
+                    help="say what would change and download nothing")
     sub.add_parser("doctor", help="check that yt-dlp, ffmpeg and tkinter are available")
     sub.add_parser("gui", help="launch the graphical interface")
     return ap
@@ -479,9 +495,15 @@ def cmd_get(args):
             stopped = True
             break
         print(f"\n==> {url}")
-        _resolve_quality(url, o)
+        # Quality is resolved PER VIDEO. Format ids are not global: 140-4 is
+        # the English track on one video and the Spanish original on the next,
+        # and 614 may not exist at all. Resolving once for the whole batch and
+        # reusing the selector is how a dubbed video slips through in the
+        # wrong language while everything reports success.
+        per = dict(o)
+        _resolve_quality(url, per)
         files, err = download.download(
-            url, o, on_file=lambda pth, vid, u=url: on_file(pth, vid, u))
+            url, per, on_file=lambda pth, vid, u=url: on_file(pth, vid, u))
         targets += [p for p, _ in files]
         if err == cancel.CANCELLED:
             stopped = True
@@ -830,6 +852,132 @@ def cmd_config(args):
     return 0
 
 
+MEDIA_EXTS = (".mkv", ".mp4", ".webm", ".mov", ".m4a", ".mp3", ".opus",
+              ".flac", ".ogg", ".wav", ".aac")
+
+
+def _collect_media(paths, log=print):
+    """Every media file in those files/folders, in a stable order."""
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            for root, _dirs, files in os.walk(p):
+                for f in sorted(files):
+                    if os.path.splitext(f)[1].lower() in MEDIA_EXTS:
+                        out.append(os.path.join(root, f))
+        elif os.path.exists(p):
+            out.append(p)
+        else:
+            log(f"  !! not found: {p}")
+    return out
+
+
+def cmd_relang(args):
+    """Put the right language in files you have already downloaded.
+
+    A dubbed video can arrive in the wrong language, and re-running `get`
+    would pay for the video a second time. This downloads only the audio
+    track -- tens of MiB instead of hundreds -- and re-muxes it into the file
+    you already have, keeping the picture, the cover and the chapters.
+    """
+    lang = str(args.audio_lang or "en").strip().lower()
+    files = _collect_media(args.paths)
+    if not files:
+        print("nothing to do: no media files in those paths")
+        return 1
+    o = {"cookies": args.cookies or "",
+         "cookies_from_browser": args.cookies_from_browser or "off",
+         "proxy": args.proxy or "", "no_playlist": True}
+    n = {"fixed": 0, "would": 0, "already": 0, "unknown": 0, "no-track": 0,
+         "no-id": 0, "audio-only": 0, "errors": 0}
+    tmp = None
+    for path in files:
+        if cancel.requested():
+            print("\n==> stopped")
+            break
+        name = os.path.basename(path)
+        print(f"\n==> {name}")
+        entry = download.load_index(os.path.dirname(path) or ".").get(name)
+        url = (entry or {}).get("url")
+        if not url:
+            print("  !! musictool has no videoId for this file, so it cannot "
+                  "find the other language tracks. Re-download it, or add it "
+                  "to .musictool-index.json.")
+            n["no-id"] += 1
+            continue
+        info = download.probe(url, o)
+        if not isinstance(info, dict) or info.get("error"):
+            print(f"  !! could not read the tracks: "
+                  f"{str((info or {}).get('error'))[:160]}")
+            n["errors"] += 1
+            continue
+        rows = formats.rows_from_info(info)
+        spoken = formats.languages_in(rows)
+        if len(spoken) > 1:
+            print("    offered: " + ", ".join(
+                f"{c}{' (original)' if orig else ''}" for c, orig, _x in spoken))
+        want = formats.best_audio_in(rows, lang)
+        if want is None:
+            print(f"    no track tagged {lang} on this video -- left alone")
+            n["no-track"] += 1
+            continue
+        have = download.audio_track_lang(path)
+        if have and formats.same_language(have, lang):
+            print(f"    already {have} -- left alone")
+            n["already"] += 1
+            continue
+        if not have and not args.force:
+            print("    this file does not say what language it is; pass "
+                  "--force to replace it anyway")
+            n["unknown"] += 1
+            continue
+        if not download.has_video_stream(path):
+            print("    audio-only file -- there is nothing to keep, so just "
+                  f"re-download it: musictool get \"{url}\"")
+            n["audio-only"] += 1
+            continue
+        print(f"    will take format {want['id']} "
+              f"({want.get('lang') or lang}, "
+              f"{formats.human_bytes(want['bytes'])}) and keep the video")
+        if args.dry_run:
+            n["would"] += 1
+            continue
+        tmp = tmp or os.path.join(os.path.dirname(path) or ".",
+                                  ".musictool-relang")
+        os.makedirs(tmp, exist_ok=True)
+        got = download.fetch_format(url, o, want["id"], tmp)
+        if not got:
+            n["errors"] += 1
+            continue
+        if download.swap_audio(path, got):
+            print(f"    done -- {name} now has the {want.get('lang') or lang} "
+                  f"audio")
+            n["fixed"] += 1
+        else:
+            n["errors"] += 1
+        try:
+            os.remove(got)
+        except OSError:
+            pass
+    if tmp and os.path.isdir(tmp) and not os.listdir(tmp):
+        try:
+            os.rmdir(tmp)
+        except OSError:
+            pass
+    said = (f"\n{n['fixed']} file(s) re-muxed" if not args.dry_run
+            else f"\n{n['would']} file(s) would be re-muxed")
+    for label, key in (("already in that language", "already"),
+                       ("no such language on the video", "no-track"),
+                       ("language unknown (use --force)", "unknown"),
+                       ("no videoId", "no-id"),
+                       ("audio-only", "audio-only"),
+                       ("failed", "errors")):
+        if n[key]:
+            said += f", {n[key]} {label}"
+    print(said)
+    return 1 if n["errors"] else 0
+
+
 def cmd_doctor(_args):
     ok = True
     print("platform  :", "Windows" if is_windows() else
@@ -910,6 +1058,7 @@ def main(argv=None):
                "duplicates": cmd_duplicates, "dupes": cmd_duplicates,
                "extract": cmd_extract, "embed": cmd_embed,
                "providers": cmd_providers, "config": cmd_config,
+               "relang": cmd_relang,
                "doctor": cmd_doctor, "gui": cmd_gui}.get(args.cmd)
     if handler is None:
         print(f"unknown command: {args.cmd}")

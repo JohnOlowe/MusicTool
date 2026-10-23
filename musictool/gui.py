@@ -921,6 +921,9 @@ def run():
                    if uicmd.MODE_WHAT[current_mode()] == "video"
                    else "Download + lyrics")
     bget.pack(side="left", padx=4)
+    blang = ttk.Button(brow, text="Fix language in existing files",
+                       command=lambda: go_relang())
+    blang.pack(side="left", padx=4)
     grow.pack(side="bottom", fill="x")
     areas["get"].pack(fill="both", expand=True)
     toggle_adv()          # closed to start with: the mode already set the rest
@@ -946,6 +949,30 @@ def run():
         vals = dict(panes["get"].values())
         do_argv(uicmd.build_argv("formats", vals, positionals=[u[0]],
                                  parser=build_parser()))
+
+    def go_relang():
+        """Put the right language in files that are already downloaded.
+
+        Downloads only the audio track -- tens of MiB, not the hundreds the
+        video cost -- and re-muxes it into the file you have, keeping the
+        picture, the cover and the chapters.
+        """
+        vals = dict(panes["get"].values())
+        d = (vals.get("output_dir") or "").strip()
+        if not d or not os.path.isdir(d):
+            messagebox.showwarning(
+                "musictool",
+                "Point the Folder field at the folder those files are in.")
+            return
+        argv = ["relang", d,
+                "--audio-lang", (vals.get("audio_lang") or "en").strip() or "en"]
+        if vals.get("cookies"):
+            argv += ["--cookies", vals["cookies"]]
+        if vals.get("cookies_from_browser") not in (None, "", "off"):
+            argv += ["--cookies-from-browser", vals["cookies_from_browser"]]
+        if vals.get("proxy"):
+            argv += ["--proxy", vals["proxy"]]
+        do_argv(argv)
 
     def go_get():
         u = [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]

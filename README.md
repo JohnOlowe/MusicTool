@@ -168,6 +168,60 @@ switch from Music to Video. The single exception is a raw format selector,
 which overrides everything else — a mode always clears that rather than
 inheriting a stale one.
 
+### "Some of them still aren't English"
+
+Two separate things were going on.
+
+**The bug.** When you pasted four URLs, `musictool` picked a quality and a language
+from the *first* video and then used those exact format ids for the other three.
+Format ids are not global: `140-4` was the English track on one video and the
+Spanish original on the next, and `614` did not exist at all on the others. So the
+first file came out right and the rest arrived in whatever language that id
+happened to be. You could see it in the log: only the first line printed
+`quality:`, the others went straight to `-f`.
+
+Every URL is now resolved on its own, and every one of them prints its own
+`quality:` line. Pasting four links now means four decisions, each made against
+the tracks that video actually offers:
+
+```
+quality: -f 614+140-4   (1080p vp09 + mp4a [en] ~ 331.9 MiB)
+quality: -f 137+140-9   (1080p avc1 + mp4a [en] ~ 340.5 MiB)
+```
+
+**The files you already have.** You do not have to download them again. The video
+is fine — only the audio track is in the wrong language, and a dubbed video
+offers each language as its own separate track. So `musictool` fetches just the
+track it needs (tens of megabytes, not hundreds) and folds it into the file you
+already have:
+
+```
+musictool relang "C:\Music\Videos"
+```
+
+```
+==> show.mkv
+    offered: es (original), en
+    will take format 140-9 (en, 44.8 MiB) and keep the video
+    done -- show.mkv now has the en audio
+1 file(s) re-muxed
+```
+
+It finds the video from the index musictool wrote when it downloaded the file
+(`.musictool-index.json` in that folder), works out which tracks exist, and
+re-muxes with `ffmpeg` keeping everything else — the picture, the embedded cover,
+the chapters, the tags. Nothing is re-encoded, so it takes seconds per file.
+
+* It is conservative: a file already in that language is left alone, and so is a
+  file whose audio carries no language tag (say `--force` if you know better).
+* A file it did not download has no videoId to look up, and it says so rather
+  than guessing from the filename.
+* `--dry-run` shows what it would do; `--audio-lang es` goes the other way;
+  pass `--cookies-from-browser auto` if YouTube wants a session again.
+* In the GUI it is the **Fix language in existing files** button on the
+  Download tab — same folder field, same language setting.
+
+
 ## Commands
 
 | command | what it does |
@@ -175,6 +229,7 @@ inheriting a stale one.
 | `get URL...` | download, embedding each file's lyrics as it lands |
 | `check URL...` | is this reachable, or does YouTube want a login? (no cookies used) |
 | `formats URL...` | the qualities on offer (variant splits merged), with sizes, plus the command to take one |
+| `relang PATH...` | put the language you want into files already downloaded (audio only, video kept) |
 | `lyrics PATH...` | fetch/fix lyrics for existing files or folders |
 | `scan PATH...` | offline state report (`--json` for scripting) |
 | `duplicates PATH...` | find files sharing the same lyrics; `--fix` re-fetches |
@@ -943,7 +998,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 755 assertions, 0 failures**
+**Verified by running the code — 773 assertions, 0 failures**
 (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes

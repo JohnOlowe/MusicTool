@@ -164,13 +164,36 @@ def _audio_pool(rows, lang=None):
     return pure
 
 
-def _match_lang(row, lang):
-    """'en' matches 'en', 'en-US' and 'en-GB'; '' matches nothing."""
-    want = str(lang or "").strip().lower()
-    have = str(row.get("lang") or "").strip().lower()
-    if not want or not have or want in ("any", "auto", "original", "*"):
+# Containers tag tracks with three-letter codes (mkv writes 'eng', 'spa'),
+# while YouTube and the picker speak two-letter ones ('en', 'es'). 'spa' does
+# not start with 'es', so comparing prefixes quietly mis-identifies half the
+# languages -- these are the pairs that matter.
+LANG_CODES = {
+    "en": ("eng",), "es": ("spa",), "fr": ("fra", "fre"), "de": ("deu", "ger"),
+    "pt": ("por",), "it": ("ita",), "ru": ("rus",), "ja": ("jpn",),
+    "ko": ("kor",), "zh": ("zho", "chi"), "hi": ("hin",), "ar": ("ara",),
+    "nl": ("nld", "dut"), "sv": ("swe",), "pl": ("pol",), "tr": ("tur",),
+    "id": ("ind",), "vi": ("vie",), "th": ("tha",), "uk": ("ukr",),
+    "cs": ("ces", "cze"), "el": ("ell", "gre"), "he": ("heb",), "ro": ("ron", "rum"),
+    "hu": ("hun",), "fi": ("fin",), "da": ("dan",), "no": ("nor",),
+    "fa": ("fas", "per"), "bn": ("ben",), "sw": ("swa",), "yo": ("yor",),
+    "ig": ("ibo",), "ha": ("hau",), "am": ("amh",), "zu": ("zul",), "af": ("afr",),
+}
+
+
+def same_language(tag, want):
+    """Is `tag` the language `want`? 'eng'/'en-US' are both 'en'; '' is not."""
+    t = str(tag or "").strip().lower().replace("_", "-")
+    w = str(want or "").strip().lower().replace("_", "-")
+    if not t or not w or w in ("any", "auto", "original", "*"):
         return False
-    return have == want or have.split("-")[0] == want.split("-")[0]
+    t, w = t.split("-")[0], w.split("-")[0]
+    return t == w or t in LANG_CODES.get(w, ())
+
+
+def _match_lang(row, lang):
+    """'en' matches a track tagged 'en', 'en-US', 'en-GB' or 'eng'."""
+    return same_language(row.get("lang"), lang)
 
 
 def _lang_tag(row):
@@ -190,6 +213,14 @@ def languages_in(rows):
             out.append((lang, (r.get("lang_pref") or 0) > 0,
                         (r.get("note") or "").strip()))
     return out
+
+
+def best_audio_in(rows, lang):
+    """The best audio track in one language, or None when there isn't one."""
+    pool = [r for r in _audio_pool(rows, lang) if _match_lang(r, lang)]
+    if not pool:
+        return None
+    return max(pool, key=lambda r: (r["abr"] or r["tbr"] or 0))
 
 
 def preferred_language(rows, lang):

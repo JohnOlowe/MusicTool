@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import time
 
@@ -175,6 +177,133 @@ def record(directory, filepath, video_id, url):
     idx = load_index(directory)
     idx[os.path.basename(filepath)] = {"video_id": video_id, "url": url}
     save_index(directory, idx)
+
+
+def ffprobe_cmd():
+    """ffprobe ships with ffmpeg; None when only one of them is installed."""
+    return shutil.which("ffprobe")
+
+
+STREAM_RE = re.compile(
+    r"Stream #\d+:\d+(?:\((?P<lang>[a-z]{2,3})\))?\s*:\s*"
+    r"(?P<kind>Video|Audio|Subtitle|Attachment)", re.I)
+
+
+def streams(path):
+    """[(kind, lang)] for every stream in a file, using whatever is installed.
+
+    ffprobe when it is there; otherwise `ffmpeg -i`, which prints the same
+    information on stderr -- a ffmpeg-only install (Termux, a stripped Windows
+    build) must not silently lose the ability to tell one language from
+    another.
+    """
+    exe = ffprobe_cmd()
+    if exe:
+        try:
+            out = subprocess.run(
+                [exe, "-v", "error", "-of", "csv=p=0",
+                 "-show_entries", "stream=codec_type:stream_tags=language",
+                 path], capture_output=True, text=True, timeout=120)
+            rows = []
+            for line in (out.stdout or "").splitlines():
+                cells = [c.strip() for c in line.split(",")]
+                if cells and cells[0]:
+                    rows.append((cells[0].lower(),
+                                 (cells[1].lower() if len(cells) > 1 else "")))
+            if rows:
+                return rows
+        except Exception:                                # noqa: BLE001
+            pass
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        return []
+    try:
+        out = subprocess.run([exe, "-hide_banner", "-i", path],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:                                    # noqa: BLE001
+        return []
+    text = (out.stderr or "") + (out.stdout or "")
+    return [(m.group("kind").lower(), (m.group("lang") or "").lower())
+            for m in STREAM_RE.finditer(text)]
+
+
+def audio_track_lang(path):
+    """The language tag on a file's first audio track; '' when not tagged.
+
+    '' does not mean English -- it means nobody wrote the tag down, which is
+    exactly why relang says "unknown" instead of guessing.
+    """
+    for kind, lang in streams(path):
+        if kind == "audio":
+            return lang
+    return ""
+
+
+def has_video_stream(path):
+    return any(kind == "video" for kind, _lang in streams(path))
+
+
+def fetch_format(url, o, fmt_id, workdir, log=print):
+    """Download ONE format on its own -- the audio track, not the video.
+
+    Returns the file it wrote, or None. This is the cheap half of a repair:
+    a 40 MiB audio track instead of the 600 MiB video already on disk.
+    """
+    args = list(ytdlp_cmd()) + [
+        "--no-warnings", "--no-playlist", "-f", str(fmt_id),
+        "-o", os.path.join(workdir, "audio-%(id)s.%(ext)s"),
+        "--no-simulate", "--no-quiet",
+        "--print", "after_move:%(filepath)s", url]
+    args += cookie_args(o)
+    log("  $ " + " ".join(_q(a) for a in args))
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True,
+                              timeout=3600)
+    except Exception as e:                               # noqa: BLE001
+        log(f"  !! {type(e).__name__}: {e}")
+        return None
+    for line in reversed((proc.stdout or "").splitlines()):
+        line = line.strip()
+        if line and os.path.exists(line):
+            return line
+    err = ((proc.stderr or proc.stdout or "").strip()[-300:]
+           if proc.returncode else "yt-dlp printed no file")
+    kind, advice = classify_error(err)
+    log(f"  !! could not fetch that track ({kind}): {err[:160]}")
+    if advice:
+        log(f"     -> {advice}")
+    return None
+
+
+def swap_audio(video_path, audio_path, log=print):
+    """Keep this file's video, take the other file's audio. No re-encoding.
+
+    `-map 0` pulls in everything the old file had -- picture, cover art,
+    subtitles -- then `-map -0:a` drops only its audio, so nothing else about
+    the file changes.
+    """
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        log("  !! ffmpeg is needed to re-mux: " + ffmpeg_hint())
+        return False
+    ext = os.path.splitext(video_path)[1].lower()
+    out = video_path + (".new" + (ext or ".mkv"))
+    cmd = [exe, "-y", "-v", "error", "-i", video_path, "-i", audio_path,
+           "-map", "0", "-map", "-0:a", "-map", "1:a:0",
+           "-c", "copy", "-map_metadata", "0", "-map_chapters", "0", out]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except Exception as e:                               # noqa: BLE001
+        log(f"  !! {type(e).__name__}: {e}")
+        return False
+    if proc.returncode or not os.path.exists(out):
+        log(f"  !! ffmpeg could not re-mux: "
+            f"{(proc.stderr or '').strip()[-200:]}")
+        if os.path.exists(out):
+            os.remove(out)
+        return False
+    os.replace(out, video_path)
+    return True
 
 
 def build_args(url, o):

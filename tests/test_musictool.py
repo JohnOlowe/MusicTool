@@ -2551,6 +2551,7 @@ check("the four modes are four different commands",
 # .m4a arrived, because the selector offered an id that video does not serve.
 print("\n--- 29. the selector asks for ids the video actually serves ---")
 from musictool import cli as C  # noqa: E402
+from musictool import cli as cli_mod  # noqa: E402
 
 _INC = {"duration": 3379, "formats": [
     {"format_id": "248", "ext": "webm", "vcodec": "vp9", "acodec": "none",
@@ -2930,6 +2931,174 @@ try:
           _p3.vars["max_size"].get() == "", repr(_p3.vars["max_size"].get()))
 finally:
     _cfg.PATH = _cfg_path
+
+# ====== 32. one video's quality is not the next video's quality
+print("\n--- 32. per-video quality, and repairing the language in place ---")
+
+# A format id is not global: 140-4 is English on one video and Spanish on the
+# next, and 614 may not exist at all.
+TWO = {"one": [
+    {"format_id": "614", "ext": "mp4", "vcodec": "vp09", "acodec": "none",
+     "height": 1080, "tbr": 1400, "filesize": 300000000},
+    {"format_id": "140-4", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 48000000, "language": "en"},
+], "two": [
+    {"format_id": "137", "ext": "mp4", "vcodec": "avc1", "acodec": "none",
+     "height": 1080, "tbr": 1400, "filesize": 310000000},
+    {"format_id": "140-4", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 48000000, "language": "es",
+     "language_preference": 10},
+    {"format_id": "140-9", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+     "abr": 128, "filesize": 47000000, "language": "en"},
+]}
+TWOBIN = os.path.join(WORK, "twobin")
+os.makedirs(TWOBIN, exist_ok=True)
+open(os.path.join(TWOBIN, "yt-dlp"), "w").write(
+    "#!/usr/bin/env python3\n"
+    "import json, sys\n"
+    "url = [a for a in sys.argv[1:] if a.startswith('http')][0]\n"
+    "which = url.rstrip('/').split('/')[-1]\n"
+    "T = %r\n" % TWO +
+    "sys.stdout.write(json.dumps({'id': which, 'title': which,\n"
+    "    'duration': 600, 'extractor': 'youtube',\n"
+    "    'formats': T.get(which, T['one'])}))\n")
+os.chmod(os.path.join(TWOBIN, "yt-dlp"), 0o755)
+
+
+def run_two(*args):
+    env = dict(ENV, PATH=TWOBIN + os.pathsep + ENV["PATH"])
+    return subprocess.run([sys.executable, ENTRY, *args], capture_output=True,
+                          text=True, env=env)
+
+
+_r2 = run_two("get", "https://youtu.be/one", "https://youtu.be/two",
+              "--keep-video", "--max-size", "1G", "--audio-lang", "en",
+              "--no-lyrics", "--dry-run")
+_qs = [l.strip() for l in _r2.stdout.splitlines() if l.strip().startswith("quality:")]
+_fs = [l.split("-f ")[1].split(" ")[0] for l in _r2.stdout.splitlines()
+       if " -f " in l and l.strip().startswith("$")]
+check("each video gets its own quality decision",
+      len(_qs) == 2, str(_qs))
+check("...and they are different, because the videos are different",
+      len(set(_fs)) == 2 and _fs == ["614+140-4", "137+140-9"], str(_fs))
+check("so both land in English instead of inheriting the first one's track",
+      all("[en]" in q for q in _qs), str(_qs))
+check("a format id that the second video does not have is never reused",
+      "614" not in _fs[1], str(_fs))
+_r2b = run_two("get", "https://youtu.be/one", "https://youtu.be/two",
+               "--keep-video", "-f", "22", "--no-lyrics", "--dry-run")
+check("but an explicit -f still applies to every video",
+      [l.split("-f ")[1].split(" ")[0] for l in _r2b.stdout.splitlines()
+       if " -f " in l and l.strip().startswith("$")] == ["22", "22"])
+
+# --- repairing files that are already on disk
+check("the best track in a language is found by language, not by size",
+      F.best_audio_in(F.rows_from_info({"formats": TWO["two"]}), "en")["id"]
+      == "140-9"
+      and F.best_audio_in(F.rows_from_info({"formats": TWO["two"]}), "es")["id"]
+      == "140-4"
+      and F.best_audio_in(F.rows_from_info({"formats": TWO["two"]}), "de") is None)
+
+_RL = os.path.join(WORK, "relang")
+shutil.rmtree(_RL, ignore_errors=True)
+os.makedirs(_RL)
+_mkv = os.path.join(_RL, "show.mkv")
+_mk = subprocess.run([FF, "-y", "-v", "error", "-f", "lavfi",
+                      "-i", "testsrc=size=160x120:rate=10:duration=2",
+                      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                      "-map", "0:v", "-map", "1:a", "-c:v", "libx264",
+                      "-c:a", "aac", "-metadata:s:a:0", "language=spa", _mkv],
+                     capture_output=True, text=True)
+check("the fixture is a video with Spanish audio",
+      _mk.returncode == 0 and os.path.exists(_mkv), _mk.stderr[-200:])
+check("...and musictool can read that without ffprobe installed",
+      download.has_video_stream(_mkv)
+      and F.same_language(download.audio_track_lang(_mkv), "es")
+      and not F.same_language(download.audio_track_lang(_mkv), "en"),
+      str(download.streams(_mkv)))
+check("a three-letter container tag is the same language as its two-letter code",
+      F.same_language("eng", "en") and F.same_language("en-US", "en")
+      and F.same_language("spa", "es") and F.same_language("fra", "fr")
+      and F.same_language("fre", "fr") and not F.same_language("spa", "en")
+      and not F.same_language("", "en"))
+open(os.path.join(_RL, "notes.txt"), "w").write("not media")
+check("a folder scan picks up media and leaves other files alone",
+      [os.path.basename(x) for x in cli_mod._collect_media([_RL], log=lambda m: None)]
+      == ["show.mkv"])
+_miss = []
+cli_mod._collect_media([os.path.join(_RL, "nope.mkv")], log=_miss.append)
+check("a path that does not exist is reported, not silently skipped",
+      any("not found" in m for m in _miss), str(_miss))
+
+_RLBIN = os.path.join(WORK, "relangbin")
+os.makedirs(_RLBIN, exist_ok=True)
+open(os.path.join(_RLBIN, "yt-dlp"), "w").write(
+    "#!/usr/bin/env python3\n"
+    "import json, os, subprocess, sys\n"
+    "a = sys.argv[1:]\n"
+    "if '-J' in a:\n"
+    "    sys.stdout.write(json.dumps({'id': 'vid1', 'title': 'show',\n"
+    "        'duration': 120, 'extractor': 'youtube', 'formats': %r}))\n"
+    "    sys.exit(0)\n" % TWO["two"] +
+    "tmpl = a[a.index('-o') + 1]\n"
+    "out = tmpl.replace('%%(id)s', 'vid1').replace('%%(ext)s', 'm4a')\n"
+    "os.makedirs(os.path.dirname(out), exist_ok=True)\n"
+    "subprocess.run([%r, '-y', '-v', 'error', '-f', 'lavfi',\n"
+    "    '-i', 'sine=frequency=880:duration=2', '-c:a', 'aac',\n"
+    "    '-metadata:s:a:0', 'language=eng', out], check=True)\n" % FF +
+    "sys.stdout.write(out + '\\n')\n")
+os.chmod(os.path.join(_RLBIN, "yt-dlp"), 0o755)
+json.dump({"show.mkv": {"video_id": "vid1", "url": "https://youtu.be/vid1"}},
+          open(os.path.join(_RL, ".musictool-index.json"), "w"))
+
+
+def run_rl(*args):
+    env = dict(ENV, PATH=_RLBIN + os.pathsep + ENV["PATH"])
+    return subprocess.run([sys.executable, ENTRY, "relang", *args],
+                          capture_output=True, text=True, env=env)
+
+
+_d = run_rl(_RL, "--dry-run")
+check("a dry run says what it would swap and touches nothing",
+      _d.returncode == 0 and "would be re-muxed" in _d.stdout
+      and "will take format 140-9" in _d.stdout
+      and F.same_language(download.audio_track_lang(_mkv), "es"),
+      f"rc={_d.returncode} {_d.stdout[-200:]!r} {_d.stderr[-200:]!r}")
+_x = run_rl(_RL)
+check("the real run puts the English track in the file you already had",
+      _x.returncode == 0 and "re-muxed" in _x.stdout
+      and download.audio_track_lang(_mkv).startswith("en"),
+      f"{download.audio_track_lang(_mkv)} | {_x.stdout[-300:]}")
+check("...and the video that was already downloaded is still in there",
+      download.has_video_stream(_mkv) and download.streams(_mkv)[0][0] == "video",
+      str(download.streams(_mkv)))
+_y = run_rl(_RL)
+check("running it again changes nothing",
+      "already en" in _y.stdout and "0 file(s) re-muxed" in _y.stdout,
+      _y.stdout[-200:])
+_noindex = os.path.join(_RL, "orphan.mkv")
+shutil.copy(_mkv, _noindex)
+_z = run_rl(_noindex)
+check("a file musictool never downloaded is reported, not guessed at",
+      "no videoId" in _z.stdout and "no videoId" in _z.stdout.splitlines()[-1],
+      _z.stdout[-200:])
+
+# --- and the GUI has a button for it, because that is where this is done
+_argv = []
+_cli = G.cli_main
+G.cli_main = lambda a: _argv.append(list(a)) or 0
+_gpane.vars["output_dir"].set(_RL)
+_gpane.vars["audio_lang"].set("en")
+_bl = [w for w in root.walk() if w.kind == "button"
+       and "Fix language" in w.options.get("text", "")]
+check("the GUI offers the repair, not just the CLI", len(_bl) == 1, str(len(_bl)))
+_bl[0].invoke()
+check("...and it re-languages the folder you are downloading to, in your language",
+      _argv and _argv[0][0] == "relang" and _argv[0][1] == _RL
+      and "--audio-lang" in _argv[0]
+      and _argv[0][_argv[0].index("--audio-lang") + 1] == "en", str(_argv))
+G.cli_main = _cli
+_gpane.vars["output_dir"].set("")
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

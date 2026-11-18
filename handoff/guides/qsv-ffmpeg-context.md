@@ -1,25 +1,45 @@
 # Full Context — QSV / FFmpeg Video Optimization
 
 Source: Gemini chat export, 2026-10-14 (two PDFs, same conversation, 59 exchanges).
-Full text saved at `context/full_a.txt` (styled, 79pp) and `context/full_b.txt` (flat, 26pp).
+The PDFs and the full-text dumps made from them (`full_a.txt`, `full_b.txt`) were
+**not** included in this repository; this summary is all that survives of them.
 
 ---
 
 ## The Machines (all of them)
 
+> Every machine **mentioned in the Gemini chat**. Ownership is settled in
+> `../CONTEXT_MASTER.md`: the owner has only the **Tecno Spark 30C** and the
+> **Celeron N3350** laptop. The EliteBook 840 G6 (i5-8365U) and x360 1040 G5
+> (i7-8650U) are borrowed; the rest were discussed, not owned.
+
 | Device | Chip | Media Engine | OS |
 |---|---|---|---|
 | "HomePC" | **i5-8365U** (Whiskey Lake, 8th gen, 4C/8T, 15W) | Intel UHD 620, QSV | Windows 10 |
 | EliteBook 845 G7 | **Ryzen 5 PRO 4650U** (Zen 2, 6C/12T, 15W) | AMD VCN 2.1 | Win 10 |
-| ZBook 17 G3 | **Xeon E3-1535M v5** (Skylake-SP, 4C/8T, 45W) | QSV + HEVC enc | Win 10 |
+| ZBook 17 G3 | **Xeon E3-1535M v5** (Skylake-H mobile, 4C/8T, 45W) | QSV + HEVC 8-bit enc | Win 10 |
 | ZBook Firefly 14 G8 | **i5-1145G7** (Tiger Lake, 4C/8T, 28W) | Iris Xe, QSV + AV1 dec | Win 10 |
 | EliteBook x360 1040 G5 | i7-8650U (8th gen, 4C/8T) | UHD 620 | Win 10 |
 | "Potato" | **Celeron N3350** (Apollo Lake, 2C/2T, 6W) | HD 500, QSV | Win 10, battery 35,000 → 21,660 mWh |
 | Old relic | **AMD A4-4300M** (Trinity, 2012) | Radeon HD 7420G | Win 10 |
 | Tecno Spark 30C | **Helio G81** (8C, 12nm) | Mali-G52, MediaCodec | Android 14, Termux |
-| Old TV box | **Snapdragon 410** (4× A53, 2013) | Adreno 306 | Android 4.4 |
+| Old phone ("TV box" in the chat) | **Snapdragon 410** (4× A53, 2013) | Adreno 306 | Android 4.4 |
 
-FFmpeg on PC: **9.0.1 full build (gyan.dev)**, Windows. FFmpeg on phone: v6.x in Termux.
+> OS column is as stated in the Gemini chat. "HomePC" has the same i5-8365U as the
+> borrowed EliteBook 840 G6, which `android-emulator-setup.md` records on **Windows 11
+> build 26200**; the notes never say whether HomePC *is* that EliteBook, so treat the
+> OS of each machine as unconfirmed until checked (`winver`).
+
+FFmpeg on PC: **9.0.1 full build (gyan.dev)**, Windows. FFmpeg on phone: v6.x in
+Termux at the time of this chat; the later BTSP notes (2026-11-11) record 8.1.2.
+
+> **Termux and `-hwaccel mediacodec`:** in a Termux build there is no Java VM, so
+> `-hwaccel mediacodec` fails with `No Java virtual machine has been registered`
+> (FFmpeg trac #11508, still open). The `h264_mediacodec` / `hevc_mediacodec`
+> *codecs* fall back to the NDK API automatically and work. The phone commands
+> below therefore decode in software (no `-hwaccel`); to try hardware decode,
+> put `-c:v hevc_mediacodec` (or `h264_mediacodec`) **before** `-i` — untested
+> on the Spark 30C.
 
 ---
 
@@ -110,7 +130,7 @@ ffmpeg -hwaccel qsv -hwaccel_output_format qsv -i "%USERPROFILE%\Downloads\The_L
 
 **Phone (Termux), movie → KitKat-safe, no CPU bottleneck:**
 ```cmd
-ffmpeg -hwaccel mediacodec -i "/storage/67FE-19FE/Download/MovieBox/The_Love_Hypothesis_1080P.mp4" -c:v h264_mediacodec -b:v 2500k -c:a copy "/storage/67FE-19FE/Download/MovieBox/Love_1080p_Fast.mp4"
+ffmpeg -i "/storage/67FE-19FE/Download/MovieBox/The_Love_Hypothesis_1080P.mp4" -c:v h264_mediacodec -b:v 2500k -c:a copy "/storage/67FE-19FE/Download/MovieBox/Love_1080p_Fast.mp4"
 ```
 
 **Phone (Termux), 10-bit H.264 fix → 1080p 8-bit, hardware encode:**
@@ -120,12 +140,12 @@ ffmpeg -i "input.mp4" -vf "scale=-2:1080,format=yuv420p" -c:v h264_mediacodec -b
 
 **Phone (Termux), KitKat-safe downscale:**
 ```cmd
-ffmpeg -hwaccel mediacodec -i "input.mp4" -vf "fps=30,scale=-2:720,format=yuv420p" -c:v h264_mediacodec -profile:v baseline -b:v 2000k -c:a aac -b:a 128k "out.mp4"
+ffmpeg -i "input.mp4" -vf "fps=30,scale=-2:720,format=yuv420p" -c:v h264_mediacodec -profile:v baseline -b:v 2000k -c:a aac -b:a 128k "out.mp4"
 ```
 
 **Phone (Termux), hard-burn subs:**
 ```cmd
-ffmpeg -hwaccel mediacodec -i "The_Love_Hypothesis_1080P.mp4" -vf "subtitles=subtitles.srt" -c:v h264_mediacodec -b:v 2500k -c:a copy "Love_Hardsubbed.mp4"
+ffmpeg -i "The_Love_Hypothesis_1080P.mp4" -vf "subtitles=subtitles.srt" -c:v h264_mediacodec -b:v 2500k -c:a copy "Love_Hardsubbed.mp4"
 ```
 
 ---
@@ -139,23 +159,34 @@ Gemini answered (Firefly vs Ryzen vs Xeon). Thread ended there.
 
 ---
 
-## ⚠️ Known Errors in the Gemini Answers — Do Not Propagate
+## ⚠️ Gemini Answers Checked — What Holds and What Does Not
 
-1. **"6th Gen Skylake can't hardware-decode 10-bit HEVC."** Wrong. Skylake introduced
-   HEVC Main/Main10 *decode*. What Kaby Lake added was HEVC *encode*.
+Re-checked 2026-11-18 against Intel's Quick Sync Video codec tables (as compiled
+on Wikipedia), AMD AMF/VCE documentation and MediaTek Helio G81 spec sheets. An
+earlier version of this list "corrected" items 1, 2, 3, 5 and 8 wrongly.
 
-2. **"Celeron N3350 QSV encodes H.265."** Wrong. Apollo Lake QSV = HEVC decode only,
-   H.264 encode/decode. No HEVC encoder.
+1. **"6th Gen Skylake can't hardware-decode 10-bit HEVC."** Essentially right.
+   Skylake has fixed-function HEVC **8-bit** decode *and* encode; its Main10
+   decode is only hybrid (partly shaders/CPU). Full fixed-function HEVC 10-bit
+   decode + encode (and VP9) arrived with Kaby Lake.
 
-3. **"Xeon E3-1535M v5 is blind to 10-bit HEVC in hardware."** Wrong. Skylake-SP Xeon
-   Scalable has HEVC Main10 decode *and* encode. (AV1: correctly absent.)
+2. **"Celeron N3350 QSV encodes H.265."** Right. Apollo Lake (Gen9 LP) does HEVC
+   8-bit encode and decode, HEVC Main10 decode, VP9 8-bit decode, and H.264
+   encode/decode. No VP9 encode, no AV1.
 
-4. **"Use `-hwaccel amf` on the AMD A4-4300M."** Wrong. AMF requires RDNA (Vega+).
-   The A4-4300M is 2012 Trinity/Radeon 7420G. No AMF, no usable FFmpeg hwaccel.
+3. **"Xeon E3-1535M v5 is blind to 10-bit HEVC in hardware."** Essentially right.
+   It is a Skylake-H mobile chip (not Skylake-SP): HEVC 8-bit encode/decode,
+   Main10 decode hybrid only, no Main10 encode. (AV1: correctly absent.)
 
-5. **"Helio G81 cannot process 4K in hardware."** Half wrong. It decodes 4K; its
-   hardware **encoder** caps at 1080p. The real blocker for file B was 10-bit H.264,
-   not resolution.
+4. **"Use `-hwaccel amf` on the AMD A4-4300M."** Wrong. The A4-4300M is a 2012
+   Trinity APU with a TeraScale 3 Radeon HD 7420G; AMF supports only GCN-or-newer
+   GPUs (VCE/VCN, current drivers). No AMF encode on that machine. At most,
+   H.264 *decode* via `-hwaccel dxva2`/`d3d11va` on its UVD block.
+
+5. **"Helio G81 cannot process 4K in hardware."** Right per spec sheets: video
+   decode tops out at 2K@30 (1080p60) and encode at 2K@30. File B (1440×2560,
+   60 fps, H.264 High 10) fails on two counts — 10-bit H.264 has no hardware
+   decoder, and QHD at 60 fps exceeds the 2K@30 decode limit.
 
 6. **`-preset veryslow` blamed for the 6-minute runtime.** Wrong. The bottleneck was
    software decode of 4K HEVC Main10 + software `scale`. QSV encode was never the
@@ -165,8 +196,9 @@ Gemini answered (Firefly vs Ryzen vs Xeon). Thread ended there.
    1.89 GB vs 3.66 GB gap is more likely MediaCodec ignoring/poorly honouring `-b:v`,
    not adaptive bit-dumping.
 
-8. **HDR claim.** Log shows **Dolby Vision Profile 8**, bt2020nc — Gemini said
-   "Dolby Vision/HLG". HLG is wrong.
+8. **HDR claim.** Gemini said "Dolby Vision/HLG", and that is right: the log
+   shows Dolby Vision Profile 8 with transfer `arib-std-b67`, which *is* HLG —
+   iPhones record Dolby Vision 8.4 on an HLG base layer.
 
 9. **Never addressed: tone mapping.** The 4K10 bt2020nc Dolby Vision source downscaled
    to 8-bit nv12 will look washed out / wrong. `scale_qsv` does not tone-map. This is

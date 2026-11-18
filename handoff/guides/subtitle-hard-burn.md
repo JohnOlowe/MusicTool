@@ -44,15 +44,21 @@ Episode is ~49 minutes. Output was ~432 MB.
 
 # 2. Measured results — don't guess, these are real numbers
 
-Software encode, `libx264 -preset medium -threads 0`, 1080p:
+Software encode, `libx264 -preset medium -threads 0`, 1080p, with subtitles:
 
 | Device | Speed | Notes |
 |---|---|---|
 | Tecno (Helio G81) | **0.7×** | Worse than useless |
 | Celeron N3350 | **0.55×** | Slower still |
-| **i7-8650U (borrowed)** | **9.21×** | `h264_qsv`, hardware encode |
+
+Hardware encode, same job:
+
+| Device | Speed | Notes |
+|---|---|---|
+| **i7-8650U (borrowed x360 1040 G5)** | **9.21×** | `h264_qsv` — not a libx264 figure |
 
 The 9.21× run: **5 min 18 s** for ~49 minutes of video, output ~432 MB.
+(2940 s ÷ 9.21 ≈ 319 s = 5:19 — consistent.)
 
 Software encoding is simply not viable. **Always use a hardware encoder.**
 
@@ -60,7 +66,9 @@ Software encoding is simply not viable. **Always use a hardware encoder.**
 
 - Tecno pure transcode, **no filters**, 1080p: **2.2–2.4×** (the ceiling)
 - Any `subtitles=` filter drops it below that ceiling
-- The borrowed i7-8650U is roughly **3× the compute** of your current EliteBook 840 G6
+- The borrowed i7-8650U and the borrowed EliteBook 840 G6's i5-8365U are the
+  same class of chip (4C/8T, 15 W, UHD 620 with the same Quick Sync engine), so
+  expect a similar `h264_qsv` figure on either. The Celeron N3350 is far slower.
 
 ---
 
@@ -81,8 +89,8 @@ Software encoding is simply not viable. **Always use a hardware encoder.**
 | EliteBook x360 1040 G5 (i7-8650U) | `h264_qsv` | **Fastest measured at 9.21×** — but you must have it on loan that day |
 
 > ⚠️ **The 9.21× figure came from the borrowed i7-8650U and is not representative of
-> your Celeron.** It is roughly 3× the compute of your everyday machine. Always
-> benchmark on the hardware you actually have that day before promising a runtime.
+> your Celeron N3350**, which is a much weaker chip. Always benchmark on the
+> hardware you actually have that day before promising a runtime.
 
 > **No AMD machine is available to you.** `-hwaccel amf` / `h264_amf` are AMD-only
 > and will fail on every machine listed.
@@ -96,16 +104,19 @@ Software encoding is simply not viable. **Always use a hardware encoder.**
 ```bash
 ffmpeg -i "/storage/emulated/0/Movies/My_Life_with_the_Walter_Boys - 1x1 - Welcome to Colorado.TXT.IMDB.en.mp4" \
  -vf "subtitles='/storage/emulated/0/Movies/My_Life_with_the_Walter_Boys - 1x1 - Welcome to Colorado.TXT.IMDB.en.srt':force_style='FontName=Lato'" \
- -c:v h264_mediacodec -profile:v main -level 4.0 \
- -b:v 1800k -maxrate 1800k -bufsize 3600k -g 50 \
+ -c:v h264_mediacodec -profile:v main -bitrate_mode cbr -b:v 1800k -g 50 \
  -c:a copy \
  "/storage/emulated/0/Movies/My_Life_with_the_Walter_Boys - 1x1 - Welcome to Colorado.TXT.IMDB.mp4"
 ```
 
-- `-profile:v main` is **load-bearing** — it's what forces MediaCodec into CBR.
-  Without it the encoder ignores `-b:v` and can land ~1.9× over target.
-- `-g 50` — keyframe every 2 s, keeps scrubbing smooth
-- Drop `-hwaccel mediacodec` if hardware decode fails; software decode still works
+- `-bitrate_mode cbr` is what asks MediaCodec for constant bitrate. Without it
+  `-b:v` is only a loose target and the output can land ~1.9× over it.
+  (`-profile:v main` only sets the profile; `-maxrate`/`-bufsize` are not passed
+  to MediaCodec by FFmpeg at all.) Whether the G81 honours CBR: check the size of
+  a 30-second test.
+- `-g 50` — a keyframe every 50 frames (~2 s at 24–25 fps), keeps scrubbing smooth
+- Decode is in software on purpose: `-hwaccel mediacodec` does not work in Termux
+  (FFmpeg trac #11508)
 
 ## Windows, any Quick Sync machine
 
@@ -239,23 +250,29 @@ CHUNK=$(( (TOTAL + PARTS - 1) / PARTS ))
 
 echo "Splitting into $PARTS parts of ~$CHUNK s..."
 rm -f reset_*.mp4 burn_*.mp4 concat.txt
+# -reset_timestamps 1 makes every part start at 0 (without it each part keeps
+# its original timestamps and the setpts shift below is applied twice).
 ffmpeg -y -i "$MOVIE" -c copy -f segment -segment_time "$CHUNK" \
-  -segment_time_delta 1 reset_%02d.mp4
+  -segment_time_delta 1 -reset_timestamps 1 reset_%02d.mp4
 
 echo "Burning subtitles in parallel..."
+OFFSET=0
 for f in reset_*.mp4; do
   idx="${f:6:2}"
-  OFFSET=$(( 10#$idx * CHUNK ))
+  # -c copy cuts land on keyframes, so parts are not exactly CHUNK long.
+  # OFFSET is the sum of the real durations before this part; idx*CHUNK drifts
+  # (that was the 8-second Big Little Lies bug).
+  DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")
   (
     # setpts shifts timestamps up so libass looks up the RIGHT subtitle cues,
     # then back down so each output part starts at zero.
     ffmpeg -y -i "$f" \
       -vf "setpts=PTS+$OFFSET/TB,scale=-2:$HEIGHT,subtitles=$SUBS,setpts=PTS-$OFFSET/TB" \
-      -c:v h264_mediacodec -profile:v main -level 4.0 \
-      -b:v $BITRATE -maxrate $BITRATE -bufsize 3600k -g 50 \
+      -c:v h264_mediacodec -profile:v main -bitrate_mode cbr -b:v $BITRATE -g 50 \
       -af "aresample=async=1:first_pts=0" -ac 2 -c:a aac -b:a 128k \
       "burn_${idx}.mp4"
   ) &
+  OFFSET=$(awk -v o="$OFFSET" -v d="$DUR" 'BEGIN{printf "%.3f", o+d}')
 done
 wait
 
@@ -267,8 +284,10 @@ ffmpeg -y -f concat -safe 0 -i concat.txt -c copy "$OUT"
 ### The one thing that will bite you
 
 The `setpts` shift. Without it, **part 2 onward gets the wrong subtitles** — libass
-reads cues by timestamp, and each segment restarts at zero. This is the single most
-likely thing to need a tweak.
+reads cues by timestamp, and each segment restarts at zero (with
+`-reset_timestamps 1`). The shift must be the part's **real** start time — the
+running total of the measured part durations — not `part number × CHUNK`,
+because stream-copy cuts land on keyframes.
 
 **Always test on a short file first** and confirm subtitles land on the correct lines
 in the later parts.
@@ -280,11 +299,14 @@ CHUNK=735    # 2940 / 4
 OFFSET=0
 ffmpeg -y -i "$MOVIE" -ss $OFFSET -t $CHUNK \
   -vf "scale=-2:720,subtitles=$SUBS" \
-  -c:v h264_mediacodec -profile:v main -b:v 1800k -maxrate 1800k -bufsize 3600k \
+  -c:v h264_mediacodec -profile:v main -bitrate_mode cbr -b:v 1800k \
   -c:a aac -b:a 128k part_0.mp4
 ```
 
-Slower but far easier to debug.
+Slower but far easier to debug. Here `-ss`/`-t` sit *after* `-i` (output
+seeking): ffmpeg decodes from the start and throws frames away until `OFFSET`,
+so the subtitles filter still sees the film's real timestamps and needs no
+`setpts` shift — the price is decoding everything before each part.
 
 ---
 
@@ -322,7 +344,7 @@ So it imposes no extra limit: one file that satisfies the TV satisfies both.
 ```bash
 ffmpeg -i "input.mp4" -vf "scale=-2:720,subtitles=$SUBS:force_style='Fontsize=26,MarginV=28'" \
   -c:v h264_mediacodec -profile:v baseline -level 3.1 \
-  -b:v 1500k -maxrate 1500k -bufsize 3000k -g 50 \
+  -bitrate_mode cbr -b:v 1500k -g 50 \
   -c:a aac -b:a 128k -ac 2 -movflags +faststart "for_the_tv.mp4"
 ```
 
@@ -353,7 +375,7 @@ The 150 covers audio and container overhead.
 | Runtime | Max video bitrate |
 |---|---|
 | 49 min (2940 s) | ~10,700 kbps |
-| 96 min (5782 s) | ~5,300 kbps |
+| 96 min (5782 s) | ~5,400 kbps |
 | 112 min (6724 s) | ~4,600 kbps |
 
 At 1500k you'll never come close. This only becomes a problem above roughly 4000k on
@@ -387,12 +409,17 @@ cp "/storage/emulated/0/Fonts/Caveat.ttf" ~/fonts/  # or curl from github
 fc-cache -f
 fc-list | grep -i caveat  # must show Caveat, not empty
 # 2-second test - look for fontselect line:
-ffmpeg -y -ss 930 -t 2 -i movie.mp4 -vf "subtitles=subs.srt:fontsdir=$HOME/fonts:force_style='FontName=Caveat,Fontsize=28'" -c:v h264_mediacodec -c:a aac /tmp/fonttest.mp4 2>&1 | grep -i fontselect
+ffmpeg -y -ss 930 -t 2 -i movie.mp4 -vf "subtitles=subs.srt:fontsdir=$HOME/fonts:force_style='FontName=Caveat,Fontsize=28'" -c:v h264_mediacodec -c:a aac "$PREFIX/tmp/fonttest.mp4" 2>&1 | grep -i fontselect
 # should be: fontselect: (Caveat, 400, 0) -> /data/.../Caveat.ttf
-# if it says Arial -> FONTNAME spelling wrong, or fc-cache not run
+# Read the RIGHT side of the arrow. The left side is only what was asked for and
+# always says Caveat; a fallback looks like
+#   fontselect: (Caveat, 400, 0) -> /.../DejaVuSans.ttf, 0, DejaVuSans
+# -> FontName spelling wrong, wrong fontsdir, or fc-cache not run
 ```
+(Termux has no writable `/tmp`; `$PREFIX/tmp` is
+`/data/data/com.termux/files/usr/tmp`.)
 
-# 11. Gotchas
+# 12. Gotchas
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -400,19 +427,20 @@ ffmpeg -y -ss 930 -t 2 -i movie.mp4 -vf "subtitles=subs.srt:fontsdir=$HOME/fonts
 | Progress updates every few minutes | `/Realtime` starving the console | Use `/High` |
 | Output freezes completely | Clicked in the Command Prompt (QuickEdit) | Press Enter or Esc |
 | `Encoder configure failed, -10000` | Wrong pixel format | Add `-pix_fmt nv12` |
-| Bitrate ~1.9× over target | MediaCodec ignoring `-b:v` | Add `-profile:v main` |
+| Bitrate ~1.9× over target | MediaCodec treating `-b:v` as a loose VBR target | Add `-bitrate_mode cbr`; if the size is still wrong, use two-pass `libx264` |
 | Wrong subtitles after the first part | Missing `setpts` shift | See section 8 |
 | `-threads 0` present with hardware encode | Leftover from the software command | Delete it — encoders ignore CPU threads |
 | `Unknown encoder 'h264_mediacodec'` | Old FFmpeg | `pkg upgrade ffmpeg` |
 
 ---
 
-# 12. Don't propagate these Gemini errors
+# 13. Don't propagate these Gemini errors
 
 Corrections from the original conversation, verified since:
 
 - ❌ **"Termux's FFmpeg usually doesn't have MediaCodec support."** False. Your Tecno
-  runs `h264_mediacodec` without issue.
+  runs the `h264_mediacodec` *encoder* without issue. (What does not work in
+  Termux is `-hwaccel mediacodec` decoding — no Java VM, trac #11508.)
 - ❌ **"The phone only beat the Celeron because libx264 is x86-optimised and the
   Helio G81 throttles in a glass sandwich."** Backwards. The Celeron N3350 is simply
   the weaker chip. The phone won on raw silicon, not architecture or thermals.
@@ -427,8 +455,8 @@ Corrections from the original conversation, verified since:
 
 **Always hardware-encode.** Software tops out at 0.7× — unusable.
 
-**Phone (default):** `h264_mediacodec` with `-profile:v main` (non-negotiable for
-CBR). Expect well under 2× with a subtitle filter.
+**Phone (default):** `h264_mediacodec` with `-bitrate_mode cbr -b:v …`. Expect well
+under 2× with a subtitle filter (the real 1080p burn ran at ~0.7×).
 
 **Your Celeron:** `h264_qsv`. The 9.21× figure belongs to a *borrowed* i7-8650U and
 will not transfer to it. Benchmark before you commit to a runtime.

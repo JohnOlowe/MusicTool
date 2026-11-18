@@ -87,8 +87,8 @@ Consequences you have to respect:
 
 - **A clipped-off widget counts as a missing option.** The maintainer's display
   is ~1600×720. `OptionsPane` folds rarely-used rows behind a *More options*
-  disclosure; a fresh Download pane shows 10 of 42. Folding is by
-  "non-empty or changed" — folding by "differs from default" showed 1 of 41
+  disclosure; a fresh Download pane shows 11 of 42 (31 folded). Folding is by
+  "non-empty or changed" — folding by "differs from default" showed 1 of the then-41
   rows, which is not a UI, it is a hiding place.
 - **Nothing in a worker thread touches a widget.** `gui.worker` puts events on
   a queue; `pump()` on the main thread drains it every 120 ms. A swallowed

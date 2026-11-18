@@ -10,12 +10,16 @@ rather than silently working around it.
 
 ### Language selection: only a format filter works
 
-yt-dlp ranks the **original** language first. `--format-sort lang:en` has **no
-effect** — `lang` maps to `language_preference`, which defaults to −1 for
-everything. The only thing that works is a format filter:
+yt-dlp ranks the **original** language first. `--format-sort lang:en` does not
+select English — the `lang` sort field is `language_preference`, a *number*,
+not the language code. YouTube's extractor sets it to 10 for the original
+track, 5 for the default track, −10 for descriptive audio and −1 for everything
+else, which is exactly why the original wins. The only thing that works is a
+format filter:
 
 ```
-ba[language^=en]/ba/b
+ba[language^=en]/ba/b              # audio-only downloads
+bv*+ba[language^=en]/bv*+ba/b      # with --keep-video
 ```
 
 Dubbed audio tracks share an itag base (`140-0`, `140-1`, `140-9`). If language
@@ -28,14 +32,17 @@ it.
 `+` binds **tighter** than `/` and `,`, so `A+B/C` parses as `(A+B)/C`. Getting
 this wrong does not error — it silently falls through to audio-only.
 
-Suffixed ids (`140-0`, `251-1`, `401`) are real on YouTube's SABR/range
+Suffixed ids (`140-0`, `251-1`, `251-17`) are real on YouTube's SABR/range
 delivery, and **the bare itag may not exist**. A selector naming a bare itag
 that does not exist makes the whole `+` branch unmatchable, and the fallback
 silently takes over — which is how a "1080p + audio" request quietly becomes a
 360p combined file.
 
-`formats.py` therefore emits selectors as `137/137-0`: the plain itag with the
-measured copy as fallback.
+`formats.py` therefore emits **one concrete id per stream** — the id yt-dlp
+actually served, e.g. `137+251-17` or `248+140-0` — and never `base/variant`
+(`137/137-0+251/251-17` parses as `137 / (137-0+251) / 251-17` and picks the
+video-only `137` with no audio). `formats.check_selector` warns about a pasted
+selector whose first branch cannot match. See `_ref()` and commit `4974eb3`.
 
 ### Probe a selector offline, with no network
 
@@ -58,7 +65,10 @@ See `RECIPES.md`.
 
 ### Smaller ones
 
-- `--print` implies `--quiet` and `--simulate`.
+- `--print` implies `--quiet` and `--simulate` **unless** `--no-simulate` is
+  also given. `download.py` passes `--no-simulate --no-quiet` with its
+  `--print after_move:…`, so the download still happens and the progress lines
+  the GUI parses are still emitted.
 - `--parse-metadata "uploader:(?P<artist>.+?) - Topic"` never sets `uploader`.
   `--replace-in-metadata uploader " - Topic$" ""` is the fix.
 - `-x --audio-format m4a` on an Opus source transcodes Opus → AAC.
@@ -139,8 +149,9 @@ bottleneck" — software AAC runs 66–250x realtime.
 | **audio only** (video copied) | ~66–250x | **5–20 min** |
 
 Audio-only timing varied 14 s (warm cache) to 54 s (cold) for one hour — quote
-a range, not a number. A 2-core Braswell Celeron is slower than this machine;
-hand the maintainer a calibration command, not a figure.
+a range, not a number. The maintainer's 2-core Celeron N3350 (Apollo Lake) is
+slower than this machine; hand the maintainer a calibration command, not a
+figure.
 
 ---
 

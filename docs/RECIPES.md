@@ -117,8 +117,16 @@ stream. Use `-c:v:0 <codec> -c:v:1 copy -disposition:v:1 attached_pic`, or
 Cut one minute and read the reported speed:
 
 ```bat
-ffmpeg -ss 00:10:00 -t 60 -i "file.webm" -hwaccel qsv -c:v h264_qsv -preset veryfast -global_quality 23 -c:a aac -b:a 128k -ar 48000 test.mp4
+ffmpeg -hwaccel qsv -ss 00:10:00 -t 60 -i "file.webm" -c:v h264_qsv -preset veryfast -global_quality 23 -c:a aac -b:a 128k -ar 48000 test.mp4
 ```
+
+`-hwaccel` is an **input** option and must come before `-i`; after it, ffmpeg
+refuses with `Option hwaccel ... cannot be applied to output url`. If the
+source codec has no hardware decoder on that chip (e.g. AV1 or 10-bit VP9 on
+an Apollo Lake Celeron), ffmpeg decodes in software and still encodes with
+`h264_qsv`. With no usable Intel GPU/driver, `h264_qsv` fails to open
+(`Error creating a MFX session: -9`); drop `-hwaccel qsv` and use
+`-c:v libx264 -preset veryfast -crf 23` to calibrate the software path instead.
 
 Read `speed=X.XXx` from the output and divide the file's hours by it. Handing
 someone a measured multiple of *their* machine beats quoting a benchmark from

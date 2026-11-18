@@ -9,7 +9,7 @@ VID_20260930_075755_edit.mp4
 ```
 Filenames like `VID_` are phone-camera exports. In practice that means: h264, progressive, **stereo (2.0)**, and very likely **variable frame rate (VFR)**. That matters for proxies because Premiere is strict about the match:
 
-> For Premiere to attach a proxy, **frame rate, duration, resolution aside, and audio-channel count must match the original.** If they don't, Attach fails with `must have matching audio channels` or `must have matching framerate and overlapping timecode`. This is real Premiere behaviour; the `[7][10][18]` numbered citations in the paste you sent are fabricated and should be ignored.
+> For Premiere to attach a proxy, **frame rate, duration and audio-channel count must match the original** (resolution may differ, as long as the aspect ratio is the same). If they don't, Attach fails with `must have matching audio channels` or `must have matching framerate and overlapping timecode`. This is real Premiere behaviour; the `[7][10][18]` numbered citations in the paste you sent are fabricated and should be ignored.
 
 Good news: for stereo phone edits, H.264 proxies are the correct, smallest, and fastest choice. You do **not** need ProRes.
 
@@ -34,11 +34,13 @@ You already have it for the subtitle work. Just verify:
 
 ```cmd
 ffmpeg -version
-ffmpeg -encoders | findstr qsv
+ffmpeg -hide_banner -f lavfi -i testsrc=size=1280x720:rate=30:duration=0.5 -c:v h264_qsv -f null -
 ```
 
-- If `h264_qsv` appears → you have Quick Sync. Use it.
-- If not → the `libx264` commands still work.
+- If the second command finishes without an error → Quick Sync really works. Use it.
+- If it fails (e.g. `Error creating a MFX session` or `Unknown encoder`) → use the
+  `libx264` commands. (`ffmpeg -encoders | findstr qsv` only shows that the
+  *build* includes `h264_qsv`, not that the GPU driver can run it.)
 
 No need to hunt for `prores_ks` unless you end up needing multichannel ProRes (you don't, for these two files).
 
@@ -72,7 +74,10 @@ General rules for Premiere 23.6 proxies made with FFmpeg:
 1. Never overwrite originals. Put proxies in a `Proxies` subfolder.
 2. Scale to 720p (`scale=-2:720` keeps aspect, even width). For 4K source you can go `scale=-2:540` to save more.
 3. **Force constant frame rate (CFR)** if the source is VFR — phone files usually are.
-4. Keep **all** streams with `-map 0` so channel count stays identical.
+4. Keep **all** streams with `-map 0` so channel count stays identical. If a
+   file also carries a cover image or a data track, `-map 0` with `-vf`/`-c:v`
+   fails (`Could not find tag for codec … in stream #N`); then use
+   `-map 0:v:0 -map 0:a` instead, which still keeps every audio stream.
 5. Copy the creation time / metadata if you want, but Premiere matches on **filename + Media Start**, not metadata alone.
 
 ### Option A — fastest on your Celeron (Quick Sync)
@@ -85,7 +90,7 @@ ffmpeg -y -i "VID_20260930_075352_edit.mp4" -vf "scale=-2:720,fps=30" -c:v h264_
 ffmpeg -y -i "VID20260930_075755_edit.mp4" -vf "scale=-2:720,fps=30" -c:v h264_qsv -global_quality 23 -preset medium -c:a aac -b:a 128k -map 0 "Proxies\VID20260930_075755_edit_proxy.mp4"
 ```
 
-- `fps=30` — replace `30` with the source's rate (`25` for PAL, `30` for NTSC/phone, `23.976` or `24` for cinema). Use the `r_frame_rate` you saw above. If unsure, `fps=30` is the safest default for phone 1080p30.
+- `fps=30` — replace `30` with the source's rate, **exactly** as `r_frame_rate` shows it: `30/1` → `fps=30`, `30000/1001` (29.97) → `fps=30000/1001`, `25/1` → `fps=25`, `24000/1001` → `fps=24000/1001`. Premiere refuses a 30 fps proxy for a 29.97 fps original, and `fps=29.97` is not exactly 30000/1001 either.
 - `-global_quality 23` is QSV's quality knob (lower = bigger/better, like CRF but for QSV). `23` is the sweet spot for proxies.
 - If `h264_qsv` errors with `Unknown encoder`, use Option B.
 
@@ -99,13 +104,13 @@ ffmpeg -y -i "VID20260930_075755_edit.mp4" -vf "scale=-2:720,fps=30" -c:v libx26
 - `-crf 23 -preset fast` is tuned for the N3350 — `fast` keeps CPU reasonable, `medium` would be slower for little proxy benefit.
 - Do **not** use `-preset veryslow` — pointlessly slow for proxies.
 
-> **Why `fps` filter, not `-vsync cfr -r 30`?** `fps=30` inside `-vf` normalises VFR to CFR before encoding and is what Frame.io / Adobe field notes actually recommend for phone sources. `-r` alone can duplicate/drop at the wrong stage and still fail the match.
+> **Why `fps` filter, not `-vsync cfr -r 30`?** `fps=30` inside `-vf` normalises VFR to CFR before encoding, in the filter graph where you can see it. Output-side `-r` also forces CFR, but it duplicates/drops at the muxing stage, after any other filters.
 
 ---
 
 ## 4. When you *do* need ProRes / Cineform (not these files)
 
-Only if a source has **>2 audio channels or timecode you must keep** — e.g. `.mxf` from a camera, `.mov` with 4-channel. MP4/H.264 cannot carry >2 channels through Premiere's proxy path or preserve timecode reliably.
+Only if a source has **>2 audio channels or timecode you must keep** — e.g. `.mxf` from a camera, `.mov` with 4-channel. MOV with PCM audio carries those channel layouts and timecode more reliably than MP4/AAC, which is why ProRes/Cineform-in-MOV is the usual choice there.
 
 ```cmd
 ffmpeg -y -i "input.mxf" -vf "scale=-2:720,fps=25" -c:v prores_ks -profile:v 0 -vendor ap10 -pix_fmt yuv422p10le -c:a pcm_s16le -map 0 "Proxies\input_proxy.mov"
@@ -180,7 +185,7 @@ No Media Encoder needed for this path:
 | Error | Cause | Fix |
 |---|---|---|
 | `proxy media and full resolution media must have matching audio channels` | Source has 4/6/8 ch, proxy has 2 | Remake that proxy with the ProRes/Cineform command in §4 keeping `-map 0` and `pcm_s16le` |
-| `must have matching framerate and overlapping timecode` | Source is VFR, proxy is CFR at wrong rate — or vice versa | Remake with `-vf "scale=-2:720,fps=RATE"` where `RATE` equals the source's `r_frame_rate` (e.g. `fps=25`, `fps=29.97`, `fps=30`) |
+| `must have matching framerate and overlapping timecode` | Source is VFR, proxy is CFR at wrong rate — or vice versa | Remake with `-vf "scale=-2:720,fps=RATE"` where `RATE` is the source's `r_frame_rate` verbatim (e.g. `fps=25`, `fps=30000/1001`, `fps=30`) |
 | `duration mismatch` | Trimmed proxy or `-t` used | Never trim when making proxies — duration must be sample-identical |
 | Proxy attaches but audio is silent / wrong language | Source had multiple audio streams, `-map 0` was omitted | Remake with `-map 0` so all streams are present |
 | `Unknown encoder 'h264_qsv'` | QSV not available (driver or FFmpeg build) | Use the `libx264` variant |
@@ -209,9 +214,11 @@ cd /d "%~dp0"
 if not exist "Proxies" mkdir "Proxies"
 
 echo Checking encoder...
-ffmpeg -encoders 2>nul | findstr /i "h264_qsv" >nul
+REM A real 0.5 s test encode: proves the GPU driver works, not just that the
+REM build lists h264_qsv.
+ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=1280x720:rate=30:duration=0.5 -c:v h264_qsv -f null - >nul 2>&1
 if %errorlevel%==0 (
-  echo Using h264_qsv (Quick Sync)
+  echo Using h264_qsv - Quick Sync
   set "VCODEC=-c:v h264_qsv -global_quality 23 -preset medium"
 ) else (
   echo QSV not found, using libx264
@@ -242,4 +249,9 @@ echo Attach them in Premiere: Project panel ^> Right-click ^> Proxy ^> Attach Pr
 pause
 ```
 
-> Change `fps=30` to match your source if `ffprobe` shows `25` or `29.97`. Everything else can stay as-is.
+> Change `fps=30` to match your source if `ffprobe` shows `25/1` (`fps=25`) or `30000/1001` (`fps=30000/1001`). Everything else can stay as-is.
+>
+> (An earlier version printed `echo Using h264_qsv (Quick Sync)` inside the
+> `if (...)` block; the `)` in that line closes the block early and breaks the
+> script. Keep parentheses out of `echo` lines inside blocks, or escape them as
+> `^(` `^)`.)

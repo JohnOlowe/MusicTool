@@ -35,19 +35,19 @@ error messages name the specific failure instead of saying "unknown".
 |---|---|
 | OS | Windows |
 | Python / yt-dlp | 3.14 / 2026.08.19 *(as last reported)* |
-| CPU | Intel Celeron N3xxx (Braswell, 2 cores, ~1.6–2.16 GHz) |
-| iGPU | Intel HD Graphics 500 (Gen8LP) with Quick Sync |
+| CPU | Intel Celeron N3350 (Apollo Lake, 2 cores, 1.1 GHz base / 2.4 GHz burst) |
+| iGPU | Intel HD Graphics 500 (Gen9 LP) with Quick Sync |
 | Display | ~1600×720 landscape — **vertical space is scarce** |
 | Playback target | Tecno Android phone |
 | Music folder | `/storage/67FE-19FE/Music/New Gospel Songs` |
 | Test playlist | `PLVuMx2J3_K6w` |
 
-**Braswell media capabilities** (sourced, not guessed):
-- H.264 **encode**: hardware ✓ — the useful one
-- H.264 / VP8 / MPEG-2 / VC-1 decode: hardware ✓
-- **VP9 decode: hybrid only** — through ffmpeg on Windows that means the CPU
-  does it. Pure hardware VP9 decode arrived on later generations.
-- HEVC / VP9 / AV1 encode: not available
+**Apollo Lake media capabilities** (Intel Quick Sync Video tables, Gen9 LP):
+- H.264 encode + decode: hardware ✓ — the useful one
+- HEVC 8-bit encode + decode: hardware ✓; HEVC 10-bit (Main10): decode only
+- VP9 8-bit decode: hardware ✓; VP9 10-bit decode, VP9 encode: no
+- VP8 / MPEG-2 / VC-1 decode: hardware ✓
+- AV1: neither decode nor encode — anything AV1 is CPU work
 - Audio: no hardware path anywhere. There is no hardware audio encoder in
   ffmpeg on any platform (no `*_qsv`/`*_nvenc`/`*_amf`/`*_vaapi` audio encoder).
 
@@ -71,8 +71,9 @@ Facts about that sandbox that cost time to learn:
 - imageio-ffmpeg ships `ffmpeg` but **no `ffprobe`** — and so does a stripped
   Windows/Termux install. Anything reading stream info must fall back to parsing
   `ffmpeg -hide_banner -i` stderr. `download.streams()` already does this.
-- No tkinter, no Xvfb, no display. **You cannot see pixels. Say so rather than
-  implying you checked the UI.**
+- No display (and often no tkinter or Xvfb). **You cannot see pixels. Say so
+  rather than implying you checked the UI.** If tkinter *is* installed, one
+  suite check fails — see `docs/TESTING.md`.
 - Outbound network reaches package registries and nothing else. **No YouTube,
   no lyrics providers.** Anything network-dependent must be faked — the test
   suite already does this, so extend it rather than reaching for the network.
@@ -90,10 +91,15 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **808 assertions, 0 failures**.
+Current as of the latest commit on `main`: **808 assertions, 0 failures** on a
+machine without tkinter (807 + 1 environment-dependent failure where tkinter
+is installed — see `docs/TESTING.md`).
 
-Everything in this repository is MusicTool. There is no unrelated code sharing
-the tree, and no subdirectory prefix to remember when quoting paths.
+Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
+separate ffmpeg / Quick Sync / Android / Premiere material for the same
+maintainer's machines — no MusicTool code depends on it, and the test suite
+does not touch it. There is no subdirectory prefix to remember when quoting
+MusicTool paths.
 
 ```
 ./
@@ -118,11 +124,16 @@ the tree, and no subdirectory prefix to remember when quoting paths.
 ├── tests/
 │   ├── test_musictool.py 3394   33 sections, 808 assertions
 │   └── tkstub.py          723   headless tkinter stub
-└── docs/
-    ├── ARCHITECTURE.md    module responsibilities and data flow
-    ├── DECISIONS.md       verified facts about yt-dlp and ffmpeg, and the traps
-    ├── TESTING.md         how the harness works and what it fakes
-    └── RECIPES.md         ffmpeg commands that were measured, not guessed
+├── docs/
+│   ├── ARCHITECTURE.md    module responsibilities and data flow
+│   ├── DECISIONS.md       verified facts about yt-dlp and ffmpeg, and the traps
+│   ├── TESTING.md         how the harness works and what it fakes
+│   └── RECIPES.md         ffmpeg commands that were measured, not guessed
+└── handoff/               not MusicTool: hardware-acceleration notes and scripts
+    ├── README.md          what is in there
+    ├── CONTEXT_MASTER.md  machines, rules, past jobs
+    ├── guides/            7 guides + .sh/.bat/.py helpers
+    └── context/pdfs-and-state/   job-state notes for specific encodes
 ```
 
 ### Commands
@@ -149,7 +160,8 @@ which splits *one* video into fragments.
 ## 4. How to work on it
 
 - **Run the suite after every change.** `python3 tests/test_musictool.py` —
-  it is hermetic (no network) and takes about half a minute.
+  no network, about half a minute. It is hermetic except for one check that
+  depends on whether tkinter is installed (`docs/TESTING.md`).
 - **Keep every CLI flag reachable in the GUI.** A clipped-off widget counts as
   missing. `uicmd.widget_specs()` is generated from the parser, so this is
   usually free — unless you added a widget that the layout pushes off screen.
@@ -214,9 +226,14 @@ What was established (see `docs/DECISIONS.md` for the measurements behind it):
 - Audio has **no** hardware acceleration anywhere, and does not need it.
   Software AAC runs 66–250x realtime, so all 20 h of audio is 5–20 minutes even
   on a Celeron.
-- Their Braswell chip **can** hardware-encode H.264 but **cannot** hardware-decode
-  VP9 (hybrid only), so a transcode is CPU-decode-bound. Expect roughly 7–20 h
-  for 20 h of video — a range, not a measurement.
+- Their Celeron N3350 (Apollo Lake) can hardware-**encode** H.264 and
+  hardware-**decode** 8-bit VP9 (per Intel's Apollo Lake codec tables), so in
+  principle a VP9 → H.264 transcode can stay on the iGPU (`-hwaccel qsv` before
+  `-i`, `h264_qsv` out). That path has not been run on their machine; if QSV
+  init fails, decode in software and keep `h264_qsv` or use `libx264`. Nobody has measured its speed on that chip
+  at 1080p60 — run the calibration command below rather than trusting any
+  estimate. (An earlier "7–20 h" figure assumed CPU VP9 decode, which was
+  wrong.)
 - The zero-re-encode path: download the **English Opus** track (48 kHz, webm's
   native audio) and mux into webm with `-c copy`. Verified selector:
   `ba[language^=en][ext=webm]/ba[ext=webm]/ba[language^=en]/ba` — against a fake
@@ -229,9 +246,10 @@ What was established (see `docs/DECISIONS.md` for the measurements behind it):
   Tecno. The advice was to cut 60 s and test on the phone before committing
   33 GB. Never tested by us.
 
-Calibration command given to them (exact for their hardware):
+Calibration command for their hardware (corrected: the version first given to
+them put `-hwaccel qsv` after `-i`, which ffmpeg rejects):
 ```bat
-ffmpeg -ss 00:10:00 -t 60 -i "file.webm" -hwaccel qsv -c:v h264_qsv -preset veryfast -global_quality 23 -c:a aac -b:a 128k -ar 48000 test.mp4
+ffmpeg -hwaccel qsv -ss 00:10:00 -t 60 -i "file.webm" -c:v h264_qsv -preset veryfast -global_quality 23 -c:a aac -b:a 128k -ar 48000 test.mp4
 ```
 Read `speed=X.XXx`, divide 20 by it.
 
@@ -239,7 +257,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 7. Honest gaps — things nobody has verified
 
-- **GUI pixels.** No tkinter, no Xvfb, no display anywhere in CI. All GUI work
+- **GUI pixels.** No display anywhere in CI. All GUI work
   is verified against `tests/tkstub.py`, which reproduces widget trees, geometry
   and command wiring but not rendering. Scroll feel, actual clipping and real
   window resizing are unverified.
@@ -253,14 +271,15 @@ Read `speed=X.XXx`, divide 20 by it.
   advice is inference from where the time goes.
 - **The Tecno phone.** No way to test playback. The 44.1 kHz silence theory is
   unverified.
-- **The maintainer's Celeron throughput.** Extrapolated from a 2-core Xeon;
-  they were given a calibration command instead of a number.
+- **The maintainer's Celeron throughput.** Never measured; they were given a
+  calibration command instead of a number.
 
 ---
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 808 assertions.
+Nothing is half-finished — `main` is green at 808 assertions (on a machine
+without tkinter).
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

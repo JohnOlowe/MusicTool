@@ -28,8 +28,9 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                808 assertions, no network, no display
-└── docs/                 architecture, decisions, testing, ffmpeg recipes
+├── tests/                808 assertions, offline, headless (see docs/TESTING.md)
+├── docs/                 architecture, decisions, testing, ffmpeg recipes
+└── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
 
 ## Install
@@ -153,13 +154,13 @@ the three-line URL field — passes the wheel on; one with thirty URLs in it
 keeps it.)
 
 **Options you have not touched are folded away.** *More options* used to dump
-all forty-one settings on the screen at once. Now the grid shows the rows that
+all forty-two settings on the screen at once. Now the grid shows the rows that
 have something in them — folder, filename template, audio format, language,
 speed limit if you set one — plus anything you have changed, and folds the
 blank rest behind one button:
 
 ```
-   [ show all 41 options ]   31 more folded away
+   [ show all 42 options ]   31 more folded away
    ┌ files, folders and access ────────────────┐
    │ Folder: [...]      Filename: [...]         │
    │ Audio format: m4a  Audio quality: 4        │
@@ -343,11 +344,12 @@ videos. In the GUI it is the **jobs** field under More Options.
 
 ### Download options
 
-`-o/--output-dir` · `-t/--template` · `--format m4a|mp3|opus|flac|ogg|wav` ·
+`-o/--output-dir` · `-t/--template` · `--format m4a|mp3|opus|flac|aac|ogg|wav` ·
 `-q/--audio-quality 0-10` · `--keep-video` · `--no-thumbnail` · `--no-metadata` ·
 `--chapters` · `--ascii` (ASCII-only filenames, helps picky players) ·
 `--cookies FILE` · `--cookies-from-browser auto|off|edge|chrome|firefox|brave|...` ·
-`--proxy` · `--limit-rate 2M` · `--concurrent N` ·
+`--proxy` · `--limit-rate 2M` · `--concurrent N` (fragments of one video) ·
+`--jobs N` (videos in parallel, 1–8) ·
 `--archive FILE` (skip already-downloaded videos) · `--items 1-50` ·
 `--no-playlist` · `--yes-playlist` · `--retries N` (attempts across a network
 drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
@@ -355,7 +357,8 @@ drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
 ### Quality options (video downloads)
 
 `--quality 720` (or `1080`, `best`, `smallest`) · `--max-size 250M` (best quality
-that fits under it) · `-f 137+140` (a raw yt-dlp selector, overrides both) ·
+that fits under it) · `-f/--format-selector 137+140` (a raw yt-dlp selector, overrides both) ·
+`--audio-lang en` (spoken language to prefer; `any` for yt-dlp's default) ·
 `--merge-format mkv|mp4|webm|mov` · `--subs` · `--sub-langs en,es` ·
 `--remote-components ejs:github` · `--js-runtimes node` (YouTube's n-challenge
 needs a JS runtime; yt-dlp only enables deno by default) · `--keep-video`
@@ -426,7 +429,7 @@ id   what        container  video  audio  size       variants
      doubles are merged -- --all-formats shows every row)
 
     to take this one:
-      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 625/625-2+251/251-17
+      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 625-2+251-17
 ```
 
 Sizes are yt-dlp's own numbers: `filesize`, or `filesize_approx`, or bitrate x
@@ -468,11 +471,13 @@ musictool formats URL --keep-video --max-size 700M --sort size_asc --show-audio
 ```
     auto (compatible): tallest H.264/mp4 (plays on anything, no conversion)
                        ~ 619.9 MiB  +  opus audio -> ~ 673.3 MiB total
-      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 137/137-0+251/251-17
+      musictool get "https://youtube.com/watch?v=XXXX" --keep-video -f 137+251-17
 ```
 
-A selector like `137/137-0` means "the plain itag, or that exact copy of it" --
-whichever yt-dlp has, it downloads the whole stream, never a slice of one.
+Each id in the printed selector is one this video actually serves: the table
+shows the merged id (`625`), the command names the exact copy behind it
+(`625-2`). Either way yt-dlp downloads the whole stream, never a slice of one —
+and there is deliberately no `base/variant` fallback (see the trap below).
 
 The **Quality** tab in the GUI does all of this with dropdowns and one click;
 see [GUI](#gui).
@@ -618,7 +623,7 @@ carries a logged-in session. That is the wall you hit part-way through a big
 playlist, and it is not something the tool can talk its way around -- it needs your
 login. Two ways to give it one:
 
-**1. Let it read your browser (the default, and the easy one on Windows).**
+**1. Let it read your browser (the default).**
 
 ```bash
 python musictool.py get "https://music.youtube.com/playlist?list=..." -o "~/Music/Gospel Songs"
@@ -629,12 +634,20 @@ installed on your machine, finds the ones with a cookie database, and uses the o
 whose database was touched most recently -- i.e. the browser you actually watch
 YouTube in. On Windows that is normally Edge or Chrome, in
 `%LOCALAPPDATA%\Microsoft\Edge\User Data` or `...\Google\Chrome\User Data`.
-Nothing is exported, nothing is uploaded; yt-dlp decrypts the cookie store locally
-the same way it always has. The log tells you what it picked:
+Nothing is exported, nothing is uploaded; yt-dlp reads the cookie store locally.
+The log tells you what it picked:
 
 ```
 cookies: reading your chrome login (C:\Users\you\AppData\Local\Google\Chrome\...\Cookies)
 ```
+
+> **Windows caveat.** Current Chrome (and other Chromium browsers that have
+> adopted it) protects cookies with App-Bound Encryption, which yt-dlp cannot
+> decrypt (yt-dlp issue #10927 — still the case in 2026.10.26). `auto` does not
+> know that: it picks the most recently used browser even when that is Chrome,
+> and the run then fails with `Failed to decrypt with DPAPI` (see the table
+> below). On Windows the dependable choices are `--cookies-from-browser firefox`
+> or an exported `cookies.txt`.
 
 Pick one yourself with `--cookies-from-browser chrome` (or `edge`, `firefox`,
 `brave`, `vivaldi`, `opera`, `chromium`, `whale`, `safari` -- the browsers yt-dlp
@@ -875,8 +888,8 @@ The best source **for a YouTube-sourced library**, because it is the same
 MusixMatch-licensed timing YouTube Music shows you, so it lines up with your file.
 
 It needs the **videoId**, which `get` records in `.musictool-index.json` beside
-your downloads. Three unauthenticated calls: `next` (find the lyrics tab) then
-`browse` (read the cues). Only the `ANDROID_MUSIC` client returns timings —
+your downloads. Two unauthenticated calls: `next` as `WEB_REMIX` (find the
+lyrics tab) then `browse` as `ANDROID_MUSIC` (read the cues). Only the `ANDROID_MUSIC` client returns timings —
 `WEB_REMIX` returns plain text, so the client version matters.
 
 Deliberately does **not** search YouTube by artist/title. YouTube's search never
@@ -993,7 +1006,7 @@ so you can copy it into a shell or a cron job.
 - **The output folder is remembered.** Downloading somewhere saves that folder,
   and it is the default the next time you open the window (or run the CLI). The
   URLs and folders you use are kept as history too.
-- **Stop** — bottom right, live only while a job runs; see "Stopping a run".
+- **Stop** — bottom right, never greyed out; see "Stopping a run".
 - **Check access (no cookies)** and **List qualities + sizes** — next to the
   download button: the first tells you whether YouTube is blocking you before you
   change anything, the second prints the quality/size table into the log so you
@@ -1099,8 +1112,9 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 808 assertions, 0 failures**
-(`tests/test_musictool.py`): text normalisation against real messy
+**Verified by running the code — 808 assertions, 0 failures** on a machine
+without tkinter (`tests/test_musictool.py`; where tkinter is installed, the
+"gui fails gracefully without tkinter" check fails — see `docs/TESTING.md`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes
 (including `WEB_REMIX` returning no timings and `ANDROID_MUSIC` returning cues),
@@ -1139,8 +1153,8 @@ accepted.
   the documented reverse-engineered InnerTube flow; if YouTube changes the client
   version that returns timings, that provider will simply return nothing and fall
   through to `lrclib`.
-- **The GUI's pixels.** tkinter is not installed in this sandbox, so the window was
-  never *drawn*. Everything except the drawing is now executed for real against
+- **The GUI's pixels.** The sandbox has no display, so the window was never
+  *drawn*. Everything except the drawing is now executed for real against
   `tests/tkstub.py`: `gui.run()` builds all seven tabs, every button is invoked, and
   the argv each one produces is captured and asserted — including ticking the
   quick-strip `--allow-unsynced` box, loading the file list, skipping a highlighted
@@ -1150,5 +1164,7 @@ accepted.
   subcommand, and each value round-trips through `build_argv` and back through the
   real argparse parser. What no stub can prove is font metrics, real sash dragging
   and how the theme looks on your platform.
-- **Real `yt-dlp` downloads**, for the same egress reason; a fake `yt-dlp`
-  exercises the argument building, output parsing and index writing.
+- **Real downloads from YouTube**, for the same egress reason. A real
+  `yt-dlp` was run against a local HTTP server (above), and the suite's fake
+  `yt-dlp` exercises the argument building, output parsing and index writing,
+  but no file has been fetched from YouTube itself.

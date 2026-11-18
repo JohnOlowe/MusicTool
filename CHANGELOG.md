@@ -2,9 +2,26 @@
 
 Newest first. Every entry is a real commit — `git show <hash>` has the full
 reasoning. The assertion count after each change is from running
-`python3 tests/test_musictool.py`.
+`python3 tests/test_musictool.py` on a machine without tkinter. One of the 808
+("gui fails gracefully without tkinter") only passes there — see docs/TESTING.md.
 
 ---
+
+## `076d1ce` — handoff material from the hardware-acceleration sessions
+*2026-11-18 · 808 assertions (no code touched)*
+
+Adds `handoff/`: `CONTEXT_MASTER.md`, seven ffmpeg/hardware guides with their
+scripts (`handoff/guides/`) and three job-state notes
+(`handoff/context/pdfs-and-state/`). None of it is MusicTool code — it is
+ffmpeg, Quick Sync, Android and Premiere know-how for the same owner's
+machines, kept here so it is not lost. See `handoff/README.md`.
+
+## `7bedd12` — make it a repository in its own right
+*2026-11-18 · 808 assertions*
+
+`pyproject.toml` (so `pip install .` puts a `musictool` command on the PATH),
+this changelog, `HANDOFF.md`, `docs/` (ARCHITECTURE, DECISIONS, TESTING,
+RECIPES) and `.gitignore`. No behaviour change.
 
 ## `65af4a2` — progress bars open visible, a queue, remaining count + ETA, `--jobs`
 *2026-10-23 · 808 assertions*
@@ -80,7 +97,8 @@ Three complaints about the window, and one real bug found while fixing them.
   line in it passes the wheel to the tab, while one holding thirty URLs keeps it.
 - **Folded.** *More options* dumped all 41 settings at once. The grid now shows
   rows that have something in them plus anything changed, and folds the blank
-  rest behind one button — 10 of 41 on screen instead of 41.
+  rest behind one button — 10 of 41 on screen instead of 41. (`--jobs`, added
+  in `65af4a2`, makes it 42 settings with 11 on screen and 31 folded.)
 - **Saved.** Every field on every tab, the mode, the open URLs and whether the
   options were expanded are written to `gui_opts`/`gui_extra` as you change
   them, on every run, and on close.
@@ -100,7 +118,8 @@ sitting right there. Nothing showed the language and nothing let you ask for one
 `--audio-lang` (default `en`) is now on `get` and `formats`, and `formats`
 prints what is on offer with a `lang` column (`*` marks the original, and the
 column only appears when something is tagged). The preference reaches yt-dlp as
-a format filter — `ba[language^=en]/ba/b` — not `--format-sort lang:en`, which
+a format filter — `ba[language^=en]/ba/b` for audio, `bv*+ba[language^=en]/bv*+ba/b`
+with `--keep-video` — not `--format-sort lang:en`, which
 looks right and does nothing.
 
 ## `4974eb3` — the quality you ask for is the quality you get
@@ -162,8 +181,8 @@ status bar created it with `state="disabled"` and `busy()` was meant to enable
 it while a job ran, but fifteen lines later the shared-state block rebound the
 name (`stop_btn = None`), so `busy()`'s `if stop_btn is not None` never fired.
 
-Stop is now the one control that stays live while every other button is greyed
-out, `stop_now()` knows whether anything is running, and the in-flight count is
+Stop is now never greyed out (since `65af4a2` the Download button also stays
+live, as *Add to queue*), `stop_now()` knows whether anything is running, and the in-flight count is
 data rather than a widget so it is accurate the moment a job starts and ends.
 
 ## `5586876` — a quality picker: collapsed list, auto/manual choice, filters
@@ -194,7 +213,8 @@ downloads. Commands: `get`, `check`, `formats`, `lyrics`, `scan`, `duplicates`,
   unavailable / network.
 - `formats` lists every quality with its real size, codec, container and fps,
   plus the exact command to take it.
-- `get` resolves quality per video, honours `--quality`/`--max-size`/`-f`, and
-  embeds metadata, thumbnails and chapters.
+- `get` honours `--quality`/`--max-size`/`-f` and embeds metadata, thumbnails
+  and chapters. (It resolved quality once per batch, not per video — a bug
+  fixed in `6102667`.)
 - The GUI is generated from the same argparse parser, so every CLI flag is
   reachable in it.

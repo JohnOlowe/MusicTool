@@ -14,7 +14,7 @@
   - `~/burn_3core.sh` = original 3-way split that caused the 8s drift
 
 ## The two bugs hit so far
-1. **Sync drift at 15:30**: `OFFSET = idx * CHUNK (927)` assumed exact cuts. Segment with `-c copy` cuts on keyframe (~918-930s), so part 2 subtitles 8.08s too early. Fix = measure real `D0` via `ffprobe reset_00.mp4` and use `OFFSET = cumulative DUR`.
+1. **Sync drift at 15:30**: `OFFSET = idx * CHUNK (927)` assumed exact cuts. Segment with `-c copy` cuts on keyframe (~918-930s), so part 2 subtitles 8.08s too early. Fix = measure the real duration of the first part (`burnfix-home.sh` measures the finished `burn_00.mp4`, falling back to 930.018) and use `OFFSET = cumulative DUR`.
 2. **bc: command not found**: Termux on your phone does NOT have `bc`. All `bc` math failed -> `ss: -t` empty -> 3 ffmpeg fails -> only old `burn_00.mp4` was concatenated. Fix = `awk` only.
 3. **ls cannot access reset_00.mp4**: `burnfix.sh` did `cd MovieBox` but files are in `$HOME`. Fix = `cd "$HOME"` or absolute `$HOME/burn_00.mp4`.
 
@@ -26,9 +26,9 @@
 
 ## Verified working config for next run (3 cores, same size)
 - `HEIGHT=1080` keep same size, `BITRATE=1350k BUFSIZE=2700k` -> total ~1478k, file ~500MB same as source 520MB
-- `h264_mediacodec -profile:v main -level 4.0 -g 50` - CBR enforced, no `bc`, `awk` for math
+- `h264_mediacodec -profile:v main -level 4.0 -g 50`, no `bc`, `awk` for math. **CBR is not actually enforced by these flags**: `-profile:v main` only sets the profile and `h264_mediacodec` ignores `-maxrate`/`-bufsize`. Add `-bitrate_mode cbr` to ask for CBR (see `guides/phone-first-ffmpeg.md`). Also change `-level 4.0` to `-level 4`: `4.0` is not one of `h264_mediacodec`'s named levels (`4` is), so it is read as the raw number 4 — MediaCodec's constant for **level 1.1** (checked in FFmpeg's `mediacodecenc.c`). Named values such as `3.1` work as expected.
 - Remaining 1849s split 3 ways = 616.3s each, offsets: 930.018, 1546.35, 2162.69
-- Must verify font in 8 seconds BEFORE long run: `ffmpeg -ss 930 -t 5 ...` + check stderr for `fontselect: (Caveat`
+- Must verify font in 8 seconds BEFORE long run: `ffmpeg -ss 930 -t 5 ...` + check the stderr `fontselect:` line. Read the path **after** the `->`: it must be `.../Caveat.ttf`. The part in brackets, `(Caveat, 400, 0)`, is only the requested name and appears even when libass falls back to another font.
 
 ## Devices (owned vs borrowed) - user correction 2026-10-24
 - Owned: Celeron N3350 laptop (h264_qsv), Tecno Spark 30C Helio G81 (h264_mediacodec) - ONLY these
@@ -41,10 +41,12 @@
 3. Run `~/burnfix.sh` (now fixed) - 10 min
 4. Verify at 15:30, 30:45, concat -> `/storage/67FE-19FE/Download/MovieBox/Big_Little_Lies_1080P_S02_E05.subbed.mp4`
 
-## Files saved in /home/user workspace
-- `android-emulator-setup.md` (borrowed EliteBook note fixed)
-- `subtitle-hard-burn.md` (ownership + TV FAT32 fix)
-- `premiere-proxy-guide.md` (Celeron-only, no IdeaPad)
-- `phone-first-ffmpeg.md`, `qsv-ffmpeg-context.md`, `bitrate-and-subspeed-fixes.md`
-- This state file: `context/BigLittleLies-2x05-burn-state.md`
-- Workspace copies of scripts: `burn_3core-home.sh`, `burnfix-home.sh` (see root)
+## Where these files are now (in this repository)
+- `handoff/guides/`: `android-emulator-setup.md` (borrowed EliteBook note fixed),
+  `subtitle-hard-burn.md` (ownership + TV FAT32 fix), `premiere-proxy-guide.md`
+  (Celeron-only, no IdeaPad), `phone-first-ffmpeg.md`, `qsv-ffmpeg-context.md`,
+  `bitrate-and-subspeed-fixes.md`
+- This state file: `handoff/context/pdfs-and-state/BigLittleLies-2x05-burn-state.md`
+- Script copies: `handoff/guides/burn_3core-home.sh` (the buggy original, kept for
+  reference) and `handoff/guides/burnfix-home.sh` (the fix). On the phone they
+  live as `~/burn_3core.sh` and `~/burnfix.sh`.

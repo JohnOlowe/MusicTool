@@ -2837,7 +2837,7 @@ check("...but a box that really can scroll keeps the wheel for itself",
       _garea._over_me(_ut) is False)
 _ut.buf = _had
 
-# --- folded: you see what has been set, not all forty-one rows
+# --- folded: you see what has been set, not all forty-two rows
 _cells = [(d, c, sp) for _b, rows in _gpane._groups for (d, c, sp, _o) in rows]
 _vis = [d for d, c, _s in _cells if c.geo is not None]
 check("every option still exists behind the fold",

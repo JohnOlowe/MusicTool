@@ -4,14 +4,14 @@
 
 ## Your hardware — what matters here
 
-| Machine you own | Cores / RAM | Hardware | What works |
+| Machine | Cores / RAM | Hardware | What works |
 |---|---|---|---|
-| **Celeron N3350** | 2C/2T, ~4GB, HD 500 | `h264_qsv` encode *exists* | **Encode: yes (QSV). Decode: never use `-hwaccel` with a filter — same black-screen bug as the stream engine.** |
+| **Celeron N3350** (owned) | 2C/2T, ~4GB, HD 500 | `h264_qsv` encode *exists* | **Encode: yes (QSV). Decode: never use `-hwaccel` with a filter — same black-screen bug as the stream engine.** |
 | Borrowed EliteBook 840 G6 i5-8365U | 4C/8T, UHD 620 | `h264_qsv` encode | Same rule, just 2–3× faster |
 
-**Hardware decode does NOT make this faster.** Your preview cut is `-ss 120 -t 3 -i movie` — FFmpeg jumps by index and decodes **90 frames**, not the whole film. Adding `-hwaccel qsv` would hand `scale` a `qsv` surface it can't read (`Impossible to convert between formats ... auto_scale_0` → black 0-byte file). That's the exact 1.1.0 bug you fixed. For previews: **software decode + hardware encode *optional***.
+**Hardware decode does NOT make this faster.** Your preview cut is `-ss 120 -t 3 -i movie` — FFmpeg jumps by index to the keyframe before 120 s and decodes only from there to 123 s (a few seconds of frames — ~90 output frames at 30 fps plus the run-up from the keyframe), not the whole film. Adding `-hwaccel qsv` would hand `scale` a `qsv` surface it can't read (`Impossible to convert between formats ... auto_scale_0` → black 0-byte file). That's the exact 1.1.0 bug you fixed. For previews: **software decode + hardware encode *optional***.
 
-**Hardware *encode* does help a little:** `h264_qsv` saves ~20–30% vs `libx264 ultrafast` at 360p, but `libx264 ultrafast` is already 0.3–0.5s per cut and works everywhere. Default to `libx264`; only swap if a probe proves QSV is usable (see §3).
+**Hardware *encode* may help a little** (estimate, not measured): perhaps ~20–30% vs `libx264 ultrafast` at 360p, but `libx264 ultrafast` is already fast for a 3 s cut and works everywhere. Default to `libx264`; only swap if a probe proves QSV is usable (see §3).
 
 ## The rule: input-seek, tiny, silent, limited parallelism
 
@@ -84,11 +84,11 @@ wait
 
 Why these values:
 - `scale=-2:360` — card is ~300px wide. Quarter pixels of 720p = 4× less libscale work. Still sharp, never the bottleneck.
-- `fps=24` — caps 60fps phone footage, halves frames.
+- `fps=24` — caps 60fps phone footage at 24: 2.5× fewer frames (1.25× fewer from 30fps).
 - `-an` — preview is silent, skip audio decode entirely.
 - `ultrafast crf 30` — preview is disposable; 2× faster than `veryfast 28` and still fine at 360p.
 
-Timing on owned hardware: ~0.4s per 3s cut ×6 = 2.4s serial, ~1.3s with JOBS=2. On borrowed i5: ~0.8s.
+Expected timing (estimates — not measured on the N3350): ~0.4s per 3s cut ×6 = 2.4s serial, ~1.3s for all six with JOBS=2. On the borrowed i5: ~0.8s. The concat in §5 adds ~0.05s.
 
 **Do NOT do:** `-hwaccel qsv` before `-i`, or `-vf scale_qsv` — both need `hwdownload` and re-introduce the black-screen path.
 
@@ -148,4 +148,4 @@ UI: `onMouseEnter debounced(120ms) → fetch('/api/preview/priority/:id', {metho
 - `burn_parallel_flexible.sh` — phone-only (`h264_mediacodec`), not for previews. Don't reuse for laptop previews — encoders differ.
 - `phone-first-ffmpeg.md` / `burnfix-home.sh` — separate concern (offline burn). No change needed.
 
-That keeps the Celeron at ~1.3s / preview, never OOM, never black-screen, and the hovered card always jumps the line.
+That should keep the Celeron at roughly 1.3s of extraction (+ ~0.05s concat) per preview — an estimate — never OOM, never black-screen, and the hovered card always jumps the line.

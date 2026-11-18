@@ -4,11 +4,27 @@
 python3 tests/test_musictool.py
 ```
 
-**808 assertions across 33 sections, 0 failures.** About 30 seconds. No network.
+**808 assertions across 33 sections, 0 failures on a machine without
+tkinter.** About 30 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
-`pip install imageio-ffmpeg`. Nothing else — no display, no tkinter, no
-yt-dlp login, no YouTube.
+`pip install imageio-ffmpeg`. Nothing else — no display, no yt-dlp login, no
+YouTube.
+
+**One check is not hermetic.** Section 11 runs the real `musictool.py gui` in a
+subprocess and asserts "gui fails gracefully without tkinter" (exit 1 and a
+"GUI unavailable" message). It only passes where tkinter is missing:
+
+- tkinter installed, no display (Linux CI): `tk.Tk()` raises `TclError`, the
+  exit code is 1 but the message is a traceback on stderr, so the check
+  **fails** (807 pass, 1 fail).
+- tkinter installed with a display (e.g. Windows): not run here, but from the
+  code a real window should open and the suite block until you close it — the
+  test's `run()` helper has no timeout and `gui` enters the Tk main loop. The
+  check then fails as well (exit code 0).
+
+Everything else in the GUI is tested through `tkstub` below and does not care
+whether tkinter is installed.
 
 ---
 
@@ -16,7 +32,7 @@ yt-dlp login, no YouTube.
 
 | thing | stand-in | why |
 |---|---|---|
-| tkinter | `tests/tkstub.py` | there is no display in CI, and no tkinter on some targets |
+| tkinter | `tests/tkstub.py` (in-process tests only; section 11's `gui` subprocess uses whatever tkinter is installed) | there is no display in CI, and no tkinter on some targets |
 | yt-dlp | an executable on `PATH` | downloads must be tested without downloading |
 | the three lyrics APIs | a local `http.server` | providers must be tested against real HTTP, but not real providers |
 | ffmpeg | the real thing | container behaviour is exactly what cannot be faked |

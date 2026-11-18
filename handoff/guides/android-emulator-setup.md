@@ -55,10 +55,13 @@ dism /online /enable-feature /featurename:VirtualMachinePlatform /all
 
 **Reboot.** These load at boot.
 
-> Do **not** install the legacy "Android Emulator Hypervisor Driver" (AEHD). WHPX,
+> Do **not** install the "Android Emulator Hypervisor Driver" (AEHD). WHPX,
 > enabled above, is what the modern emulator uses. If a guide tells you to run
-> `sdkmanager "extras;google;Android_Emulator_Hypervisor_Driver"`, ignore it —
-> that package is no longer in the SDK repository and the step is unnecessary.
+> `sdkmanager "extras;google;Android_Emulator_Hypervisor_Driver"`, skip it — the
+> step is unnecessary. AEHD is being retired: emulator 37.1.11 (July 2026)
+> migrates Windows users from AEHD to WHPX, and Google ends AEHD support on
+> 31 December 2026. (Intel HAXM is already gone — removed in emulator 36.2.11,
+> October 2025.)
 
 ## Step 3 — Install Java
 
@@ -252,7 +255,7 @@ matters. Real framing needs a physical phone.
 | `ERROR: x86_64 emulation currently requires hardware acceleration` | BIOS VT-x off, or no reboot after `dism` | Step 1, then Step 2 + reboot |
 | Emulator runs but UI is a slideshow | `hw.gpu.enabled=no` (the default!) | Step 7 → set to `yes` + `host` |
 | Whole machine crawls | `hw.cpu.ncore=4` on a 4-core laptop | Step 7 → `2` |
-| Window invisible / off-screen | Window coords outside display | Task Manager → expand `qemu-system-x86_64` → Maximize. Or `-gpu swiftshader_indirect` |
+| Window invisible / off-screen | Window coords outside display | Task Manager → expand `qemu-system-x86_64` → Maximize. (Do not switch to `-gpu swiftshader_indirect` — software rendering is what Step 7 exists to avoid.) |
 | Console froze mid-download | You clicked in the window (QuickEdit) | Press **Enter** or **Esc** |
 | `devices.xml` / `cvc-*` errors from avdmanager | **Harmless.** AVD is created anyway | Ignore |
 | "already exists" | AVD already made | Add `--force` |

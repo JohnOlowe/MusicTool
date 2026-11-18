@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## (this commit) — Audio tracks tab, and the code fixes from the docs review
+## `e0110df` — Audio tracks tab, and the code fixes from the docs review
 *2026-11-18 · 854 assertions*
 
 **New: see the audio tracks in your language and download one (GUI).**

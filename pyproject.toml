@@ -8,8 +8,10 @@ version = "1.0"
 description = "Download music and video from YouTube with synced lyrics, metadata, quality choice, and a GUI."
 readme = "README.md"
 requires-python = ">=3.8"
+# yt-dlp[default] brings yt-dlp-ejs, the scripts that solve YouTube's
+# challenges; plain "yt-dlp" installs without it.
 dependencies = [
-    "yt-dlp",
+    "yt-dlp[default]",
     "mutagen",
 ]
 keywords = ["youtube", "yt-dlp", "lyrics", "lrc", "music", "downloader", "metadata"]

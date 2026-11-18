@@ -460,6 +460,17 @@ def retry_after_seconds(header, default=RETRY_AFTER_DEFAULT,
     return round(wait * (1.0 + 0.3 * r), 3)
 
 
+def _poisoned_key(key):
+    """A cache entry written by the old keying: a POST stored without its body.
+    It could belong to any request to that URL, so it must not be reused."""
+    try:
+        k = json.loads(key)
+        return isinstance(k, list) and len(k) == 4 and k[0] == "POST" \
+            and k[3] is None
+    except Exception:
+        return False
+
+
 class Http:
     def __init__(self, cache_path=None, delay=0.35, timeout=30, max_wait=240):
         self.delay = delay
@@ -473,6 +484,8 @@ class Http:
                 self.cache = json.load(open(cache_path, encoding="utf-8"))
             except Exception:
                 self.cache = {}
+            self.cache = {k: v for k, v in self.cache.items()
+                          if not _poisoned_key(k)}
 
     def save(self):
         if self.cache_path:
@@ -482,9 +495,16 @@ class Http:
             os.replace(tmp, self.cache_path)
 
     def json(self, url, params=None, headers=None, method="GET", body=None,
-             use_cache=True):
+             use_cache=True, shrink=None):
+        """GET/POST and parse JSON, cached by request. `shrink(result)` may
+        drop what the caller never reads, before it is cached and returned."""
+        # The body is part of the key. It used to be left out unless it was a
+        # string, so every POST to one URL shared one entry: the second song's
+        # YouTube Music lookup was answered with the first song's lyrics.
         key = json.dumps([method, url, sorted((params or {}).items()),
-                          body if isinstance(body, str) else None],
+                          body if body is None or isinstance(body, str)
+                          else json.dumps(body, sort_keys=True,
+                                          ensure_ascii=False)],
                          sort_keys=True, ensure_ascii=False)
         if use_cache and key in self.cache:
             return self.cache[key]
@@ -525,6 +545,8 @@ class Http:
                 result = None
                 break
         self.calls += 1
+        if shrink is not None and result is not None:
+            result = shrink(result)
         if use_cache:
             self.cache[key] = result
         time.sleep(self.delay)

@@ -20,6 +20,7 @@ only, and aggressive bot detection -- that is what kept blocking ytmdl).
 """
 
 import os
+import re
 
 from .util import (similarity, title_variants, artist_variants, timed_to_lrc,
                    norm_key)
@@ -31,7 +32,9 @@ YTM_BASE = os.environ.get("MUSICTOOL_YTM_BASE", "https://music.youtube.com/youtu
 YTM_NEXT = YTM_BASE + "/next"
 YTM_BROWSE = YTM_BASE + "/browse"
 NETEASE_BASE = os.environ.get("MUSICTOOL_NETEASE_BASE", "https://music.163.com/api")
-NETEASE_SEARCH = NETEASE_BASE + "/search/get/web"
+# "/search/get/web" now answers with an encrypted hex string in "result"
+# (seen 2026-11-18); "/search/get" still returns plain JSON, same fields.
+NETEASE_SEARCH = NETEASE_BASE + "/search/get"
 NETEASE_LYRIC = NETEASE_BASE + "/song/lyric"
 NETEASE_HEADERS = {"Referer": "https://music.163.com/",
                    "User-Agent": "Mozilla/5.0 (musictool)"}
@@ -104,7 +107,8 @@ class YTMusic(Provider):
         body = {"context": {"client": {"clientName": "WEB_REMIX",
                                        "clientVersion": "1.20240101.01.00"}},
                 "videoId": video_id}
-        data = http.json(YTM_NEXT, headers={}, method="POST", body=body)
+        data = http.json(YTM_NEXT, headers={}, method="POST", body=body,
+                         use_cache=False)
         if not data:
             return None
         try:
@@ -121,37 +125,66 @@ class YTMusic(Provider):
                 return ep.get("browseId")
         return None
 
+    def _lookup(self, video_id, http):
+        """-> {"cues": [[ms, line], ...]} or {"lines": [...]} or None.
+
+        The raw responses are not cached (one lyrics page is ~650 KB, which
+        would make http-cache.json hundreds of MB on a big playlist); this
+        compact result is, under its own per-videoId key."""
+        key = "ytmusic:" + video_id
+        if key in http.cache:
+            return http.cache[key]
+        browse_id = self._lyrics_browse_id(video_id, http)
+        result = None
+        if browse_id:
+            # ANDROID_MUSIC is the client that returns lyric rows (WEB_REMIX
+            # returns one block of text). Each row carries a cueRange when
+            # YouTube serves timings; since late 2026 it often does not.
+            body = {"context": {"client": {"clientName": "ANDROID_MUSIC",
+                                           "clientVersion": "7.03.52"}},
+                    "browseId": browse_id}
+            data = http.json(YTM_BROWSE, headers={}, method="POST", body=body,
+                             use_cache=False)
+            try:
+                rows = (data["contents"]["elementRenderer"]["newElement"]["type"]
+                        ["componentType"]["model"]["timedLyricsModel"]
+                        ["lyricsData"]["timedLyricsData"])
+            except (KeyError, TypeError):
+                rows = []
+            cues, lines = [], []
+            for row in rows:
+                line = str(row.get("lyricLine", "")).strip()
+                lines.append(line)
+                try:
+                    cues.append([int(row["cueRange"]["startTimeMilliseconds"]), line])
+                except (KeyError, TypeError, ValueError):
+                    pass
+            if cues and len(cues) >= len(rows) // 2:
+                result = {"cues": cues}
+            elif any(lines):
+                result = {"lines": lines}
+        http.cache[key] = result
+        return result
+
     def fetch(self, q, http):
         if not q.video_id:
             return []
-        browse_id = self._lyrics_browse_id(q.video_id, http)
-        if not browse_id:
+        got = self._lookup(q.video_id, http)
+        if not got:
             return []
-        # ANDROID_MUSIC is the client that returns timed cues; WEB_REMIX does not.
-        body = {"context": {"client": {"clientName": "ANDROID_MUSIC",
-                                       "clientVersion": "7.03.52"}},
-                "browseId": browse_id}
-        data = http.json(YTM_BROWSE, headers={}, method="POST", body=body)
-        if not data:
-            return []
-        try:
-            model = (data["contents"]["elementRenderer"]["newElement"]["type"]
-                     ["componentType"]["model"]["timedLyricsModel"]["lyricsData"])
-            rows = model["timedLyricsData"]
-        except (KeyError, TypeError):
-            return []
-        cues = []
-        for row in rows:
-            try:
-                ms = int(row["cueRange"]["startTimeMilliseconds"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            cues.append((ms, row.get("lyricLine", "").strip()))
-        if not cues:
-            return []
-        return [Candidate(self.name, q.title, q.artist, album="", duration=q.duration,
-                          lyrics=timed_to_lrc(cues), synced=True, trusted=True,
-                          note=f"videoId {q.video_id}, {len(cues)} cues")]
+        if got.get("cues"):
+            cues = [(int(ms), line) for ms, line in got["cues"]]
+            return [Candidate(self.name, q.title, q.artist, album="",
+                              duration=q.duration, lyrics=timed_to_lrc(cues),
+                              synced=True, trusted=True,
+                              note=f"videoId {q.video_id}, {len(cues)} cues")]
+        # Text only: still the exact song, so it beats any fuzzy plain match,
+        # but a synced hit from another provider wins (see find_best).
+        text = "\n".join(got["lines"]).strip() + "\n"
+        return [Candidate(self.name, q.title, q.artist, album="",
+                          duration=q.duration, lyrics=text, synced=False,
+                          trusted=True,
+                          note=f"videoId {q.video_id}, no timings from YouTube")]
 
 
 # --------------------------------------------------------------------------
@@ -161,8 +194,25 @@ class LrcLib(Provider):
 
     base = os.environ.get("MUSICTOOL_LRCLIB_BASE", "https://lrclib.net")
 
+    # What fetch() reads. A search returns up to 40 records with synced AND
+    # plain lyrics (~200 KB); plain is never used when synced exists, so the
+    # cache keeps only this (about 1/5 of the size, measured on real results).
+    KEEP = ("id", "trackName", "artistName", "albumName", "duration",
+            "syncedLyrics", "plainLyrics")
+
+    @classmethod
+    def _shrink(cls, data):
+        def one(r):
+            if not isinstance(r, dict):
+                return r
+            r = {k: r[k] for k in cls.KEEP if k in r}
+            if r.get("syncedLyrics"):
+                r.pop("plainLyrics", None)
+            return r
+        return [one(r) for r in data] if isinstance(data, list) else one(data)
+
     def _get(self, http, path, params):
-        data = http.json(self.base + path, params=params)
+        data = http.json(self.base + path, params=params, shrink=self._shrink)
         return data if data else None
 
     def fetch(self, q, http):
@@ -213,6 +263,14 @@ class NetEase(Provider):
     blurb = "NetEase Cloud Music. Public, keyless, large synced corpus."
 
     NO_LYRIC_MARKERS = ("纯音乐", "暂无歌词", "instrumental", "no lyrics")
+    # NetEase opens most lyrics with credit lines: "[00:00.000] 作词 : Ed Sheeran"
+    CREDIT = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+(?:作词|作曲|编曲|制作人|监制|混音|母带|"
+                        r"和声|录音|出品|发行|企划|统筹|吉他|贝斯|鼓|键盘|弦乐|人声|"
+                        r"词|曲)\s*[:：]")
+
+    @classmethod
+    def strip_credits(cls, text):
+        return "\n".join(l for l in text.splitlines() if not cls.CREDIT.match(l))
 
     def fetch(self, q, http):
         titles = q.titles()
@@ -221,7 +279,11 @@ class NetEase(Provider):
         data = http.json(NETEASE_SEARCH,
                          params={"s": query, "type": 1, "limit": 10, "offset": 0},
                          headers=NETEASE_HEADERS)
-        songs = ((data or {}).get("result") or {}).get("songs") or []
+        result = (data or {}).get("result") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            # an API change (e.g. an encrypted string) - no results, not a crash
+            return []
+        songs = result.get("songs") or []
         out = []
         for s in songs[:6]:
             sid = s.get("id")
@@ -235,6 +297,7 @@ class NetEase(Provider):
                             params={"id": sid, "lv": -1, "kv": 1, "tv": -1},
                             headers=NETEASE_HEADERS)
             text = ((lyr or {}).get("lrc") or {}).get("lyric") or ""
+            text = self.strip_credits(text)
             if not text.strip() or any(m in text for m in self.NO_LYRIC_MARKERS):
                 continue
             from .util import classify

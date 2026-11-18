@@ -56,6 +56,7 @@ MYH, REST, HOLY, CLOSER, JIREH = (lrc("move your heart"), lrc("rest on us"),
 WWW = "[00:01.65] Hmm-ah\n" + lrc("well well well", 8, start=2)
 TODO_PLAIN = "Brotó de mi alma una nueva canción\n" * 4
 NETEASE_LRC = lrc("netease", 12)
+NE_MODE = {}
 YTM_CUES = [("Hmm-ah", 1650), ("Story to tell", 4140), ("All too well", 7910),
             ("Good to me", 11450), ("Yeah", 15200), ("Mountain", 19180)]
 
@@ -116,11 +117,25 @@ class Stub(http.server.BaseHTTPRequestHandler):
             key = norm(q.get("q", "")).replace("maverick city music", "").strip()
             return self._send([DB[key]] if key in DB else [])
         if u.path == "/ne/search/get/web":
+            # what the real /search/get/web answers since 2026-11: an
+            # encrypted hex string where the result object used to be
+            return self._send({"code": 200, "result": "35b1748964af8a7c1d88"})
+        if u.path == "/ne/search/get" and NE_MODE.get("encrypted"):
+            return self._send({"code": 200, "result": "35b1748964af8a7c1d88"})
+        if u.path == "/ne/search/get" and NE_MODE.get("right_artist"):
+            return self._send({"code": 200, "result": {"songs": [
+                {"id": 7, "name": "Shape of You", "artists": [{"name": "Ed Sheeran"}],
+                 "album": {"name": "Divide"}, "duration": 233712}]}})
+        if u.path == "/ne/search/get":
             # deliberately the WRONG artist: the guard must reject it
             return self._send({"code": 200, "result": {"songs": [
                 {"id": 5, "name": "Well, Well, Well", "artists": [{"name": "Someone Else"}],
                  "album": {"name": "Other"}, "duration": 225000}]}})
         if u.path == "/ne/song/lyric":
+            if NE_MODE.get("right_artist"):
+                return self._send({"code": 200, "lrc": {"lyric":
+                    "[00:00.000] 作词 : Ed Sheeran\n[00:01.000] 作曲 : Steve Mac\n"
+                    + NETEASE_LRC}})
             return self._send({"code": 200, "lrc": {"lyric": NETEASE_LRC}})
         self._send({"error": "no route"}, 404)
 
@@ -134,15 +149,21 @@ class Stub(http.server.BaseHTTPRequestHandler):
             return self._send({"contents": {"singleColumnMusicWatchNextResultsRenderer":
                 {"tabbedRenderer": {"watchNextTabbedResultsRenderer": {"tabs": [
                     {"tabRenderer": {"endpoint": {"browseEndpoint": {
-                        "browseId": "MPLYxyz",
+                        "browseId": "MPLY" + str(body.get("videoId", "xyz")),
                         "browseEndpointContextSupportedConfigs": {
                             "browseEndpointContextMusicConfig": {
                                 "pageType": "MUSIC_PAGE_TYPE_TRACK_LYRICS"}}}}}}]}}}}})
         if u.path == "/yt/browse":
             if client != "ANDROID_MUSIC":          # WEB_REMIX has no timings
                 return self._send({"contents": {"plain": "no timings"}})
-            rows = [{"lyricLine": t, "cueRange": {"startTimeMilliseconds": str(ms)}}
-                    for t, ms in YTM_CUES]
+            bid = str(body.get("browseId", ""))
+            if "UNTIMED" in bid:   # what YouTube mostly serves since 2026-11
+                rows = [{"lyricLine": t} for t, ms in YTM_CUES]
+            else:
+                tag = "" if bid in ("MPLYxyz", "MPLYVID123") else bid + " "
+                rows = [{"lyricLine": tag + t,
+                         "cueRange": {"startTimeMilliseconds": str(ms)}}
+                        for t, ms in YTM_CUES]
             return self._send({"contents": {"elementRenderer": {"newElement": {"type":
                 {"componentType": {"model": {"timedLyricsModel": {"lyricsData":
                     {"timedLyricsData": rows}}}}}}}}})
@@ -495,8 +516,14 @@ check("config reset", "reset" in run("config", "--reset").stdout)
 r = run("doctor")
 check("doctor sees fake yt-dlp", "2026.09.16-fake" in r.stdout)
 check("doctor sees ffmpeg", "found" in r.stdout)
+check("doctor reports yt-dlp-ejs (pip install yt-dlp leaves it out)",
+      "ejs       :" in r.stdout
+      and ("installed" in r.stdout or "yt-dlp[default]" in r.stdout
+           or "not checked" in r.stdout))
 r = run("providers", "--test")
-check("providers --test: ytmusic needs videoId", "needs a videoId" in r.stdout)
+check("providers --test: ytmusic probed with the sample videoId",
+      "ytmusic    reachable: timed lyrics" in r.stdout
+      and "videoId JGwWNGJdvx8" in r.stdout, r.stdout[:300])
 check("providers --test: lrclib reachable", "reachable" in r.stdout)
 for sub in ("get", "lyrics", "scan", "duplicates", "providers", "config"):
     check(f"{sub} --help", run(sub, "--help").returncode == 0)
@@ -3679,6 +3706,100 @@ finally:
 check("tkinter present but no display: a clear message, not a traceback",
       _rc == 1 and "GUI unavailable" in _buf.getvalue()
       and "no display" in _buf.getvalue(), _buf.getvalue()[:200])
+
+# ============================================================ 36. live-API drift
+print("\n--- 36. what the live APIs taught us (2026-11-18) ---")
+from musictool import providers as _P
+_h = util.Http(delay=0)
+# the old cache key left dict bodies out: every POST to /next or /browse
+# shared one entry, so song 2 got song 1's lyrics - and as "trusted"
+_a = _P.YTMusic().fetch(_P.Query("A", "Song A", video_id="vidA"), _h)
+_b = _P.YTMusic().fetch(_P.Query("B", "Song B", video_id="vidB"), _h)
+check("ytmusic: two videos get two different lyrics (cache key includes the body)",
+      _a and _b and "MPLYvidA" in _a[0].lyrics and "MPLYvidB" in _b[0].lyrics,
+      (_a and _a[0].lyrics[:40], _b and _b[0].lyrics[:40]))
+_hk = util.Http(delay=0)
+_r1 = _hk.json(BASE + "/yt/next", method="POST", body={"videoId": "k1"})
+_r2 = _hk.json(BASE + "/yt/next", method="POST", body={"videoId": "k2"})
+check("Http cache: two POSTs with different JSON bodies are two entries",
+      "MPLYk1" in json.dumps(_r1) and "MPLYk2" in json.dumps(_r2))
+_n = len(CALLS)
+_a2 = _P.YTMusic().fetch(_P.Query("A", "Song A", video_id="vidA"), _h)
+check("...and the repeat is answered from the compact per-video cache, no calls",
+      len(CALLS) == _n and _a2 and _a2[0].lyrics == _a[0].lyrics)
+check("...which stores the cues, not the raw ~650 KB page",
+      "ytmusic:vidA" in _h.cache and "cues" in _h.cache["ytmusic:vidA"]
+      and not any("/yt/" in k for k in _h.cache))
+_u = _P.YTMusic().fetch(_P.Query("C", "Song C", video_id="UNTIMED1"), _h)
+check("ytmusic without timings: an UNSYNCED exact-match candidate, not nothing",
+      len(_u) == 1 and not _u[0].synced and _u[0].trusted
+      and "Story to tell" in _u[0].lyrics and "[00:" not in _u[0].lyrics
+      and "no timings" in _u[0].note, _u and _u[0].note)
+_cp = os.path.join(WORK, "poisoned-cache.json")
+json.dump({json.dumps(["POST", BASE + "/yt/next", [], None]): {"old": 1},
+           json.dumps(["GET", BASE + "/api/get", [["q", "x"]], None]): {"ok": 1}},
+          open(_cp, "w"))
+check("entries written by the old keying are dropped when the cache loads",
+      list(util.Http(cache_path=_cp).cache.values()) == [{"ok": 1}])
+NE_MODE["encrypted"] = True
+try:
+    _e = _P.NetEase().fetch(_P.Query("Ed Sheeran", "Shape of You"), _h)
+    check("netease: an encrypted/string result is 'no results', not a crash", _e == [])
+except Exception as e:
+    check("netease: an encrypted/string result is 'no results', not a crash", False, repr(e))
+NE_MODE.clear()
+NE_MODE["right_artist"] = True
+_ne = _P.NetEase().fetch(_P.Query("Ed Sheeran", "Shape of You"), util.Http(delay=0))
+NE_MODE.clear()
+check("netease uses /search/get (the /web variant is encrypted now)",
+      any(c[:2] == ("GET", "/ne/search/get") for c in CALLS)
+      and _P.NETEASE_SEARCH.endswith("/search/get"))
+check("netease credit lines (作词/作曲 ...) are stripped",
+      _ne and "作词" not in _ne[0].lyrics and "作曲" not in _ne[0].lyrics
+      and "netease line number 0" in _ne[0].lyrics, _ne and _ne[0].lyrics[:60])
+_sh = _P.LrcLib._shrink([{"id": 1, "trackName": "T", "syncedLyrics": "[00:01.00] a",
+                          "plainLyrics": "a", "instrumental": False, "extra": "x" * 99},
+                         {"id": 2, "trackName": "U", "syncedLyrics": None,
+                          "plainLyrics": "only plain"}])
+check("lrclib cache keeps what fetch reads: synced kept, unused plain/extras dropped",
+      _sh == [{"id": 1, "trackName": "T", "syncedLyrics": "[00:01.00] a"},
+              {"id": 2, "trackName": "U", "syncedLyrics": None,
+               "plainLyrics": "only plain"}], _sh)
+_jr = download.js_runtime
+try:
+    download.js_runtime = lambda: ("node", "/usr/bin/node")
+    _ra = download.runtime_args({})
+    _ra2 = download.runtime_args({"js_runtimes": "quickjs"})
+    download.js_runtime = lambda: ("deno", "/usr/bin/deno")
+    _ra3 = download.runtime_args({})
+    download.js_runtime = lambda: ("node", "/usr/bin/node")
+    _pa = []
+    _real_run = download.subprocess.run
+
+    def _cap(args, **kw):
+        _pa.append(list(args))
+        raise RuntimeError("captured")
+    download.subprocess.run = _cap
+    try:
+        download.probe("https://youtu.be/x", {"remote_components": "ejs:github"})
+    finally:
+        download.subprocess.run = _real_run
+finally:
+    download.js_runtime = _jr
+check("node is enabled automatically when it is the only JS runtime (no deno)",
+      _ra == ["--js-runtimes", "node"], _ra)
+check("...an explicit --js-runtimes wins, and with deno nothing is added",
+      _ra2 == ["--js-runtimes", "quickjs"] and _ra3 == [], (_ra2, _ra3))
+check("probe (check/formats/quality picks) passes --remote-components and the runtime",
+      _pa and "--remote-components" in _pa[0] and "ejs:github" in _pa[0]
+      and "--js-runtimes" in _pa[0], _pa and _pa[0][-6:])
+_best, _ = _P.find_best(_P.Query("C", "Song C", video_id="UNTIMED1"),
+                        [_P.YTMusic()], util.Http(delay=0))
+check("an untimed ytmusic hit alone is not used without --allow-unsynced",
+      _best is None)
+_best, _ = _P.find_best(_P.Query("C", "Song C", video_id="UNTIMED1"),
+                        [_P.YTMusic()], util.Http(delay=0), allow_unsynced=True)
+check("...and is used with it", _best is not None and _best.provider == "ytmusic")
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

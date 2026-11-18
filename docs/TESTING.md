@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**854 assertions across 35 sections (plus 8b), 0 failures** — with or without
+**870 assertions across 36 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 35 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -135,6 +135,16 @@ Proven by execution:
   it is what gets sent), Firefox-first cookie advice, the removed
   Genius/Musixmatch settings, the `pyproject.toml` URLs, and `gui` with tkinter
   but no display exiting 1 with a message instead of a traceback
+- live-API drift (section 36), each from a real request on 2026-11-18: two
+  POSTs with different bodies are two cache entries (the old key made every
+  song share the first song's YouTube Music lyrics — this check fails against
+  the old code); ytmusic rows without `cueRange` become an unsynced trusted
+  candidate, used only with `--allow-unsynced`; ytmusic caches a compact
+  per-videoId result, not the raw page; poisoned cache entries are dropped on
+  load; NetEase's encrypted `/web` answer is "no results", `/search/get` is
+  used, and its credit lines are stripped; lrclib records are trimmed to the
+  fields read; `runtime_args` enables node when it is the only runtime, an
+  explicit `--js-runtimes` wins, and `probe` passes both runtime flags
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

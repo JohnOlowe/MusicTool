@@ -9,7 +9,7 @@ import time
 
 from . import cancel, formats, progress
 from .util import (ytdlp_cmd, have_ffmpeg, is_windows, is_net_error, net_sleeps,
-                   detect_browser)
+                   detect_browser, js_runtime)
 
 INDEX_NAME = ".musictool-index.json"
 
@@ -371,10 +371,7 @@ def build_args(url, o):
             args += ["-f", _sel]
     if o.get("merge_format"):
         args += ["--merge-output-format", o["merge_format"]]
-    if o.get("remote_components"):
-        args += ["--remote-components", o["remote_components"]]
-    if o.get("js_runtimes"):
-        args += ["--js-runtimes", o["js_runtimes"]]
+    args += runtime_args(o)
     # Keep the artist tag clean, exactly like the original shell script did.
     args += list(("--replace-in-metadata",) + TOPIC_FIX)
     args += ["--parse-metadata", "%(artist,uploader)s:%(meta_artist)s"]
@@ -384,12 +381,33 @@ def build_args(url, o):
     return args
 
 
+def runtime_args(o):
+    """--remote-components / --js-runtimes for every yt-dlp call.
+
+    yt-dlp enables only deno by default. When node is the only runtime
+    installed, it is enabled here, so YouTube's challenge can still be solved
+    without remembering --js-runtimes node. An explicit --js-runtimes always
+    wins."""
+    args = []
+    if o.get("remote_components"):
+        args += ["--remote-components", o["remote_components"]]
+    js = o.get("js_runtimes")
+    if not js and js_runtime()[0] == "node":
+        js = "node"
+    if js:
+        args += ["--js-runtimes", js]
+    return args
+
+
 def probe(url, o):
     """Cheap metadata read, no download. -> list of dicts."""
     args = list(ytdlp_cmd()) + [
         "--flat-playlist" if o.get("flat") else "--no-playlist",
         "-J", "--no-warnings", url]
     args += cookie_args(o)
+    # check/formats/quality picks used to ignore --js-runtimes and
+    # --remote-components here, so only the download itself honoured them
+    args += runtime_args(o)
     try:
         out = subprocess.run(args, capture_output=True, text=True, timeout=180)
     except Exception as e:
@@ -410,6 +428,7 @@ def print_target_name(url, o):
         "--parse-metadata", "%(artist,uploader)s:%(meta_artist)s",
         "--print", "%(uploader)s - %(title)s", url]
     args += cookie_args(o)
+    args += runtime_args(o)
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=120)
     except Exception:
@@ -429,7 +448,7 @@ def _run_once(args, log, on_line=None, on_file=None):
         proc = subprocess.Popen(args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
     except FileNotFoundError:
-        return [], "yt-dlp not found. Install it: pip install yt-dlp"
+        return [], 'yt-dlp not found. Install it: pip install -U "yt-dlp[default]"'
     except Exception as e:
         return [], str(e)
     segments = []
@@ -545,5 +564,5 @@ def preflight(o, log=print):
         if ver:
             log(f"yt-dlp {ver}")
     except Exception:
-        problems.append("yt-dlp not found. Install it: pip install yt-dlp")
+        problems.append('yt-dlp not found. Install it: pip install -U "yt-dlp[default]"')
     return problems

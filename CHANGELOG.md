@@ -8,6 +8,48 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## (this commit) — first live run: three provider bugs, yt-dlp setup, README
+*2026-11-18 · 870 assertions*
+
+The sandbox could finally reach the lyrics APIs, so they were run for real.
+**Every provider had a problem that the stub-based tests could not see.**
+
+- **Every song after the first got the first song's YouTube Music lyrics.**
+  `Http.json` left a dict request body out of the cache key, so all POSTs to
+  `/next` and `/browse` shared one entry. They were `trusted` (exact videoId),
+  so the wrong-song guard never looked, and the entry lived on in
+  `http-cache.json`. The key now includes the body; old entries are dropped on
+  load. A test fails against the old key.
+- **NetEase crashed on every search** (`'str' object has no attribute 'get'`):
+  `/api/search/get/web` now answers with an encrypted string. Switched to
+  `/api/search/get` (same fields), an unexpected answer is "no results", and
+  the `作词`/`作曲`/`制作人` credit lines are removed before embedding.
+- **YouTube Music's lyrics were all thrown away**: the rows now mostly arrive
+  without times. They become an unsynced exact-match candidate (used with
+  `--allow-unsynced`; a synced hit elsewhere still wins). ytmusic caches a
+  compact per-videoId result instead of the ~650 KB page, and
+  `providers --test` now probes a sample video and says whether times came.
+- **`http-cache.json` ~4× smaller**: lrclib records are cached with only the
+  fields read (no `plainLyrics` next to `syncedLyrics`). Measured: 1.43 MB →
+  358 KB for three songs, same picks.
+- **`formats --js-runtimes/--remote-components` did nothing**: `probe` (the
+  lookup behind `check`, `formats` and `--quality`/`--max-size`/
+  `--audio-lang`) never passed them. One `runtime_args()` now serves every
+  yt-dlp call and enables node when it is the only JS runtime.
+- **`pip install .` got a yt-dlp that cannot solve YouTube's challenge**:
+  plain `yt-dlp` has no dependencies, so no `yt-dlp-ejs`. `pyproject.toml`
+  now depends on `yt-dlp[default]`; `doctor` has an `ejs` line.
+- **README**: contents line; install with `yt-dlp[default]` and a JS runtime
+  (Termux: `pkg update && pkg upgrade` before `pkg install deno`); lyrics
+  sources as they behave today; what a cloud address gets from YouTube;
+  "Verified / not verified" rewritten from the live results. DECISIONS gains
+  "Lyrics APIs, as seen live".
+
+Live results: lrclib gave synced lyrics for *Shape of You* and Sinach's
+*Way Maker*; an invented title was refused; a forced re-run made 0 calls; a
+real yt-dlp download (local server) produced live progress events. YouTube
+itself refuses this cloud address, so real downloads remain unverified.
+
 ## `e0110df` — Audio tracks tab, and the code fixes from the docs review
 *2026-11-18 · 854 assertions*
 

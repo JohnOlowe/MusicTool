@@ -8,6 +8,8 @@ multiple lyrics sources, and both a CLI and a GUI.
 - **Python 3.8+, stdlib only** plus two dependencies: `yt-dlp` and `mutagen`
 - Works offline for scanning; the only network calls are to yt-dlp and lyrics APIs
 
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
+
 ```
 ./
 ├── README.md             this manual
@@ -28,7 +30,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                854 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                870 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -36,7 +38,13 @@ multiple lyrics sources, and both a CLI and a GUI.
 ## Install
 
 ```bash
-pip install yt-dlp mutagen
+pip install -U "yt-dlp[default]" mutagen
+
+# a JavaScript runtime: YouTube downloads need one to solve its challenge
+winget install DenoLand.Deno                # Windows
+pkg update && pkg upgrade && pkg install deno   # Termux (upgrade first, or deno fails to link)
+curl -fsSL https://deno.land/install.sh | sh    # macOS/Linux (or: brew install deno)
+# node works too -- musictool enables it automatically when it is the only one
 
 # ffmpeg is needed to extract audio and embed cover art
 pkg install ffmpeg                          # Termux
@@ -51,6 +59,15 @@ sudo apt install python3-tk                 # Debian/Ubuntu
 # check everything
 python musictool.py doctor
 ```
+
+**Why `yt-dlp[default]` and not just `yt-dlp`:** plain `pip install yt-dlp`
+installs no dependencies at all, and so leaves out `yt-dlp-ejs`, the scripts
+yt-dlp runs (with deno/node) to solve YouTube's challenge. The `[default]`
+extra brings it (plus brotli, pycryptodomex, websockets). The official
+`yt-dlp.exe`/standalone builds already include it. `doctor` has an `ejs` line
+that tells you which case you are in; without it you need
+`--remote-components ejs:github`, which lets yt-dlp fetch the scripts from
+GitHub at run time.
 
 Nothing needs installing to run it — `python musictool.py …` works straight
 from a clone. If you would rather have a `musictool` command on your `PATH`:
@@ -408,6 +425,13 @@ When it *is* blocked it says which kind of block and what would fix it --
 script around it. `--with-cookies` runs the same check *with* your login, for
 comparing the two.
 
+**From a server or VPS** the answer is usually `bot` for everything. Checked on
+2026-11-18 from a cloud machine: every video answered *Sign in to confirm
+you're not a bot*; yt-dlp's other player clients got past that page but were
+given only storyboards, no audio or video, and so were they with a PO-token
+provider running. That is a block on the address, not on the tool — at home
+the same command is the honest test.
+
 ## Picking a quality by its size -- `formats`
 
 ```bash
@@ -613,8 +637,9 @@ musictool get "https://youtube.com/playlist?list=PLrOFa8sDv6jfKx9poMArMUV2MGbZoX
 ```
 
 That is `-f bestvideo+bestaudio/best` chosen by size instead of by guesswork, with
-no `--cookies` at all. Add `--remote-components ejs:github` only if yt-dlp says it
-needs the JS component; recent versions usually do not.
+no `--cookies` at all. You do not need `--remote-components ejs:github` if
+yt-dlp came with `yt-dlp-ejs` — the `[default]` install above, or the official
+executable; `musictool doctor` says which (`ejs` line).
 
 ## Cookies: "Sign in to confirm you're not a bot"
 
@@ -681,14 +706,18 @@ actually hit instead of printing a bare `ERROR:`:
 | `Failed to decrypt with DPAPI` | Chrome/Edge lock their cookies with App-Bound Encryption; yt-dlp cannot open them | log in to YouTube in **Firefox** and use `--cookies-from-browser firefox` |
 | `Could not copy Chrome cookie database` | the browser still holds the file open (on Windows, Edge keeps background processes alive via Startup Boost) | close it *properly*, kill the leftovers in Task Manager, retry |
 | `Login with OAuth is no longer supported` | yt-dlp dropped the old TV/OAuth login | `--cookies-from-browser firefox`, or a `cookies.txt` |
-| `No supported JavaScript runtime` / `n challenge solving failed` | YouTube's n-challenge needs a JS engine; yt-dlp only enables deno by default | install deno or node, add `--js-runtimes node` and `--remote-components ejs:github` |
+| `No supported JavaScript runtime` / `n challenge solving failed` | YouTube's n-challenge needs a JS engine (yt-dlp only enables deno by default) **and** the `yt-dlp-ejs` scripts | install deno (or node — musictool enables node itself when it is the only runtime); if `doctor` shows `ejs: MISSING`, `pip install -U "yt-dlp[default]"` or add `--remote-components ejs:github` |
 | `The page needs to be reloaded` | the bot wall, usually because the JS challenge went unsolved | same as above |
 | `[pot:bgutil:http] ... 127.0.0.1:4416` | the **bgutil PO-token plugin** is installed but its server is not running. It is not yt-dlp's own solver. | start the plugin's server, or uninstall the plugin |
 | `Requested format is not available` | that itag is not offered to your account/client -- nothing to do with Premium | `musictool formats URL --show-audio --all-formats` to see what is really there |
 
-`musictool doctor` reports the two things that cause the middle of that table:
-whether a JS runtime is on your PATH, and whether a PO-token server is answering on
-port 4416.
+`musictool doctor` reports the three things that cause the middle of that table:
+whether a JS runtime is on your PATH, whether `yt-dlp-ejs` is installed, and
+whether a PO-token server is answering on port 4416. `--js-runtimes` and
+`--remote-components` (on `get` and `formats`) apply to every yt-dlp call
+those make — the download, and the quality/language lookup before it
+(`--quality`, `--max-size`, `--audio-lang`); the automatic node fallback
+applies to `check` and `relang` as well.
 
 **Resuming where you stopped.** With 286 of 447 already downloaded, either let
 yt-dlp skip what exists (`--archive archive.txt` from the start, so it knows), or
@@ -818,7 +847,7 @@ Streaming alone was not enough -- both of these had to be fixed for anything to 
    signalled through the same queue (`FINISH`), so no widget is ever touched off-thread.
 
 The parser is written against the strings yt-dlp actually emits (verified against
-2026.08.19), including the awkward ones: `at Unknown B/s ETA Unknown` before the first
+2026.08.19; live percentage events confirmed again with 2026.10.26), including the awkward ones: `at Unknown B/s ETA Unknown` before the first
 sample (the `Unknown` tokens are ignored rather than shown as a speed), the fragment
 estimate `[download] 4.2% of ~ 12.34MiB at ...`, and the final
 `[download] 100% of 7.63MiB in 00:00:03 at 2.00MiB/s` (a completion, not a percentage).
@@ -885,14 +914,26 @@ re-reports. Genuinely duplicated songs will still match afterwards, which is cor
 
 Tried in this order by default (`--providers` to change it):
 
-### 1. `ytmusic` — YouTube Music's own timed lyrics
-The best source **for a YouTube-sourced library**, because it is the same
-MusixMatch-licensed timing YouTube Music shows you, so it lines up with your file.
+### 1. `ytmusic` — YouTube Music's own lyrics, by videoId
+The most exact source **for a YouTube-sourced library**: it is the lyrics page
+YouTube Music shows for that very video (licensed from Musixmatch), so it
+cannot be the wrong song.
 
 It needs the **videoId**, which `get` records in `.musictool-index.json` beside
 your downloads. Two unauthenticated calls: `next` as `WEB_REMIX` (find the
-lyrics tab) then `browse` as `ANDROID_MUSIC` (read the cues). Only the `ANDROID_MUSIC` client returns timings —
-`WEB_REMIX` returns plain text, so the client version matters.
+lyrics tab) then `browse` as `ANDROID_MUSIC` (read the lines). `WEB_REMIX`
+returns one block of plain text; `ANDROID_MUSIC` returns one row per line,
+each with its start time — when YouTube sends the times.
+
+> **Live, 2026-11-18: YouTube mostly sends no times.** Every lookup tested that
+> day (several songs, `ANDROID_MUSIC` 7.03 to 8.47 and `IOS_MUSIC`, with and
+> without a visitor id) returned the lines without their `cueRange`; one early
+> request did include them. musictool now keeps such a result as an
+> **unsynced exact match**: a synced hit from `lrclib`/`netease` still wins,
+> and with `--allow-unsynced` it beats any fuzzy plain-text match. When YouTube
+> does send times, it is a synced hit and nothing else is tried.
+
+Results are cached compactly per videoId (the raw lyrics page is ~650 KB).
 
 Deliberately does **not** search YouTube by artist/title. YouTube's search never
 reports "no match": give it a nonsense title and it returns confident, fully-timed
@@ -906,12 +947,20 @@ plain. Its only requirements are a `User-Agent` identifying the client, honourin
 `musictool/<version> (https://github.com/JohnOlowe/MusicTool)`, waits 0.35 s
 between requests, and on a 429 waits what `Retry-After` says (seconds or an HTTP
 date; 5 s if it is missing or unreadable, at most 120 s) plus up to 30 % random
-jitter, then retries.
+jitter, then retries. In the live test it supplied the synced lyrics for both
+real songs (Ed Sheeran's *Shape of You*, Sinach's *Way Maker*).
 
 ### 3. `netease` — NetEase Cloud Music
 Public, keyless, very large synced corpus (strongest for CJK, but covers plenty of
-Western tracks too). Uses `/api/search/get/web` then `/api/song/lyric?lv=-1`,
-with a `Referer` header.
+Western tracks too). Uses `/api/search/get` then `/api/song/lyric?lv=-1`,
+with a `Referer` header. The credit lines NetEase puts at the top of most
+lyrics (`[00:00.000] 作词 : …`, `作曲`, `制作人`, …) are removed before
+anything is embedded.
+
+(Until 2026-11-18 it used `/api/search/get/web`, which now answers with an
+encrypted string instead of results — the provider crashed with
+`'str' object has no attribute 'get'` on every search. Found by the first
+live run; an unexpected answer is now "no results", not a crash.)
 
 ### Not implemented, and why
 
@@ -946,7 +995,7 @@ lead credit.
 | `Lyrics/_backup/<song>.old.lrc` | previous lyrics, only when something is overwritten |
 | `lyrics-report.txt` | every fix, every miss with its reason |
 | `.musictool-index.json` | file → videoId/url, so `ytmusic` works later |
-| `~/.config/musictool/http-cache.json` | API responses; re-runs make no calls |
+| `~/.config/musictool/http-cache.json` | API responses; re-runs make no calls (about 120 KB per song — trimmed to the fields musictool reads; it was ~4× that) |
 
 `scan` classifies each file as `synced` (fine), `partial` (a few timestamps),
 `plain` (no timestamps) or `empty`.
@@ -1133,7 +1182,10 @@ mirrors and testing. CLI flags always win.
 ## Platform notes
 
 - **Termux:** `yt-dlp` may only be importable, not on `PATH` — the tool falls back
-  to `python -m yt_dlp`. `doctor` tells you which it found.
+  to `python -m yt_dlp`. `doctor` tells you which it found. For the JS runtime,
+  `pkg update && pkg upgrade` before `pkg install deno` (an outdated system
+  gives `CANNOT LINK EXECUTABLE "deno"`), or `pkg install nodejs`, which
+  musictool then enables by itself.
 - **Windows:** paths with spaces and `&` are quoted when the command is echoed.
 - **Both:** `--ascii` avoids filenames some car stereos and older players mangle.
 
@@ -1143,8 +1195,8 @@ mirrors and testing. CLI flags always win.
 python3 tests/test_musictool.py
 ```
 
-No network needed: the three lyrics APIs are stubbed with their documented response
-shapes and `yt-dlp` is replaced by a fake on `PATH`. Needs `mutagen`, and either
+No network needed: the three lyrics APIs are stubbed with the response shapes they
+were seen to return live (including the ones that broke the providers) and `yt-dlp` is replaced by a fake on `PATH`. Needs `mutagen`, and either
 `ffmpeg` on `PATH` or `pip install imageio-ffmpeg`.
 
 `tests/tkstub.py` is a small headless stand-in for tkinter. It renders nothing, but
@@ -1154,12 +1206,13 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 854 assertions, 0 failures**, with or without
+**Verified by running the code — 870 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
-all three providers against stub APIs that replay the documented response shapes
-(including `WEB_REMIX` returning no timings and `ANDROID_MUSIC` returning cues),
-the candidate-rejection guard, synced-over-unsynced precedence, duplicate-lyrics
+all three providers against stub APIs that replay the response shapes seen live
+(including `WEB_REMIX` returning no timings, `ANDROID_MUSIC` with and without
+cue times, and NetEase's encrypted `/web` answer), the candidate-rejection
+guard, synced-over-unsynced precedence, duplicate-lyrics
 detection and repair, GUI/CLI option parity and argv round-tripping for every flag,
 path history, report parsing, `build_args` for every download option, the videoId index,
 and the CLI end-to-end as a subprocess with a fake `yt-dlp` on `PATH` — `get`,
@@ -1167,45 +1220,54 @@ and the CLI end-to-end as a subprocess with a fake `yt-dlp` on `PATH` — `get`,
 `--providers`, `config`, `doctor`, `providers --test`, and `--help` for every
 subcommand.
 
-**Also verified against the real thing** (not just fakes): a real `yt-dlp`
-(2026.08.19) downloading from a local HTTP server with a real `ffmpeg` on `PATH`, run
-through `download()` and through the `get` CLI. That is what exposed both progress bugs
--- with the flags we were passing, yt-dlp emitted *only* the `after_move` line, so the
-bar had zero events to consume -- and it is how the fix was confirmed: 17 live
-percentage events plus `item`/`file`/`done`, the log showing `[download] ...  ETA ...`
-lines, `on_file` firing with the real videoId, and the finished file landing in the
-output folder with the index written. The fake `yt-dlp` in the test suite models the
-`--print`-implies-`--quiet` behaviour, with a negative control proving that without
-`--no-quiet` there is genuinely nothing to parse.
+**Verified live, 2026-11-18** (yt-dlp 2026.10.26, ffmpeg 9.0, Python 3.13, Linux):
 
-The stop path was also driven for real: a genuine `yt-dlp` download was started
-from the CLI, sent `SIGINT` three seconds in, and came back with
-`stopping after the current file...`, then `==> stopped by user`, exit code 0, no
-orphan process. Browser-cookie detection is unit-tested against a fake Windows
-profile tree (two browsers, different cookie timestamps -> picks the newer one),
-and `--cookies` was passed to a real `yt-dlp` to confirm the flag combination is
-accepted.
+- **The three lyrics sources, for real.** `providers --test`: lrclib and NetEase
+  reachable with synced results. `lyrics` on three real tagged `.m4a` files:
+  *Ed Sheeran – Shape of You* (with its videoId, so `ytmusic` was asked first)
+  and *Sinach – Way Maker* got synced lyrics from lrclib (93 and 45 timed
+  lines, embedded and written as `.lrc`); an invented title was refused by the
+  matching guard rather than given someone else's lyrics; a second run with
+  `--force` made **0** network calls.
+- **What that live run found and fixed:** NetEase's search endpoint had
+  changed (every search crashed); YouTube Music now mostly sends lyrics
+  without times (they were all being thrown away); and the HTTP cache keyed
+  every POST to a URL as the same request, so on a playlist **every song
+  after the first would have been given the first song's YouTube Music
+  lyrics**, trusted and unchecked. All three are fixed and pinned by tests.
+- **`check` against real YouTube** — from this cloud machine it answers
+  `BLOCKED (bot)` with the Firefox/cookies.txt advice, which is the right
+  verdict for a server address (see [Am I blocked?](#am-i-blocked----check)).
+- **A real `yt-dlp` download** through `get` and through `download()`, from a
+  local HTTP server: the file lands, the index is written, `on_file` fires with
+  the id, and the progress bar receives live percentage events (12 for a
+  2 MiB file at 1 MiB/s) — the `--print` + `--no-quiet` fix still holds.
+  yt-dlp's own help still says `--print` implies `--quiet`, that only deno
+  is enabled by default, and that `--remote-components` is unneeded when
+  `yt-dlp-ejs` is installed — which plain `pip install yt-dlp` does not do.
+- **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
+  opened and screenshotted, including the Audio tracks and Quality tabs; that
+  caught two layout faults no stub could (log lines running together, a
+  clipped label), both fixed.
 
-**Not verified here:**
-- **Live calls to YouTube Music, LRCLIB and NetEase.** This sandbox's egress
-  allowlist blocks them (`api.github.com` and `pypi.org` return 200; `lrclib.net`
-  and `google.com` return 000). Run `python musictool.py providers --test` on your
-  machine to check reachability before a big batch. The `ytmusic` provider follows
-  the documented reverse-engineered InnerTube flow; if YouTube changes the client
-  version that returns timings, that provider will simply return nothing and fall
-  through to `lrclib`.
-- **The GUI's pixels.** The sandbox has no display, so the window was never
-  *drawn*. Everything except the drawing is now executed for real against
-  `tests/tkstub.py`: `gui.run()` builds all eight tabs, every button is invoked, and
-  the argv each one produces is captured and asserted — including ticking the
-  quick-strip `--allow-unsynced` box, loading the file list, skipping a highlighted
-  file, redoing everything with `--force`, refusing to run with nothing ticked, and
-  resizing the log pane, and wheel events routed to the right scrolling area.
-  Widget generation still covers every CLI flag of every
-  subcommand, and each value round-trips through `build_argv` and back through the
-  real argparse parser. What no stub can prove is font metrics, real sash dragging
-  and how the theme looks on your platform.
-- **Real downloads from YouTube**, for the same egress reason. A real
-  `yt-dlp` was run against a local HTTP server (above), and the suite's fake
-  `yt-dlp` exercises the argument building, output parsing and index writing,
-  but no file has been fetched from YouTube itself.
+Earlier, against yt-dlp 2026.08.19: the stop path (a real download sent
+`SIGINT` three seconds in came back with `stopping after the current file...`,
+then `==> stopped by user`, exit 0, no orphan process), and `--cookies`
+accepted by a real `yt-dlp`. Browser-cookie detection is unit-tested against a
+fake Windows profile tree (two browsers, different cookie timestamps -> picks
+the newer one).
+
+**Not verified:**
+- **Real downloads from YouTube, and the Quality / Audio tracks tabs on real
+  YouTube data.** YouTube refuses this cloud machine's address outright (see
+  above), so no video or audio stream could be fetched or listed. The format
+  logic is tested against the shapes yt-dlp reports for YouTube, including a
+  dubbed video, but a real dubbed video has not been loaded into the tab.
+- **Timed lyrics from `ytmusic`.** The code reads them when YouTube sends
+  them; on 2026-11-18 it almost never did. `python musictool.py providers
+  --test` asks for a sample video's lyrics and tells you which it is today
+  (`timed lyrics`, or `sent the lines WITHOUT times`) — run it before a big
+  batch.
+- **Windows and Termux specifics** — the App-Bound-Encryption cookie failure,
+  `winget`/`pkg` installs, paths with `&`, how the theme looks — come from the
+  code and from yt-dlp's issue tracker, not from a run on those systems.

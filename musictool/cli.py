@@ -834,6 +834,9 @@ def cmd_embed(args):
     return 0 if not failed else 1
 
 
+PROBE_VIDEO_ID = "JGwWNGJdvx8"   # Ed Sheeran - Shape of You; has a lyrics page
+
+
 def cmd_providers(args):
     for p in providers.build():
         _ok, msg = p.available()
@@ -849,10 +852,24 @@ def cmd_providers(args):
                             duration=225)
     print()
     for p in providers.build():
-        if p.needs_video:
-            print(f"{p.name:<10} skipped -- needs a videoId (populated by `get`)")
-            continue
         try:
+            if p.needs_video:
+                # a public video with a lyrics page: shows whether YouTube is
+                # sending line times today (late 2026 it mostly is not)
+                got = p.fetch(providers.Query(artist="Ed Sheeran",
+                                              title="Shape of You",
+                                              video_id=PROBE_VIDEO_ID), http)
+                if not got:
+                    print(f"{p.name:<10} nothing for the sample video "
+                          f"{PROBE_VIDEO_ID} (needs a videoId from `get`)")
+                elif got[0].synced:
+                    print(f"{p.name:<10} reachable: timed lyrics "
+                          f"({got[0].note})")
+                else:
+                    print(f"{p.name:<10} reachable, but YouTube sent the lines "
+                          "WITHOUT times today -- used only as unsynced "
+                          "(needs a videoId from `get`)")
+                continue
             got = p.fetch(probe, http)
             synced = sum(1 for c in got if c.synced)
             print(f"{p.name:<10} reachable: {len(got)} result(s), {synced} synced")
@@ -1075,6 +1092,20 @@ def cmd_relang(args):
     return 1 if n["errors"] else 0
 
 
+def ejs_status():
+    """yt-dlp-ejs holds the scripts yt-dlp runs (with deno/node) to solve
+    YouTube's challenges. `pip install yt-dlp` does NOT bring it; the
+    `yt-dlp[default]` extra and the official executables do."""
+    import importlib.util
+    if importlib.util.find_spec("yt_dlp_ejs"):
+        return "yt-dlp-ejs installed (YouTube challenge scripts)"
+    if importlib.util.find_spec("yt_dlp"):
+        return ('MISSING  ->  pip install -U "yt-dlp[default]"   '
+                "(or add --remote-components ejs:github)")
+    return ("not checked -- yt-dlp is not installed in this Python "
+            "(the official yt-dlp executable bundles it)")
+
+
 def cmd_doctor(_args):
     ok = True
     print("platform  :", "Windows" if is_windows() else
@@ -1088,10 +1119,10 @@ def cmd_doctor(_args):
         if r.returncode == 0 and ver:
             print(f"yt-dlp    : {ver}  via {' '.join(cmd)}")
         else:
-            print("yt-dlp    : MISSING  ->  pip install yt-dlp")
+            print("yt-dlp    : MISSING  ->  pip install -U \"yt-dlp[default]\"")
             ok = False
     except Exception as e:
-        print(f"yt-dlp    : MISSING ({e})  ->  pip install yt-dlp")
+        print(f"yt-dlp    : MISSING ({e})  ->  pip install -U \"yt-dlp[default]\"")
         ok = False
     print("ffmpeg    :", "found" if have_ffmpeg() else
           f"MISSING  ->  {ffmpeg_hint()}")
@@ -1109,6 +1140,7 @@ def cmd_doctor(_args):
                           "MISSING  ->  install deno (yt-dlp's default) or "
                           "node; without one the n-challenge fails and "
                           "YouTube answers 'The page needs to be reloaded'"))
+    print("ejs       :", ejs_status())
     print("pot server:", ("reachable on 127.0.0.1:4416"
                           if pot_server_reachable() else
                           "not running (only needed if the bgutil PO-token "

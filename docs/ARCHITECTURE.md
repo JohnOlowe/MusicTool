@@ -32,20 +32,20 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1175 | argparse for all 13 subcommands, and every `cmd_*` handler |
+| `cli.py` | 1207 | argparse for all 13 subcommands, and every `cmd_*` handler |
 | `gui.py` | 2088 | tkinter GUI, 8 tabs, the log pane, the progress panel, the queue |
 | `uicmd.py` | 665 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 741 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
-| `download.py` | 549 | yt-dlp invocation, the videoId index, stream probing, `swap_audio` |
-| `util.py` | 531 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`), browser/runtime detection |
-| `providers.py` | 316 | the three lyrics sources and candidate scoring |
+| `download.py` | 568 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
+| `util.py` | 553 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection |
+| `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
 | `progress.py` | 260 | parses yt-dlp's progress lines into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
 | `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
 | `cancel.py` | 82 | one cooperative stop flag shared by every worker |
 
-Two functions worth knowing by name because they are load-bearing:
+Functions worth knowing by name because they are load-bearing:
 
 - `formats.same_language(a, b)` — containers tag audio with 3-letter codes
   (`eng`, `spa`) while YouTube and the picker use 2-letter ones (`en`, `es`).
@@ -61,6 +61,17 @@ Two functions worth knowing by name because they are load-bearing:
   gives `[]` and a note naming the ones it has. The Audio tracks tab and
   `pair_with_audio`/`auto_pick(…, lang=, pinned=)` build on it, so the Quality
   tab pairs video with audio in the right language, or with the pinned track.
+- `util.Http.json(url, …)` — every lyrics request. The response cache is keyed
+  on method, URL, params **and body**; until 2026-11-18 a dict body was left
+  out of the key, so every YouTube Music POST shared one entry and each song
+  after the first got the first song's lyrics. Large answers are kept out of
+  `http-cache.json`: `ytmusic` passes `use_cache=False` and caches its own
+  compact per-videoId result, `lrclib` passes `shrink=` to keep only the
+  fields it reads. Entries written under the old key are dropped on load.
+- `download.runtime_args(o)` — `--remote-components`/`--js-runtimes` for every
+  yt-dlp call (`build_args`, `probe`, `print_target_name`); adds
+  `--js-runtimes node` when node is the only runtime. `probe` used to omit
+  both, so `formats --js-runtimes node` did nothing.
 - `download.streams(path)` — reads stream info by parsing
   `ffmpeg -hide_banner -i` stderr, because `ffprobe` is frequently absent
   (imageio-ffmpeg never ships it; stripped Windows and Termux installs often

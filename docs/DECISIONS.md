@@ -77,6 +77,45 @@ See `RECIPES.md`.
   the sign-in cascade (dead `cookies.txt`, DPAPI App-Bound Encryption, a locked
   cookie database, no JS runtime, a PoT server on 4416, the reload wall). Each
   has a different fix, and "unknown" is not a diagnosis.
+- **The YouTube challenge needs two things** (yt-dlp 2026.10.26 `--help`): a JS
+  runtime — only deno is enabled by default, node/quickjs/bun must be opted
+  in with `--js-runtimes` — **and** the `yt-dlp-ejs` scripts. Plain
+  `pip install yt-dlp` declares no dependencies, so it lacks `yt-dlp-ejs`;
+  `yt-dlp[default]` (and the official executables) have it. Otherwise
+  `--remote-components ejs:github` fetches them at run time. Hence
+  `pyproject.toml` depends on `yt-dlp[default]`, `doctor` has an `ejs` line,
+  and `runtime_args` enables node when it is the only runtime.
+
+---
+
+## Lyrics APIs, as seen live (2026-11-18)
+
+The test stubs replay these shapes; when a provider "finds nothing", check
+the live answer before the code.
+
+- **NetEase `/api/search/get/web` now returns `{"result": "<hex string>"}`** —
+  encrypted. `/api/search/get` returns the old plain JSON with the same
+  fields (`id`, `name`, `artists[].name`, `album.name`, `duration` in ms).
+  `/api/search/pc` asks for phone verification (code -462). Lyrics
+  (`/api/song/lyric?lv=-1&kv=1&tv=-1`) open with credit lines such as
+  `[00:00.000] 作词 : …`, `作曲`, `制作人`; strip them.
+- **YouTube Music lyrics rows usually come without times.** `next` (WEB_REMIX)
+  still yields the `MPLY…` browseId; `browse` as ANDROID_MUSIC still returns
+  `timedLyricsModel.lyricsData.timedLyricsData`, but the rows are
+  `{"lyricLine": …}` with no `cueRange` — on every request tried (clients
+  ANDROID_MUSIC 7.03.52, 7.27.52, 8.10.52, 8.47.54, IOS_MUSIC 7.03.3/8.47.4,
+  with/without `visitorData` or a full Android context), except one early
+  response that had `cueRange.startTimeMilliseconds` on every row.
+  ANDROID_MUSIC 6.42.52 gets no lyrics model at all. A `browse` answer is
+  ~650 KB; never cache it raw.
+- **lrclib `/api/search`** returns up to 40 records, each with
+  `syncedLyrics` *and* `plainLyrics` (~200 KB per search). musictool only
+  reads `plainLyrics` when there is no `syncedLyrics`, so that is all it
+  caches.
+- **YouTube from a cloud address**: `Sign in to confirm you're not a bot` for
+  every video with the default clients; `mweb`/`web_safari`/`ios` get past it
+  but are given storyboards only — also with a bgutil PO-token server (2.0.2)
+  running. Metadata (title) is readable; streams are not.
 
 ---
 

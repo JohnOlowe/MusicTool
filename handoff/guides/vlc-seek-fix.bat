@@ -8,6 +8,17 @@ set "VIDEO=GTA V - FULL GAME (4K 60FPS) Walkthrough Gameplay No Commentary.mp4"
 set "AUDIO=GTA V - FULL GAME (4K 60FPS) Walkthrough Gameplay No Commentary.m4a"
 set "AUDIOFIX=_audio_fixed.m4a"
 
+REM Find VLC: 64-bit install, 32-bit (x86) install, or vlc on PATH.
+set "VLC=%ProgramFiles%\VideoLAN\VLC\vlc.exe"
+if not exist "%VLC%" set "VLC=%ProgramFiles(x86)%\VideoLAN\VLC\vlc.exe"
+if not exist "%VLC%" for /f "delims=" %%V in ('where vlc 2^>nul') do set "VLC=%%V"
+if not exist "%VLC%" (
+  echo VLC not found in Program Files, Program Files ^(x86^) or on PATH.
+  echo Edit the VLC line in this .bat to point at your vlc.exe.
+  pause
+  exit /b 1
+)
+
 if not exist "%AUDIO%" (
   echo Put this .bat in the same folder as video + m4a
   pause
@@ -30,4 +41,4 @@ REM Uncomment next 2 lines if you want to keep only fixed version:
 REM del "%AUDIO%"
 REM ren "%AUDIOFIX%" "%AUDIO%" & set "AUDIOFIX=%AUDIO%"
 
-"C:\Program Files\VideoLAN\VLC\vlc.exe" --file-caching 5000 --network-caching 5000 "%VIDEO%" :input-slave="%AUDIOFIX%" --input-slave-caching 5000
+"%VLC%" --file-caching 5000 --network-caching 5000 "%VIDEO%" :input-slave="%AUDIOFIX%" --input-slave-caching 5000

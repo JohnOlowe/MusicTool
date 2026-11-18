@@ -66,5 +66,5 @@ mp4 — verified: mp4 cannot hold the webp attachment stream and ffmpeg aborts w
 
 Files audited for laptop efficiency:
 - preview-generation-guide.md now JOBS=2 for Celeron N3350, QSV probe only for encode, hover priority queue
-- burn_parallel_flexible.sh is phone-only (h264_mediacodec), not for laptop previews
+- burn_parallel_flexible.sh is a subtitle burner (default `h264_mediacodec`; `--encoder libx264` on a PC), not for laptop previews
 - subtitle-hard-burn.md correctly has no -hwaccel for filter burns

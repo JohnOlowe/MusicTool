@@ -28,7 +28,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                808 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                854 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -656,7 +656,9 @@ prints the browser it would use.
 
 If no browser is found the download still runs, and says so instead of failing
 silently. And if YouTube still refuses, the error you get now says what to do
-rather than leaving you with a bare `ERROR:`.
+rather than leaving you with a bare `ERROR:`: log in to YouTube in Firefox and
+use `--cookies-from-browser firefox` (Chrome/Edge only on macOS/Linux), or pass
+a `cookies.txt`.
 
 **2. Or point it at an exported `cookies.txt`.**
 
@@ -900,7 +902,11 @@ that failure mode entirely.
 ### 2. `lrclib` — free, open, keyless
 `https://lrclib.net`. No API key, no registration, documented API. Synced and
 plain. Its only requirements are a `User-Agent` identifying the client, honouring
-`429`/`Retry-After`, and 200–500 ms between requests — all implemented.
+`429`/`Retry-After`, and 200–500 ms between requests. musictool sends
+`musictool/<version> (https://github.com/JohnOlowe/MusicTool)`, waits 0.35 s
+between requests, and on a 429 waits what `Retry-After` says (seconds or an HTTP
+date; 5 s if it is missing or unreadable, at most 120 s) plus up to 30 % random
+jitter, then retries.
 
 ### 3. `netease` — NetEase Cloud Music
 Public, keyless, very large synced corpus (strongest for CJK, but covers plenty of
@@ -960,8 +966,9 @@ override the tags in your files.
 python musictool.py gui
 ```
 
-Seven tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
-**Tools**, **Lyrics files**, **Quality** — over the same code paths as the CLI.
+Eight tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
+**Tools**, **Lyrics files**, **Quality**, **Audio tracks** — over the same code
+paths as the CLI.
 
 ### The Quality tab
 
@@ -976,12 +983,46 @@ list — not the 127 rows yt-dlp reports. From there:
   the `-f` and tells you why it chose it, including the total size with audio.
 - **Manual** — click a row and it becomes the choice instead; the row's audio
   partner and total size are shown underneath.
+- **Audio** — a video-only row is paired with the best audio track in your
+  audio language (`--audio-lang` on the Download tab), or with the track you
+  chose on the **Audio tracks** tab. The line next to **Choose audio track…**
+  says which one. (Before this, the tab ignored `--audio-lang` and could pair
+  a dubbed video with the wrong language.)
 - The `-f` box at the bottom holds the result. **Copy command** puts the whole
   `musictool get ...` line on your clipboard, **Download this quality** runs it
   with the settings from the Download tab. Double-clicking a row downloads it.
 
 If YouTube refuses the request the tab says why and repeats the fix from
 `check` — it does not leave you staring at an empty table.
+
+### The Audio tracks tab
+
+A dubbed video offers one audio track per spoken language, often in two codecs
+(Opus/webm and AAC/m4a) and at several bitrates. This tab lists them so you can
+see what is really there and take a specific one. It shares the URL box with
+the Quality tab, so one **Load** fills both.
+
+- **Language** — starts at your audio language. The list shows every language
+  the video has (`es (original), en, fr`), plus **all**. Picking a language
+  also makes it the Download tab's `--audio-lang`, so every download in the
+  window follows it; **all** only widens the list. A language the video does
+  not have gives an empty table and a line saying which ones it does have.
+  Tracks that carry no language tag (a normal single-language upload) are all
+  shown, with a note.
+- The table — id, language (`*` = original), codec, container, bitrate, size
+  and YouTube's own name for the track (`English, medium`).
+- **Download this audio** — downloads exactly that track as music (`get URL
+  --format-selector <id>`, converted to the audio format set on the Download
+  tab), even if the Download tab is in video mode. Double-click does the same.
+  **Copy command** puts that command on the clipboard.
+- **Use with a video quality** — keeps the track for the Quality tab, which
+  then pairs every video row with it (`-f 248+251-1`). **Automatic audio**
+  goes back to the best track in your language. The choice is per video:
+  loading a different URL forgets it.
+
+On the command line, `musictool formats URL --show-audio` lists every audio
+track (all languages, not filtered) and names the spoken languages; `musictool
+get URL -f <id>` takes one.
 
 
 **Every CLI option is in the GUI, and it stays that way automatically.** The
@@ -1084,7 +1125,8 @@ python musictool.py config --reset
 
 Stored at `~/.config/musictool/config.json` (`%APPDATA%\musictool\config.json` on
 Windows). Environment overrides: `MUSICTOOL_COOKIES`, `MUSICTOOL_OUT`,
-`MUSICTOOL_PROVIDERS`, `MUSICTOOL_GENIUS`, `MUSICTOOL_MUSIXMATCH`, plus
+`MUSICTOOL_PROVIDERS`, `MUSICTOOL_UA` (the User-Agent; default
+`musictool/<version> (https://github.com/JohnOlowe/MusicTool)`), plus
 `MUSICTOOL_LRCLIB_BASE` / `MUSICTOOL_NETEASE_BASE` / `MUSICTOOL_YTM_BASE` for
 mirrors and testing. CLI flags always win.
 
@@ -1112,9 +1154,8 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 808 assertions, 0 failures** on a machine
-without tkinter (`tests/test_musictool.py`; where tkinter is installed, the
-"gui fails gracefully without tkinter" check fails — see `docs/TESTING.md`): text normalisation against real messy
+**Verified by running the code — 854 assertions, 0 failures**, with or without
+tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the documented response shapes
 (including `WEB_REMIX` returning no timings and `ANDROID_MUSIC` returning cues),
@@ -1155,7 +1196,7 @@ accepted.
   through to `lrclib`.
 - **The GUI's pixels.** The sandbox has no display, so the window was never
   *drawn*. Everything except the drawing is now executed for real against
-  `tests/tkstub.py`: `gui.run()` builds all seven tabs, every button is invoked, and
+  `tests/tkstub.py`: `gui.run()` builds all eight tabs, every button is invoked, and
   the argv each one produces is captured and asserted — including ticking the
   quick-strip `--allow-unsynced` box, loading the file list, skipping a highlighted
   file, redoing everything with `--force`, refusing to run with nothing ticked, and

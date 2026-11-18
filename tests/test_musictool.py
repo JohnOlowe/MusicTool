@@ -500,9 +500,20 @@ check("providers --test: ytmusic needs videoId", "needs a videoId" in r.stdout)
 check("providers --test: lrclib reachable", "reachable" in r.stdout)
 for sub in ("get", "lyrics", "scan", "duplicates", "providers", "config"):
     check(f"{sub} --help", run(sub, "--help").returncode == 0)
-r = run("gui")
+# Hermetic: hide tkinter from this one subprocess with a stand-in package
+# that refuses to import. The old check ran the real `gui` and so depended on
+# the machine -- it failed wherever tkinter was installed (a traceback with no
+# display, or a real window that blocked the suite with one).
+NOTK = os.path.join(WORK, "notk")
+os.makedirs(os.path.join(NOTK, "tkinter"), exist_ok=True)
+open(os.path.join(NOTK, "tkinter", "__init__.py"), "w").write(
+    "raise ImportError(\"No module named '_tkinter' (hidden by the test)\")\n")
+r = subprocess.run([sys.executable, ENTRY, "gui"], capture_output=True,
+                   text=True, timeout=60,
+                   env=dict(ENV, PYTHONPATH=NOTK + os.pathsep + ROOT))
 check("gui fails gracefully without tkinter", r.returncode == 1 and
-      ("GUI unavailable" in r.stdout or "GUI" in r.stdout), r.stdout[:120])
+      "GUI unavailable" in r.stdout and "Traceback" not in r.stderr,
+      (r.stdout + r.stderr)[:200])
 import py_compile  # noqa: E402
 py_compile.compile(os.path.join(ROOT, "musictool", "gui.py"), doraise=True)
 check("gui.py compiles", True)
@@ -809,10 +820,10 @@ def check_named(w, prefix):
 
 
 check("run() builds a window", root is not None and root.looped)
-check("all seven tabs exist (incl. Quality)",
+check("all eight tabs exist (incl. Quality and Audio tracks)",
       [t.get("text", "").strip() for t in nb.tabs] ==
       ["Download", "Fix lyrics", "Scan & duplicates", "Report", "Tools",
-       "Lyrics files", "Quality"],
+       "Lyrics files", "Quality", "Audio tracks"],
       str([t.get("text", "").strip() for t in nb.tabs]))
 
 check("tabs and log share a vertical PanedWindow",
@@ -3387,6 +3398,287 @@ check("a single download is left untagged, so the panel shows it as before",
 _ns1 = C.build_parser().parse_args(["get", "https://x/1", "--jobs", "99"])
 check("--jobs is capped rather than opening ninety-nine connections",
       _ns1.jobs == 99, str(_ns1.jobs))
+
+
+# ============ 34. choosing the audio track yourself (Audio tracks tab)
+print("\n--- 34. audio tracks: see them per language, pick one, download it ---")
+
+_AUD = {"id": "aud", "title": "Dubbed", "duration": 600, "formats": [
+    {"format_id": "248", "ext": "webm", "vcodec": "vp9", "acodec": "none",
+     "height": 1080, "tbr": 1400, "filesize": 100000000},
+    {"format_id": "140-0", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+     "abr": 129, "filesize": 9600000, "language": "es",
+     "language_preference": 10, "format_note": "Spanish (original), medium"},
+    {"format_id": "251-0", "ext": "webm", "vcodec": "none", "acodec": "opus",
+     "abr": 140, "filesize": 9900000, "language": "es",
+     "language_preference": 10, "format_note": "Spanish (original), medium"},
+    {"format_id": "140-1", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+     "abr": 129, "filesize": 9600000, "language": "en",
+     "format_note": "English, medium"},
+    {"format_id": "251-1", "ext": "webm", "vcodec": "none", "acodec": "opus",
+     "abr": 135, "filesize": 9800000, "language": "en",
+     "format_note": "English, medium"},
+    {"format_id": "249-1", "ext": "webm", "vcodec": "none", "acodec": "opus",
+     "abr": 50, "filesize": 3600000, "language": "en",
+     "format_note": "English, low"},
+    {"format_id": "140-2", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+     "abr": 129, "filesize": 9600000, "language": "fr",
+     "format_note": "French, medium"},
+]}
+_arows = F.rows_from_info(_AUD)
+_t, _n = F.audio_tracks(_arows, "en")
+check("audio_tracks lists every English track, best bitrate first",
+      [r["id"] for r in _t] == ["251-1", "140-1", "249-1"] and _n == "",
+      str([r["id"] for r in _t]))
+_t, _n = F.audio_tracks(_arows, "eng")
+check("...and 'eng' (a container's code) means the same language",
+      [r["id"] for r in _t] == ["251-1", "140-1", "249-1"])
+_t, _n = F.audio_tracks(_arows, "de")
+check("a language the video does not have gives nothing, and says what is there",
+      _t == [] and "es (original)" in _n and "fr" in _n, _n)
+_t, _n = F.audio_tracks(_arows, "all")
+check("'all' lists every track, the original language first",
+      len(_t) == 6 and _t[0]["lang"] == "es", str([r["id"] for r in _t]))
+_t, _n = F.audio_tracks(F.rows_from_info(YT), "en")
+check("untagged tracks (a one-language upload) are all shown, with a note",
+      len(_t) >= 1 and "showing all" in _n, _n)
+_pin = [r for r in _arows if r["id"] == "140-2"][0]
+check("automatic pairing follows the audio language",
+      F.auto_pick(_arows, "best", lang="en")[0] == "248+251-1",
+      F.auto_pick(_arows, "best", lang="en")[0])
+check("a pinned track replaces the automatic audio",
+      F.auto_pick(_arows, "best", lang="en", pinned=_pin)[0] == "248+140-2")
+check("...in audio-only mode too",
+      F.auto_pick(_arows, "audio", lang="en", pinned=_pin)[0] == "140-2")
+_v248 = [r for r in _arows if r["id"] == "248"][0]
+check("manual pairing takes the language as well",
+      F.pair_with_audio(_v248, _arows, lang="fr")[1]["id"] == "140-2")
+check("a track is described by id, language, codec, bitrate and size",
+      F.describe_track(_pin).startswith("140-2  [fr]  mp4a 129k m4a"),
+      F.describe_track(_pin))
+
+# --- the GUI tab, in a fresh window
+tkstub.reset()
+G.run()
+_r3 = tkstub.ROOTS[-1]
+
+
+def _drain3():
+    todo, _r3.pending[:] = list(_r3.pending), []
+    for f in todo:
+        f()
+
+
+_nb3 = [w for w in _r3.walk() if isinstance(w, tkstub.Notebook)][0]
+_at = _nb3.tab_for("Audio tracks")
+_q3 = _nb3.tab_for("Quality")
+check("the Audio tracks tab exists", _at is not None)
+_atree = [w for w in _at.walk() if isinstance(w, tkstub.Treeview)][0]
+check("it is a clickable table of id, language, codec, container, bitrate, size",
+      list(_atree.options.get("columns", ()))[:6] ==
+      ["id", "lang", "codec", "container", "bitrate", "size"],
+      str(_atree.options.get("columns")))
+for _b in ("Load audio tracks", "Download this audio", "Copy command",
+           "Use with a video quality", "Automatic audio"):
+    check(f"button: {_b}", _qbtn(_at, _b) is not None)
+check("the Quality tab links to it",
+      _qbtn(_q3, "Choose audio track\u2026") is not None)
+_gp3 = [w for w in _r3.walk() if isinstance(w, G.OptionsPane)
+        and w.sub == "get"][0]
+_gp3.vars["audio_lang"].set("en")
+_gp3.vars["keep_video"].set(True)          # video mode on the Download tab
+
+_probe0, _cli0 = G.download.probe, G.cli_main
+_A3 = []
+G.download.probe = lambda url, o: _AUD
+G.cli_main = lambda argv: (_A3.append(list(argv)), 0)[1]
+try:
+    _aurl = [w for w in _at.walk() if w.kind == "entry"][0]
+    _aurl.options["textvariable"].set("https://youtu.be/aud")
+    _qbtn(_at, "Load audio tracks").invoke()
+    _drain3()
+    _avals = [_atree.nodes[i]["values"] for i in _atree.order]
+    check("loading shows only the tracks in your language",
+          [v[0] for v in _avals] == ["251-1", "140-1", "249-1"], str(_avals))
+    check("...with codec, bitrate and YouTube's own name for each",
+          _avals[0][2] == "opus" and _avals[0][4] == "135k"
+          and "English" in _avals[0][6], str(_avals[0]))
+    _acombo = [w for w in _at.walk() if w.kind == "combobox"][0]
+    check("the language list offers every language the video has",
+          {"all", "es", "en", "fr"} <= set(_acombo.options.get("values", ())),
+          str(_acombo.options.get("values")))
+    _qfmt3 = [w for w in _q3.walk() if w.kind == "entry"
+              and w.options.get("state") == "readonly"][0]
+    check("the Quality tab now pairs the video with the English track",
+          _qfmt3.options["textvariable"].get() == "248+251-1",
+          _qfmt3.options["textvariable"].get())
+
+    # pick the low-bitrate English track and download it on its own
+    _atree.selection_set(_atree.order[2])
+    _atree.fire("<<TreeviewSelect>>")
+    _A3.clear()
+    _qbtn(_at, "Download this audio").invoke()
+    _drain3()
+    check("'Download this audio' runs get with exactly that track",
+          len(_A3) == 1 and _A3[0][0] == "get"
+          and "--format-selector" in _A3[0]
+          and _A3[0][_A3[0].index("--format-selector") + 1] == "249-1",
+          str(_A3[:1]))
+    check("...as audio, even though the Download tab is in video mode",
+          "--keep-video" not in _A3[0], str(_A3[0]))
+    _qbtn(_at, "Copy command").invoke()
+    check("copying gives the same command",
+          "249-1" in _r3.clipboard and _r3.clipboard.startswith("musictool get"),
+          _r3.clipboard[:120])
+
+    # use it with a video instead
+    _qbtn(_at, "Use with a video quality").invoke()
+    check("'Use with a video quality' pins it for the Quality tab",
+          _qfmt3.options["textvariable"].get() == "248+249-1",
+          _qfmt3.options["textvariable"].get())
+    _qlabels = " ".join(str(w.options["textvariable"].get())
+                        for w in _q3.walk() if w.kind == "label"
+                        and w.options.get("textvariable"))
+    check("...and the Quality tab says which audio it is using",
+          "249-1" in _qlabels and "[en]" in _qlabels, _qlabels[:300])
+    _qbtn(_at, "Automatic audio").invoke()
+    check("'Automatic audio' goes back to the best track in your language",
+          _qfmt3.options["textvariable"].get() == "248+251-1",
+          _qfmt3.options["textvariable"].get())
+
+    # switch the language here: the list and the Download tab follow
+    _acombo.options["textvariable"].set("fr")
+    _acombo.fire("<<ComboboxSelected>>")
+    _drain3()
+    check("choosing French lists the French track",
+          [_atree.nodes[i]["values"][0] for i in _atree.order] == ["140-2"])
+    check("...and makes French the Download tab's --audio-lang",
+          _gp3.vars["audio_lang"].get() == "fr", _gp3.vars["audio_lang"].get())
+    check("...so the Quality tab pairs the video with French audio",
+          _qfmt3.options["textvariable"].get() == "248+140-2",
+          _qfmt3.options["textvariable"].get())
+    _acombo.options["textvariable"].set("all")
+    _acombo.fire("<<ComboboxSelected>>")
+    check("'all' shows every track without changing --audio-lang",
+          len(_atree.order) == 6 and _gp3.vars["audio_lang"].get() == "fr",
+          str(len(_atree.order)))
+    _acombo.options["textvariable"].set("de")
+    _acombo.fire("<<ComboboxSelected>>")
+    _ainfo = " ".join(str(w.options["textvariable"].get())
+                      for w in _at.walk() if w.kind == "label"
+                      and w.options.get("textvariable"))
+    check("a language the video lacks says so, and lists what it has",
+          not _atree.order and "this video has" in _ainfo, _ainfo[:200])
+
+    # a pin belongs to one video: loading another one forgets it
+    _acombo.options["textvariable"].set("en")
+    _acombo.fire("<<ComboboxSelected>>")
+    _atree.selection_set(_atree.order[1])
+    _atree.fire("<<TreeviewSelect>>")
+    _qbtn(_at, "Use with a video quality").invoke()
+    _aurl.options["textvariable"].set("https://youtu.be/other")
+    _qbtn(_at, "Load audio tracks").invoke()
+    _drain3()
+    check("loading a different video drops the track pinned for the last one",
+          _qfmt3.options["textvariable"].get() == "248+251-1",
+          _qfmt3.options["textvariable"].get())
+finally:
+    G.download.probe, G.cli_main = _probe0, _cli0
+    _gp3.vars["audio_lang"].set("en")
+    _gp3.vars["keep_video"].set(False)
+
+# ============ 35. small code fixes from the review
+print("\n--- 35. review fixes: rate limits, User-Agent, advice, GUI start ---")
+check("Retry-After in seconds is honoured (+ up to 30 % jitter)",
+      util.retry_after_seconds("5", rand=lambda: 0) == 5.0
+      and util.retry_after_seconds("5", rand=lambda: 1) == 6.5)
+check("a fractional Retry-After no longer crashes the lookup",
+      util.retry_after_seconds("1.5", rand=lambda: 0) == 1.5)
+check("an HTTP-date Retry-After is understood (a past date -> the default)",
+      util.retry_after_seconds("Wed, 21 Oct 2015 07:28:00 GMT",
+                               rand=lambda: 0) == 5.0)
+check("garbage falls back to 5 s, and a huge value is capped",
+      util.retry_after_seconds("soon", rand=lambda: 0) == 5.0
+      and util.retry_after_seconds("99999", rand=lambda: 0) == 120.0)
+
+import email.message as _em  # noqa: E402
+import urllib.error as _ue  # noqa: E402
+_calls429 = []
+
+
+class _Resp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _urlopen429(req, timeout=None):
+    _calls429.append(req.get_header("User-agent"))
+    if len(_calls429) == 1:
+        h = _em.Message()
+        h["Retry-After"] = "0.5"
+        raise _ue.HTTPError(req.full_url, 429, "Too Many Requests", h, None)
+    return _Resp(b'{"ok": true}')
+
+
+_uo, _sl = util.urllib.request.urlopen, util.time.sleep
+_slept = []
+util.urllib.request.urlopen = _urlopen429
+util.time.sleep = _slept.append
+try:
+    _res = util.Http(delay=0).json("http://x/rate", use_cache=False)
+finally:
+    util.urllib.request.urlopen, util.time.sleep = _uo, _sl
+check("a 429 with a fractional Retry-After is retried, not dropped",
+      _res == {"ok": True} and len(_calls429) == 2, str((_res, _calls429)))
+check("...after waiting what the server asked (plus jitter)",
+      _slept and 0.5 <= _slept[0] <= 0.65, str(_slept))
+check("the User-Agent names the app, its version and a link (LRCLIB asks)",
+      util.USER_AGENT.startswith("musictool/")
+      and "github.com/JohnOlowe/MusicTool" in util.USER_AGENT
+      and "example.com" not in util.USER_AGENT, util.USER_AGENT)
+check("...and that is what is sent", _calls429[0] == util.USER_AGENT,
+      str(_calls429[:1]))
+check("the bot-wall advice points at Firefox, not at Edge/Chrome on Windows",
+      "firefox" in download.BOT_HINT.lower()
+      and "App-Bound" in download.BOT_HINT
+      and "firefox" in download.ADVICE["bot"].lower())
+from musictool import config as _cfgm  # noqa: E402
+check("the dead Genius/Musixmatch settings are gone",
+      "genius_token" not in _cfgm.DEFAULTS
+      and "musixmatch_key" not in _cfgm.DEFAULTS)
+_toml = open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8").read()
+check("pyproject points at the real repository, not OWNER",
+      "OWNER" not in _toml and "github.com/JohnOlowe/MusicTool" in _toml)
+
+
+class TclError(Exception):
+    pass
+
+
+def _no_display():
+    raise TclError("no display name and no $DISPLAY environment variable")
+
+
+_grun = G.run
+G.run = _no_display
+try:
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        _rc = C.cmd_gui(None)
+finally:
+    G.run = _grun
+check("tkinter present but no display: a clear message, not a traceback",
+      _rc == 1 and "GUI unavailable" in _buf.getvalue()
+      and "no display" in _buf.getvalue(), _buf.getvalue()[:200])
 
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"

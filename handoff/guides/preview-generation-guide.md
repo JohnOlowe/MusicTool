@@ -145,7 +145,7 @@ UI: `onMouseEnter debounced(120ms) → fetch('/api/preview/priority/:id', {metho
 
 - `preview-generation-guide.md` — **this file, fixed**: bounded JOBS, no `-hwaccel` decode, QSV encode only if probed, hover priority added
 - `subtitle-hard-burn.md` §4 — correct: intentionally no `-hwaccel qsv` for subtitle burns (filter needs RAM frames). Keep as-is.
-- `burn_parallel_flexible.sh` — phone-only (`h264_mediacodec`), not for previews. Don't reuse for laptop previews — encoders differ.
+- `burn_parallel_flexible.sh` — a subtitle burner, not for previews. Its default encoder is the phone's `h264_mediacodec`; `--encoder libx264` runs it on a PC, but it burns whole films in parts, which is not what a 3-second preview needs.
 - `phone-first-ffmpeg.md` / `burnfix-home.sh` — separate concern (offline burn). No change needed.
 
 That should keep the Celeron at roughly 1.3s of extraction (+ ~0.05s concat) per preview — an estimate — never OOM, never black-screen, and the hovered card always jumps the line.

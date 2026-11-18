@@ -15,8 +15,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import __version__
+
+# LRCLIB asks every client to name itself: app name, version and a link
+# (https://lrclib.net/docs). The old default carried a you@example.com
+# placeholder, i.e. no way to reach anyone.
+PROJECT_URL = "https://github.com/JohnOlowe/MusicTool"
 USER_AGENT = os.environ.get(
-    "MUSICTOOL_UA", "musictool/1.0 (personal script; contact: you@example.com)")
+    "MUSICTOOL_UA", f"musictool/{__version__} ({PROJECT_URL})")
 
 AUDIO_EXT = (".m4a", ".mp3", ".flac", ".opus", ".ogg", ".aac", ".wav", ".mka")
 TS = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
@@ -417,6 +423,43 @@ def to_plain(lrc: str) -> str:
 # --------------------------------------------------------------------------
 # HTTP with cache + rate-limit handling
 # --------------------------------------------------------------------------
+RETRY_AFTER_DEFAULT = 5.0
+RETRY_AFTER_MAX = 120.0
+
+
+def retry_after_seconds(header, default=RETRY_AFTER_DEFAULT,
+                        cap=RETRY_AFTER_MAX, rand=None):
+    """How long to wait after a 429, from its Retry-After header.
+
+    The header is either a number of seconds ("5", sometimes "1.5") or an
+    HTTP date. The old code did int(header): a date or a fraction raised
+    ValueError, which the generic handler turned into "no result" -- a rate
+    limit silently became "no lyrics found". Up to 30 % random jitter is added
+    (what LRCLIB's docs ask for) so parallel clients do not retry in lock-step,
+    and the wait is capped so one bad header cannot stall a run for hours.
+    """
+    import random
+    from email.utils import parsedate_to_datetime
+    wait = None
+    text = str(header or "").strip()
+    if text:
+        try:
+            wait = float(text)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(text)
+                import datetime as _dt
+                now = _dt.datetime.now(when.tzinfo or _dt.timezone.utc)
+                wait = (when - now).total_seconds()
+            except (TypeError, ValueError, IndexError, OverflowError):
+                wait = None
+    if wait is None or wait != wait or wait < 0:      # missing, NaN, past date
+        wait = default
+    wait = min(wait, cap)
+    r = (rand or random.random)()
+    return round(wait * (1.0 + 0.3 * r), 3)
+
+
 class Http:
     def __init__(self, cache_path=None, delay=0.35, timeout=30, max_wait=240):
         self.delay = delay
@@ -464,7 +507,8 @@ class Http:
                 break
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    time.sleep(int(e.headers.get("Retry-After") or 5))
+                    time.sleep(retry_after_seconds(
+                        (e.headers or {}).get("Retry-After")))
                     continue
                 result = None
                 break

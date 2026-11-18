@@ -4,24 +4,19 @@
 python3 tests/test_musictool.py
 ```
 
-**808 assertions across 33 sections, 0 failures on a machine without
-tkinter.** About 30 seconds. No network.
+**854 assertions across 35 sections (plus 8b), 0 failures** — with or without
+tkinter installed, with or without a display. About 35 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
 `pip install imageio-ffmpeg`. Nothing else — no display, no yt-dlp login, no
 YouTube.
 
-**One check is not hermetic.** Section 11 runs the real `musictool.py gui` in a
-subprocess and asserts "gui fails gracefully without tkinter" (exit 1 and a
-"GUI unavailable" message). It only passes where tkinter is missing:
-
-- tkinter installed, no display (Linux CI): `tk.Tk()` raises `TclError`, the
-  exit code is 1 but the message is a traceback on stderr, so the check
-  **fails** (807 pass, 1 fail).
-- tkinter installed with a display (e.g. Windows): not run here, but from the
-  code a real window should open and the suite block until you close it — the
-  test's `run()` helper has no timeout and `gui` enters the Tk main loop. The
-  check then fails as well (exit code 0).
+**The `gui` subprocess check is hermetic.** Section 11 runs the real
+`musictool.py gui` with a stand-in `tkinter` package first on `PYTHONPATH` that
+refuses to import, and asserts exit 1, "GUI unavailable" and no traceback.
+Section 35 covers the other case — tkinter present but no display (`TclError`
+from `Tk()`) — in-process. (Until 2026-11-18 the check ran against whatever
+tkinter the machine had, so it failed wherever tkinter was installed.)
 
 Everything else in the GUI is tested through `tkstub` below and does not care
 whether tkinter is installed.
@@ -32,7 +27,7 @@ whether tkinter is installed.
 
 | thing | stand-in | why |
 |---|---|---|
-| tkinter | `tests/tkstub.py` (in-process tests only; section 11's `gui` subprocess uses whatever tkinter is installed) | there is no display in CI, and no tkinter on some targets |
+| tkinter | `tests/tkstub.py` in-process; for section 11's `gui` subprocess, a `$WORK/notk/tkinter` package that raises `ImportError` | there is no display in CI, and no tkinter on some targets |
 | yt-dlp | an executable on `PATH` | downloads must be tested without downloading |
 | the three lyrics APIs | a local `http.server` | providers must be tested against real HTTP, but not real providers |
 | ffmpeg | the real thing | container behaviour is exactly what cannot be faked |
@@ -127,6 +122,19 @@ Proven by execution:
 - the whole GUI: built, buttons pressed, boxes ticked, argv captured,
   panes and scroll areas measured, intent modes applied, progress events
   rendered into labels and bars
+- audio tracks (section 34): the per-language list on a dubbed video
+  (original first, then by bitrate), 2- and 3-letter codes matching both ways
+  (`en`/`eng`, `fr`/`fre`/`fra`, `pt-BR`/`por`), untagged tracks shown with a
+  note, a language the video lacks giving an empty list that names the ones it
+  has, the Audio tracks tab's download argv (`--format-selector <id>`, never
+  `--keep-video`), pinning a track so the Quality tab pairs `<video>+<id>`,
+  the pin being dropped for a new URL, and **all** not overwriting
+  `--audio-lang`
+- review fixes (section 35): `Retry-After` in seconds and as an HTTP date,
+  the default and the 120 s cap, the lrclib-compliant User-Agent (and that
+  it is what gets sent), Firefox-first cookie advice, the removed
+  Genius/Musixmatch settings, the `pyproject.toml` URLs, and `gui` with tkinter
+  but no display exiting 1 with a message instead of a traceback
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

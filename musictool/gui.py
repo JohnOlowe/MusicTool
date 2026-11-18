@@ -529,7 +529,11 @@ def run():
 
     # ------------------------------------------------------------ log plumbing
     def log(msg):
-        q.put(str(msg))
+        # One call, one line. Command output arrives through QueueStream with
+        # its own newlines; these are the GUI's own notes, and without this
+        # they ran into each other ("...for 'X'copied: musictool get ...").
+        msg = str(msg)
+        q.put(msg if msg.endswith("\n") else msg + "\n")
 
     def pump():
         # Reschedule before doing any work: one bad event must not be able to
@@ -1480,6 +1484,13 @@ def run():
     ttk.Radiobutton(_m1, text="Manual: click a row below",
                     variable=qmode, value="manual",
                     command=lambda: q_draw()).pack(side="left", padx=(14, 0))
+    # Which audio goes with the video: automatic (best track in your audio
+    # language) or one you chose on the Audio tracks tab.
+    ttk.Button(_m1, text="Choose audio track\u2026",
+               command=lambda: a_show()).pack(side="right", padx=4)
+    qaudio_txt = tk.StringVar(value="")
+    ttk.Label(_m1, textvariable=qaudio_txt, foreground="#06a").pack(
+        side="right", padx=4)
 
     qcols = ("id", "what", "container", "video", "codec", "lang", "size",
              "variants")
@@ -1518,6 +1529,29 @@ def run():
 
     q_rows = []
     q_iids = {}
+    # The audio track chosen by hand on the Audio tracks tab, and the URL it
+    # belongs to: a track id from one video means nothing for another.
+    a_pin = {"row": None, "url": ""}
+
+    def q_lang():
+        """The spoken language you asked for (the Download tab's setting)."""
+        return str(panes["get"].values().get("audio_lang") or "").strip()
+
+    def q_pinned():
+        if a_pin["row"] is not None and a_pin["url"] == qurl.get().strip():
+            return a_pin["row"]
+        return None
+
+    def q_audio_note():
+        pin = q_pinned()
+        if pin is not None:
+            qaudio_txt.set(f"audio: {pin['id']} [{formats._lang_tag(pin) or '?'}]"
+                           f" {pin['acodec'] or '?'} {formats.track_bitrate(pin)}")
+        else:
+            lang = q_lang()
+            qaudio_txt.set("audio: automatic, best in "
+                           + ("any language" if formats.is_any_lang(lang)
+                              else f"'{lang}'"))
 
     def q_cap():
         return formats.parse_size(qsize.get()) if qsize.get().strip() else None
@@ -1548,7 +1582,8 @@ def run():
         if not r:
             return
         qmode.set("manual")
-        row, audio = formats.pair_with_audio(r, q_rows, q_cap())
+        row, audio = formats.pair_with_audio(r, q_rows, q_cap(),
+                                             lang=q_lang(), pinned=q_pinned())
         sel = formats.selector_for(row, audio)
         qfmt.set(sel)
         cap = q_cap()
@@ -1557,8 +1592,8 @@ def run():
         if cap and total and total > cap:
             extra = (f"  (over your {formats.human_bytes(cap)} cap by "
                      f"{formats.human_bytes(total - cap)})")
-        audio_txt = (f" + {audio['acodec']} audio" if audio
-                     else " (audio included)")
+        audio_txt = (f" + {audio['acodec']} audio {formats._spoken(audio)}"
+                     .rstrip() if audio else " (audio included)")
         qinfo.set(f"manual: {row['height'] or '-'}p {row['vcodec'] or '-'} "
                   f"{row['ext']} ~ {formats.human_bytes(row['bytes'])}"
                   f"{audio_txt}{extra}  ->  -f {sel}")
@@ -1584,12 +1619,15 @@ def run():
             preset = next((m for m in formats.AUTO_MODES
                            if formats.AUTO_LABELS[m] == qpreset.get()), "best")
             sel, v, a, why = formats.auto_pick(q_pool(), mode=preset,
-                                               max_bytes=q_cap())
+                                               max_bytes=q_cap(),
+                                               lang=q_lang(),
+                                               pinned=q_pinned())
             qfmt.set(sel or "")
             qinfo.set(("auto: " if sel else "auto: nothing matched — ") + why)
         else:
             q_picked()
         qinfo.set(qinfo.get() + f"     [{len(rows)} of {len(q_rows)} shown]")
+        q_audio_note()
 
     def q_args(selector):
         vals = dict(panes["get"].values())
@@ -1644,15 +1682,242 @@ def run():
                 hint = download.ADVICE.get(download.classify_error(err))
                 if hint:
                     qinfo.set(qinfo.get() + "\n-> " + hint)
+                q_loaded["url"] = ""
                 q_draw()
+                a_draw()
+                ainfo.set(qinfo.get())
                 return
             q_rows[:] = formats.rows_from_info(info)
+            q_loaded["url"] = url
+            if a_pin["url"] != url:
+                a_pin["row"], a_pin["url"] = None, ""
             title = info.get("title") or url
             log(f"{len(q_rows)} raw qualities for {title!r}")
             q_draw()
+            a_draw()
 
         qinfo.set(f"reading the qualities of {url} …")
+        ainfo.set(f"reading the audio tracks of {url} …")
         worker(job, after=after)
+
+    q_loaded = {"url": ""}
+
+    # =============================================== Audio tracks tab
+    # A dubbed video serves one audio track per spoken language, often in two
+    # codecs and several bitrates. The automatic pick takes the best one in
+    # your audio language; this tab lists them so you can see what is really
+    # there and take a specific one -- on its own (music), or with the video
+    # quality chosen on the Quality tab.
+    atab = ttk.Frame(nb)
+    nb.add(atab, text="  Audio tracks  ")
+    ttk.Label(atab, text="See every audio track in a language and pick the "
+                         "one to download:").pack(anchor="w", padx=8,
+                                                  pady=(8, 0))
+    arow = ttk.Frame(atab)
+    arow.pack(fill="x", padx=8, pady=(0, 4))
+    ttk.Label(arow, text="Video URL:").pack(side="left")
+    ttk.Entry(arow, textvariable=qurl, width=58).pack(   # same URL as Quality
+        side="left", padx=6, fill="x", expand=True)
+    bal = ttk.Button(arow, text="Load audio tracks", command=lambda: q_load())
+    bal.pack(side="left", padx=4)
+    run_buttons.append(bal)
+
+    alrow = ttk.Frame(atab)
+    alrow.pack(fill="x", padx=8, pady=(0, 4))
+    ttk.Label(alrow, text="Language:").pack(side="left")
+    alang = tk.StringVar(value=q_lang() or "en")
+    acombo = ttk.Combobox(alrow, textvariable=alang, width=12,
+                          values=["all", alang.get()])
+    acombo.pack(side="left", padx=(2, 6))
+    acombo.bind("<<ComboboxSelected>>", lambda e: a_lang_picked())
+    acombo.bind("<Return>", lambda e: a_lang_picked())
+    aoffer = tk.StringVar(value="")
+    ttk.Label(alrow, textvariable=aoffer, foreground="#888").pack(
+        side="left", padx=4)
+
+    acols = ("id", "lang", "codec", "container", "bitrate", "size", "note")
+    awrap = ttk.Frame(atab)
+    awrap.pack(fill="both", expand=True, padx=8)
+    atree = ttk.Treeview(awrap, columns=acols, show="headings", height=8)
+    asb = ttk.Scrollbar(awrap, orient="vertical", command=atree.yview)
+    atree.configure(yscrollcommand=asb.set)
+    asb.pack(side="right", fill="y")
+    atree.pack(side="left", fill="both", expand=True)
+    for cid, txt, wd in (
+            ("id", "id", 80), ("lang", "language", 80), ("codec", "codec", 66),
+            ("container", "container", 76), ("bitrate", "bitrate", 66),
+            ("size", "size", 88), ("note", "what YouTube calls it", 260)):
+        atree.heading(cid, text=txt)
+        atree.column(cid, width=wd, anchor="w")
+    atree.bind("<<TreeviewSelect>>", lambda ev: a_picked())
+    atree.bind("<Double-1>", lambda ev: a_download())
+
+    ainfo = tk.StringVar(value="Paste a video URL above and press "
+                              "\u201cLoad audio tracks\u201d.")
+    ttk.Label(atab, textvariable=ainfo, foreground="#06a",
+              wraplength=980, justify="left").pack(anchor="w", padx=8,
+                                                   pady=(4, 0))
+    acmd = ttk.Frame(atab)
+    acmd.pack(fill="x", padx=8, pady=(2, 8))
+    afmt = tk.StringVar(value="")
+    ttk.Entry(acmd, textvariable=afmt, state="readonly", width=14).pack(
+        side="left", padx=(0, 6))
+    ttk.Button(acmd, text="Copy command",
+               command=lambda: a_copy()).pack(side="left", padx=2)
+    bad = ttk.Button(acmd, text="Download this audio",
+                     command=lambda: a_download())
+    bad.pack(side="left", padx=2)
+    run_buttons.append(bad)
+    ttk.Button(acmd, text="Use with a video quality",
+               command=lambda: a_use_with_video()).pack(side="left", padx=2)
+    ttk.Button(acmd, text="Automatic audio",
+               command=lambda: a_automatic()).pack(side="left", padx=2)
+
+    a_iids = {}
+
+    def a_selected():
+        ids = list(atree.selection() or [])
+        return a_iids.get(ids[-1]) if ids else None
+
+    def a_lang_picked():
+        """A language was chosen here. A real language also becomes the
+        Download tab's --audio-lang, so every download in the window follows
+        the same choice; 'all' only widens this list."""
+        lang = alang.get().strip()
+        if lang and not formats.is_any_lang(lang) and lang != q_lang():
+            panes["get"].apply({"audio_lang": lang})
+            remember_soon()
+            log(f"audio language is now '{lang}' (Download tab's "
+                f"--audio-lang follows it)")
+        a_draw()
+        q_draw()
+
+    def a_draw():
+        # follow the Download tab when its audio language was changed there
+        # ('all' is a view of this list only, so it is left alone)
+        _want = q_lang()
+        if (not formats.is_any_lang(alang.get())
+                and not formats.is_any_lang(_want) and _want != alang.get()):
+            alang.set(_want)
+        atree.delete(*atree.get_children())
+        a_iids.clear()
+        afmt.set("")
+        spoken = formats.languages_in(
+            [r for r in q_rows if r["kind"] == "audio"])
+        codes = [c for c, _o, _n in spoken]
+        acombo.configure(values=["all"] + codes + (
+            [alang.get()] if alang.get() and alang.get() not in codes
+            and alang.get() != "all" else []))
+        aoffer.set(("this video: " + ", ".join(
+            f"{c} (original)" if o else c for c, o, _n in spoken))
+            if spoken else "")
+        if not q_rows:
+            if q_loaded["url"]:
+                ainfo.set("no formats reported for this video")
+            return
+        tracks, note = formats.audio_tracks(q_rows, alang.get())
+        pin = q_pinned()
+        for r in tracks:
+            iid = atree.insert("", "end", values=(
+                r["id"], formats._lang_tag(r) or "?", r["acodec"] or "-",
+                r["ext"], formats.track_bitrate(r),
+                formats.human_bytes(r["bytes"]), r.get("note") or ""))
+            a_iids[iid] = r
+            if pin is not None and r is pin:
+                atree.selection_set(iid)
+        lang = alang.get().strip()
+        head = (f"{len(tracks)} audio track(s)"
+                + ("" if formats.is_any_lang(lang) else f" in '{lang}'"))
+        if not tracks:
+            head = note
+        elif note:
+            head += " -- " + note
+        if pin is not None:
+            head += ("   \u00b7  used for video downloads: "
+                     + formats.describe_track(pin))
+        else:
+            head += "   \u00b7  click one, then download it or use it with a video"
+        ainfo.set(head + "   (* = original language)"
+                  if any((r.get("lang_pref") or 0) > 0 for r in tracks)
+                  else head)
+        if pin is not None:
+            afmt.set(str(pin["id"]))
+
+    def a_picked():
+        r = a_selected()
+        if not r:
+            return
+        afmt.set(str(r["id"]))
+        ainfo.set("chosen: " + formats.describe_track(r)
+                  + "  ->  -f " + str(r["id"]))
+
+    def a_args(track):
+        vals = dict(panes["get"].values())
+        vals["format_selector"] = str(track["id"])
+        vals["keep_video"] = False        # audio only: extract to --format
+        url = qurl.get().strip()
+        return uicmd.build_argv("get", vals, positionals=[url] if url else [],
+                                parser=build_parser())
+
+    def a_need_track():
+        r = a_selected()
+        if r is None:
+            messagebox.showwarning("musictool", "Load the list and click an "
+                                   "audio track first.")
+            return None
+        if not qurl.get().strip():
+            messagebox.showwarning("musictool", "Paste a video URL first.")
+            return None
+        return r
+
+    def a_download():
+        r = a_need_track()
+        if r is not None:
+            do_argv(a_args(r))
+
+    def a_copy():
+        r = a_selected()
+        if r is None:
+            return
+        cmd = uicmd.quote_cmd(a_args(r))
+        root.clipboard_clear()
+        root.clipboard_append(cmd)
+        log("copied: " + cmd)
+        ainfo.set("copied the full command to the clipboard")
+
+    def a_use_with_video():
+        """Pin this track: the Quality tab pairs every video with it."""
+        r = a_need_track()
+        if r is None:
+            return
+        a_pin["row"], a_pin["url"] = r, qurl.get().strip()
+        log("audio for video downloads: " + formats.describe_track(r))
+        q_draw()
+        a_draw()
+        try:
+            nb.select(qtab)
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    def a_automatic():
+        a_pin["row"], a_pin["url"] = None, ""
+        q_draw()
+        a_draw()
+        lang = q_lang()
+        ainfo.set("video downloads pick the best audio in "
+                  + ("any language" if formats.is_any_lang(lang)
+                     else f"'{lang}'") + " again")
+
+    def a_show():
+        """From the Quality tab: open this tab, loading the list if needed."""
+        try:
+            nb.select(atab)
+        except Exception:                                   # noqa: BLE001
+            pass
+        if qurl.get().strip() and q_loaded["url"] != qurl.get().strip():
+            q_load()
+        else:
+            a_draw()
 
     # ================================================== log pane (resizable)
     logf = ttk.LabelFrame(root, text="log")

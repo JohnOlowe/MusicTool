@@ -1142,7 +1142,19 @@ def cmd_gui(_args):
             "reinstall Python with tcl/tk" if is_windows() else "install python3-tk")
         print(f"GUI unavailable: {e}\n  {hint}\n  The CLI works the same: musictool get <url>")
         return 1
-    run()
+    try:
+        run()
+    except Exception as e:                                  # noqa: BLE001
+        # tkinter is installed but Tk cannot open a window: no display (SSH,
+        # CI, a headless server, Termux without an X server). That is the same
+        # situation as "no tkinter" from the user's side, so it gets the same
+        # one-line answer instead of a traceback.
+        if type(e).__name__ != "TclError":
+            raise
+        print(f"GUI unavailable: {e}\n  no display to open a window on "
+              f"(set DISPLAY, or use an X server on Termux)\n"
+              f"  The CLI works the same: musictool get <url>")
+        return 1
     return 0
 
 

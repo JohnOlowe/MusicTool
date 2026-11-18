@@ -32,17 +32,17 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1163 | argparse for all 13 subcommands, and every `cmd_*` handler |
-| `gui.py` | 1823 | tkinter GUI, 7 tabs, the log pane, the progress panel, the queue |
+| `cli.py` | 1175 | argparse for all 13 subcommands, and every `cmd_*` handler |
+| `gui.py` | 2088 | tkinter GUI, 8 tabs, the log pane, the progress panel, the queue |
 | `uicmd.py` | 665 | parser → widget specs, `build_argv`, intent modes, pane geometry |
-| `formats.py` | 644 | quality rows, collapsing near-duplicates, filters, language picking |
-| `download.py` | 544 | yt-dlp invocation, the videoId index, stream probing, `swap_audio` |
-| `util.py` | 487 | filename normalisation, LRC parse/shift, HTTP, browser/runtime detection |
+| `formats.py` | 741 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
+| `download.py` | 549 | yt-dlp invocation, the videoId index, stream probing, `swap_audio` |
+| `util.py` | 531 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`), browser/runtime detection |
 | `providers.py` | 316 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
 | `progress.py` | 260 | parses yt-dlp's progress lines into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
-| `config.py` | 116 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
+| `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
 | `cancel.py` | 82 | one cooperative stop flag shared by every worker |
 
 Two functions worth knowing by name because they are load-bearing:
@@ -50,7 +50,17 @@ Two functions worth knowing by name because they are load-bearing:
 - `formats.same_language(a, b)` — containers tag audio with 3-letter codes
   (`eng`, `spa`) while YouTube and the picker use 2-letter ones (`en`, `es`).
   `"spa".startswith("es")` is **False**. Every language comparison goes through
-  this function.
+  this function, and it works **in both directions**: `same_language("en",
+  "eng")` and `same_language("eng", "en")` are both True, as are
+  `fre`/`fra`/`fr` and `pt-BR`/`por` (helper `_codes_for`). Until 2026-11-18 it
+  only mapped a 2-letter *wanted* code to 3-letter tags, so `--audio-lang
+  eng` did not match YouTube's `en` tracks.
+- `formats.audio_tracks(rows, lang)` → `(tracks, note)` — the audio-only rows
+  in one language (`"all"`/`"any"` = every language), original first, then by
+  bitrate. Untagged tracks are kept with a note; a language the video lacks
+  gives `[]` and a note naming the ones it has. The Audio tracks tab and
+  `pair_with_audio`/`auto_pick(…, lang=, pinned=)` build on it, so the Quality
+  tab pairs video with audio in the right language, or with the pinned track.
 - `download.streams(path)` — reads stream info by parsing
   `ffmpeg -hide_banner -i` stderr, because `ffprobe` is frequently absent
   (imageio-ffmpeg never ships it; stripped Windows and Termux installs often
@@ -93,9 +103,16 @@ Consequences you have to respect:
 - **Nothing in a worker thread touches a widget.** `gui.worker` puts events on
   a queue; `pump()` on the main thread drains it every 120 ms. A swallowed
   `AttributeError` in a worker thread looks exactly like a frozen UI.
-- **`pump()` reschedules itself before it does any work** (`gui.py:534`). If it
+- **`pump()` reschedules itself before it does any work** (`gui.py:538`). If it
   reschedules last, one bad event stops the reschedule and freezes the log and
   progress bar for the rest of the session.
+- **`log(msg)` adds the newline if the message lacks one.** GUI-side notes
+  used to run together on one line; text arriving from `QueueStream` (the CLI's
+  own output) already ends in newlines and is unchanged.
+- **The Audio tracks tab shares state with the Quality tab.** It uses the same
+  URL box and the same loaded format rows (`q_load`). Pinning a track stores
+  it per URL (`q_pinned`); loading a different URL clears it. Picking a real
+  language writes the Download tab's `audio_lang`; "all" does not.
 - **Every tab body is a `ScrollArea`** with a pinned path row above a scrolling
   body, and the mouse wheel is bound with `bind_all` plus an ancestry filter
   (`_over_me`) so scrolling works regardless of focus.

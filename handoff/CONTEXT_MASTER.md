@@ -47,7 +47,7 @@
 
 ### B) Subtitle Hard-Burn (MovieBox / Big Little Lies)
 - **Drift fix:** stream-copy split + `OFFSET = idx*CHUNK` drifted 8 s → offsets = running sum of the real part durations (`awk`), plus the `setpts` shift. Source: first part really `918.92s` (later log `930.018s`) vs the assumed `927s`.
-- **3-core:** `burn_parallel_flexible.sh -c N` + `-i/-s/-o/--height/--bitrate/--font/--fontsize/--fontdir`, temp subs copy, awk, font verify. It cuts with `-ss` before `-i` and re-encodes, so its fixed offsets are exact.
+- **3-core:** `burn_parallel_flexible.sh -c N` + `-i/-s/-o/--height/--bitrate/--encoder h264_mediacodec|libx264/--font/--fontsize/--fontdir`, temp subs copy (in `$TMPDIR`, else `$PREFIX/tmp`), awk, font verify. It cuts with `-ss` before `-i` and re-encodes, so its fixed offsets are exact. *(Corrected 2026-11-18: MediaCodec now gets `-level 4 -bitrate_mode cbr` instead of `-level 4.0` and the ignored `-maxrate`/`-bufsize`; `--bufsize` applies to libx264 only; the font check reads the font after `->` and stops on a fallback; a failed part stops the join. Same fixes in `burnfix-home.sh`. Tested end to end with `--encoder libx264` on Linux; MediaCodec path not run here.)*
 - **State:** `context/pdfs-and-state/BigLittleLies-2x05-burn-state.md` + `guides/burnfix-home.sh` (the fix) / `guides/burn_3core-home.sh` (the buggy original) — awk-only, no `bc`, work in `$HOME` not MovieBox. Previews `guides/preview-caveat.png`, `guides/preview-dancing.png`.
 
 ### C) Premiere Pro 23.6 Proxies (Celeron)
@@ -86,7 +86,7 @@ Phone-conventional (copy whenever possible, large file):
   (video copy instant, audio rebuild 48k; -c:a copy keeps 44.1k but silent risk)
 VLC x86 path: C:\Program Files (x86)\VideoLAN\VLC\vlc.exe
 ```
-Note: `guides/vlc-seek-fix.bat` calls the 64-bit path `C:\Program Files\VideoLAN\VLC\vlc.exe`; `vlc-seek-fix-webm.bat` uses the x86 path above. Edit to match the installed VLC.
+Note: `guides/vlc-seek-fix.bat` and `vlc-seek-fix-webm.bat` now find VLC themselves: `%ProgramFiles%`, then `%ProgramFiles(x86)%`, then `where vlc`, and stop with a message if none is found. *(Corrected 2026-11-18: they used to hard-code one path each, 64-bit and x86 respectively.)*
 
 ### H) VLCFlix
 - `1.1.13 39a03f7` software-only, no `-hwaccel` (auto_scale_0 black screen risk), verified at `/tmp/vlcflix/repo` in the original sandbox (gone after reboot; not in this repository).

@@ -57,9 +57,12 @@ BLOCKERS = (
 CHROMIUM = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera", "whale")
 
 ADVICE = {
-    "bot": ("YouTube wants a logged-in session. Use --cookies-from-browser "
-            "edge (or chrome) -- it reads your existing login, nothing to "
-            "export -- or pass an exported cookies.txt with --cookies."),
+    "bot": ("YouTube wants a logged-in session. Log in to YouTube in Firefox "
+            "and use --cookies-from-browser firefox -- it reads your existing "
+            "login, nothing to export. (On Windows, Chrome and Edge lock their "
+            "cookies with App-Bound Encryption, which yt-dlp cannot open; on "
+            "macOS/Linux they work too.) Or pass an exported cookies.txt with "
+            "--cookies."),
     "age": ("Age-restricted: sign in with an account that can view it "
             "(--cookies-from-browser), or download it in the browser."),
     "private": "This video is private; only its owner's account can fetch it.",
@@ -121,9 +124,11 @@ def classify_error(text):
 
 BOT_HINT = (
     "YouTube is refusing this without a login ('Sign in to confirm you're not a "
-    "bot'). Fix: set 'Cookies from browser' to your browser (Windows: edge or "
-    "chrome) -- it reads your existing YouTube login, nothing to export. Or "
-    "export a cookies.txt and pass --cookies.")
+    "bot'). Fix: log in to YouTube in Firefox and set 'Cookies from browser' to "
+    "firefox -- it reads your existing login, nothing to export. On Windows, "
+    "Chrome and Edge lock their cookies with App-Bound Encryption, which yt-dlp "
+    "cannot open (macOS/Linux: any browser works). Or export a cookies.txt and "
+    "pass --cookies.")
 
 
 def cookie_args(o, log=None):

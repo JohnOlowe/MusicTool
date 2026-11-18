@@ -72,8 +72,10 @@ Facts about that sandbox that cost time to learn:
   Windows/Termux install. Anything reading stream info must fall back to parsing
   `ffmpeg -hide_banner -i` stderr. `download.streams()` already does this.
 - No display (and often no tkinter or Xvfb). **You cannot see pixels. Say so
-  rather than implying you checked the UI.** If tkinter *is* installed, one
-  suite check fails — see `docs/TESTING.md`.
+  rather than implying you checked the UI.** If Xvfb can be installed
+  (`Xvfb :98 &`, `DISPLAY=:98`), a real Tk window can be drawn and
+  screenshotted with ImageMagick `import -window root` — that is how the Audio
+  tracks tab was checked. The suite passes either way.
 - Outbound network reaches package registries and nothing else. **No YouTube,
   no lyrics providers.** Anything network-dependent must be faked — the test
   suite already does this, so extend it rather than reaching for the network.
@@ -91,9 +93,8 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **808 assertions, 0 failures** on a
-machine without tkinter (807 + 1 environment-dependent failure where tkinter
-is installed — see `docs/TESTING.md`).
+Current as of the latest commit on `main`: **854 assertions, 0 failures**, with
+or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
 separate ffmpeg / Quick Sync / Android / Premiere material for the same
@@ -109,20 +110,20 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1163   argparse + every cmd_* handler
-│   ├── gui.py         1823   tkinter GUI, 7 tabs
+│   ├── cli.py         1175   argparse + every cmd_* handler
+│   ├── gui.py         2088   tkinter GUI, 8 tabs
 │   ├── uicmd.py        665   parser -> widget specs, build_argv, intent modes
-│   ├── formats.py      644   quality table, filters, language picking
-│   ├── download.py     544   yt-dlp invocation, videoId index, streams, swap_audio
-│   ├── util.py         487   classify, detect_browser, js_runtime, have_ffmpeg
+│   ├── formats.py      741   quality table, filters, language picking, audio tracks
+│   ├── download.py     549   yt-dlp invocation, videoId index, streams, swap_audio
+│   ├── util.py         531   classify, detect_browser, js_runtime, have_ffmpeg
 │   ├── providers.py    316   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
 │   ├── progress.py     260   yt-dlp line parsing + batch State
 │   ├── tags.py         143   mutagen tag + .lrc handling
-│   ├── config.py       116   DEFAULTS, load(), remember(), PATH
+│   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py        82   cooperative stop
 ├── tests/
-│   ├── test_musictool.py 3394   33 sections, 808 assertions
+│   ├── test_musictool.py 3686   35 sections, 854 assertions
 │   └── tkstub.py          723   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -160,8 +161,8 @@ which splits *one* video into fragments.
 ## 4. How to work on it
 
 - **Run the suite after every change.** `python3 tests/test_musictool.py` —
-  no network, about half a minute. It is hermetic except for one check that
-  depends on whether tkinter is installed (`docs/TESTING.md`).
+  no network, about half a minute, fully hermetic — the result does not depend
+  on whether tkinter or a display is present (`docs/TESTING.md`).
 - **Keep every CLI flag reachable in the GUI.** A clipped-off widget counts as
   missing. `uicmd.widget_specs()` is generated from the parser, so this is
   usually free — unless you added a widget that the layout pushes off screen.
@@ -278,8 +279,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 808 assertions (on a machine
-without tkinter).
+Nothing is half-finished — `main` is green at 854 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

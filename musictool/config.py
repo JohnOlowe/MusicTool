@@ -33,9 +33,6 @@ DEFAULTS = {
     "recursive": False,
     # GUI layout
     "progress_width": 0,
-    # api keys (optional)
-    "genius_token": "",
-    "musixmatch_key": "",
 }
 
 PATH = os.path.join(config_dir(), "config.json")
@@ -50,9 +47,7 @@ def load():
             pass
     # environment overrides, handy on Termux where editing JSON is awkward
     env = {"MUSICTOOL_COOKIES": "cookies", "MUSICTOOL_OUT": "output_dir",
-           "MUSICTOOL_PROVIDERS": "provider_order",
-           "MUSICTOOL_GENIUS": "genius_token",
-           "MUSICTOOL_MUSIXMATCH": "musixmatch_key"}
+           "MUSICTOOL_PROVIDERS": "provider_order"}
     for var, key in env.items():
         if os.environ.get(var):
             v = os.environ[var]

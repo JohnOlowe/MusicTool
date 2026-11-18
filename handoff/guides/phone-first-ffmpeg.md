@@ -193,6 +193,7 @@ ffmpeg -y -i "$MOVIE" -c copy -f segment -segment_time "$CHUNK" \
 
 echo "Burning subtitles in parallel..."
 OFFSET=0
+PIDS=""
 for f in reset_*.mp4; do
   idx="${f:6:2}"
   # -c copy splits land on keyframes, so parts are NOT exactly CHUNK long.
@@ -208,9 +209,16 @@ for f in reset_*.mp4; do
       -af "aresample=async=1:first_pts=0" -ac 2 -c:a aac -b:a 128k \
       "burn_${idx}.mp4"
   ) &
+  PIDS="$PIDS $!"
   OFFSET=$(awk -v o="$OFFSET" -v d="$DUR" 'BEGIN{printf "%.3f", o+d}')
 done
-wait
+# A bare `wait` returns 0 even if a part failed, and the join would then
+# stitch together whatever parts exist. Wait for each part and stop instead.
+FAILED=0
+for p in $PIDS; do wait "$p" || FAILED=$((FAILED+1)); done
+if [ "$FAILED" -gt 0 ]; then
+  echo "$FAILED part(s) failed - not joining. Try fewer PARTS."; exit 1
+fi
 
 echo "Joining parts..."
 ls burn_*.mp4 | sort | sed "s/^/file '/;s/$/'/" > concat.txt

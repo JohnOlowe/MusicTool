@@ -2,10 +2,84 @@
 
 Newest first. Every entry is a real commit — `git show <hash>` has the full
 reasoning. The assertion count after each change is from running
-`python3 tests/test_musictool.py` on a machine without tkinter. One of the 808
-("gui fails gracefully without tkinter") only passes there — see docs/TESTING.md.
+`python3 tests/test_musictool.py`. Up to 808 the count is from a machine without
+tkinter, because one check ("gui fails gracefully without tkinter") only passed
+there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
+
+## (this commit) — Audio tracks tab, and the code fixes from the docs review
+*2026-11-18 · 854 assertions*
+
+**New: see the audio tracks in your language and download one (GUI).**
+A dubbed YouTube video can carry a dozen audio rows, one per language, codec
+and bitrate. The new **Audio tracks** tab (the eighth) lists the ones in the
+chosen language: original first, then by bitrate, with YouTube's own name for
+each. **Download this audio** fetches exactly that track as music
+(`get URL --format-selector <id>`). **Use with a video quality** pins it for the
+Quality tab, which then pairs every video row with it (`248+251-1`). Picking a
+language also sets the Download tab's `--audio-lang`. The tab shares the URL
+box and the loaded formats with the Quality tab. Code: `formats.audio_tracks`,
+`track_bitrate`, `describe_track`; `pair_with_audio`/`auto_pick` take `lang=`
+and `pinned=`.
+
+**Fixed (found while checking the docs against the code):**
+
+- **The Quality tab ignored `--audio-lang`.** It paired video rows with the
+  best audio in any language, so on a dubbed video it could pick the wrong
+  one. It now uses the audio language, or the pinned track.
+- **`same_language` only worked one way.** `en` matched an `eng` tag, but
+  `--audio-lang eng` did not match YouTube's `en`. It now works in both
+  directions, including `fre`/`fra` and `pt-BR`/`por`.
+- **lrclib etiquette.** The User-Agent was
+  `musictool/1.0 (personal script; contact: you@example.com)`, a placeholder.
+  It is now `musictool/<version> (https://github.com/JohnOlowe/MusicTool)`.
+  `Retry-After` on a 429 is now honoured, in seconds or as an HTTP date
+  (5 s default, 120 s cap, up to 30 % jitter); it used to be ignored.
+- **The bot-wall advice sent Windows users to Edge/Chrome,** whose cookies
+  yt-dlp cannot decrypt there (App-Bound Encryption). `ADVICE` and `BOT_HINT`
+  now say Firefox first, or a `cookies.txt`.
+- **`gui` with tkinter but no display** printed a `TclError` traceback. It now
+  exits 1 with "GUI unavailable: …".
+- **Dead settings removed:** `genius_token`/`musixmatch_key` and the
+  `MUSICTOOL_GENIUS`/`MUSICTOOL_MUSIXMATCH` overrides. No provider used them.
+- **`pyproject.toml`** URLs pointed at `github.com/OWNER/...`.
+- **GUI log:** notes written by the GUI itself ran together on one line;
+  `log()` now ends each with a newline.
+- **Tests:** the `gui` subprocess check is now hermetic (a stand-in `tkinter`
+  that refuses to import), so the suite gives 854/0 with or without tkinter.
+  New sections 34 (audio tracks) and 35 (these fixes).
+
+**`handoff/guides` scripts** (not MusicTool code, but they were wrong):
+
+- `burn_parallel_flexible.sh` and `burnfix-home.sh`: MediaCodec gets
+  `-level 4 -bitrate_mode cbr` (`-level 4.0` meant level 1.1; `-maxrate`/
+  `-bufsize` are ignored by that encoder). The font check reads the font after
+  `->` in libass's `fontselect` line and stops on a fallback. The old check
+  grepped for the requested name, which is always printed. Each part is
+  waited for separately and a failed part stops the join; a bare `wait`
+  returned 0 and the old scripts would join broken parts.
+  `burn_parallel_flexible.sh` also gains `--encoder libx264` (for a PC, with
+  `-pix_fmt yuv420p`) and uses `$TMPDIR`. Tested end to end with libx264:
+  3 parts against a single-pass burn, average PSNR 59.4 dB, subtitles in
+  sync across the cuts. The MediaCodec path could not be run here.
+- The same per-part `wait` in the inline loops of `phone-first-ffmpeg.md`
+  and `subtitle-hard-burn.md`.
+- `burn_subtitles.bat`: `TOTAL` is now the duration from ffprobe (it was the
+  file's date and time, `%%~tA`); the subtitle name is quoted, which covers
+  spaces and commas but not `:` or `\`, so the script still wants a bare
+  filename. `vlc-seek-fix*.bat` find VLC
+  themselves instead of hard-coding one path each; the `.mka` fallback no
+  longer passes the mp4-only `-movflags +faststart`. The `.bat` files were
+  not run (no Windows here).
+
+## `1cbbebc` — docs checked against the code
+*2026-11-18 · 808 assertions (no code touched)*
+
+Every claim in the `.md` files was checked against the code, the tests or a
+real ffmpeg run, and the wrong or stale ones were corrected (widget counts,
+defaults, ffmpeg flags, the hardware notes in `handoff/`). The code problems
+it found are fixed in the next entry.
 
 ## `076d1ce` — handoff material from the hardware-acceleration sessions
 *2026-11-18 · 808 assertions (no code touched)*

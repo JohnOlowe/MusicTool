@@ -188,7 +188,18 @@ def same_language(tag, want):
     if not t or not w or w in ("any", "auto", "original", "*"):
         return False
     t, w = t.split("-")[0], w.split("-")[0]
-    return t == w or t in LANG_CODES.get(w, ())
+    # both directions: --audio-lang eng must find a track tagged 'en' just as
+    # --audio-lang en finds one tagged 'eng'
+    return (t == w or t in LANG_CODES.get(w, ()) or w in LANG_CODES.get(t, ())
+            or bool(set(_codes_for(t)) & set(_codes_for(w))))
+
+
+def _codes_for(code):
+    """Every spelling of one language: 'eng' -> {'en', 'eng'}."""
+    for two, threes in LANG_CODES.items():
+        if code == two or code in threes:
+            return {two, *threes}
+    return {code}
 
 
 def _match_lang(row, lang):
@@ -451,9 +462,13 @@ def with_audio_pool(rows, all_rows):
                          if id(r) not in keep and r["kind"] != "video"]
 
 
-def pair_with_audio(row, rows, max_bytes=None):
-    """Public wrapper over _pair: the audio track to go with `row`."""
-    return _pair(row, rows, max_bytes)
+def pair_with_audio(row, rows, max_bytes=None, lang=None, pinned=None):
+    """Public wrapper over _pair: the audio track to go with `row`.
+
+    `lang` prefers that spoken language; `pinned` is a track the user chose by
+    hand (the GUI's Audio tracks tab) and wins over both.
+    """
+    return _pair(row, rows, max_bytes, lang, pinned)
 
 
 def selector_for(row, audio):
@@ -466,10 +481,16 @@ def total_bytes(row, audio=None):
     return _total(row, audio)
 
 
-def _pair(row, rows, max_bytes=None, lang=None):
-    """A video row plus the best audio track to go with it."""
+def _pair(row, rows, max_bytes=None, lang=None, pinned=None):
+    """A video row plus the best audio track to go with it.
+
+    A `pinned` audio row is used as-is: the user picked it, so neither the
+    language preference nor the size cap may swap it for another track.
+    """
     if row["kind"] != "video":
         return row, None
+    if pinned is not None:
+        return row, pinned
     audio = _best_audio(rows, lang)
     if audio is None:
         return row, None
@@ -555,13 +576,19 @@ def _total(row, audio):
     return (row["bytes"] or 0) + ((audio["bytes"] or 0) if audio else 0)
 
 
-def auto_pick(rows, mode="best", max_bytes=None, lang=None):
+def auto_pick(rows, mode="best", max_bytes=None, lang=None, pinned=None):
     """Choose for the user and say why. -> (selector, row, audio, why)
 
     `rows` should already be filtered. Nothing here guesses: when the pool is
-    empty the answer is None plus the reason, so the UI can say so.
+    empty the answer is None plus the reason, so the UI can say so. `pinned`
+    is an audio track the user chose by hand; it replaces the automatic audio
+    choice in every mode.
     """
     all_rows = rows or []
+    if mode == "audio" and pinned is not None:
+        return (_selector(pinned, None), pinned, None,
+                f"your audio track: {pinned['acodec']} {pinned['ext']} "
+                f"{_spoken(pinned)}~ {human_bytes(pinned['bytes'])}")
     if mode == "audio":
         auds = _audio_pool(all_rows, lang)
         if not auds:
@@ -607,11 +634,15 @@ def auto_pick(rows, mode="best", max_bytes=None, lang=None):
             why = (f"best quality: {chosen['height'] or '?'}p "
                    f"{chosen['vcodec'] or chosen['ext']} "
                    f"~ {human_bytes(chosen['bytes'])}")
-    row, audio = _pair(chosen, all_rows, max_bytes, lang)
+    row, audio = _pair(chosen, all_rows, max_bytes, lang, pinned)
     total = _total(row, audio)
     if audio:
-        why += (f"  +  {audio['acodec']} audio {_spoken(audio)}"
+        why += (f"  +  {'your ' if audio is pinned else ''}"
+                f"{audio['acodec']} audio {_spoken(audio)}"
                 f"-> ~ {human_bytes(total)} total")
+    elif pinned is not None:
+        why += ("  (this format already carries its own audio, so your "
+                "chosen track is not used)")
     if max_bytes and total and total > max_bytes:
         why += f"  (over the {human_bytes(max_bytes)} limit -- nothing fits)"
     return _selector(row, audio), row, audio, why
@@ -642,3 +673,69 @@ def describe_choice(chosen, audio=None):
     return (f"{res} {chosen['vcodec']} + "
             f"{audio['acodec'] if audio else 'audio'} "
             f"{_spoken(audio if audio else chosen)}~ {human_bytes(total)}")
+
+
+# --------------------------------------------------------------------------
+# Choosing the audio track yourself
+#
+# A dubbed video offers the same itag once per spoken language, often in two
+# codecs and several bitrates. The automatic picker takes the best one in your
+# --audio-lang; this is the list to choose from by hand instead.
+# --------------------------------------------------------------------------
+ANY_LANG = ("", "any", "auto", "original", "*", "all")
+
+
+def is_any_lang(lang):
+    """True for the values that mean "no language preference"."""
+    return str(lang or "").strip().lower() in ANY_LANG
+
+
+def audio_tracks(rows, lang=None):
+    """The audio tracks a video offers in one spoken language.
+
+    -> (tracks, note). `tracks` is collapsed (one row per real stream, CDN
+    variant splits merged) but NOT de-duplicated: two codecs at the same
+    bitrate are a real choice here. Sorted originals first, then by language,
+    then best bitrate first. `note` explains an empty or unfiltered list:
+
+    * no track tagged with `lang`  -> [] and which languages there are
+    * no track tagged at all       -> every track, and a note saying so
+      (a single-language upload usually tags nothing, and its one language
+      is then the only choice anyway)
+    """
+    auds = [r for r in collapse_variants(rows or []) if r["kind"] == "audio"]
+    if not auds:
+        return [], "this video offers no separate audio track"
+    note = ""
+    if not is_any_lang(lang):
+        hit = [r for r in auds if _match_lang(r, lang)]
+        if hit:
+            auds = hit
+        elif any((r.get("lang") or "") for r in auds):
+            have = ", ".join(f"{c} (original)" if o else c
+                             for c, o, _n in languages_in(auds))
+            return [], (f"no audio track is in '{lang}' -- this video has: "
+                        f"{have}")
+        else:
+            note = ("none of the tracks says what language it is in -- "
+                    "showing all of them")
+    auds.sort(key=lambda r: (-(1 if (r.get("lang_pref") or 0) > 0 else 0),
+                             (r.get("lang") or "~"),
+                             -(r["abr"] or r["tbr"] or 0),
+                             -(r["bytes"] or 0)))
+    return auds, note
+
+
+def track_bitrate(row):
+    """'160k' from abr (or tbr); '?' when yt-dlp did not say."""
+    rate = row.get("abr") or row.get("tbr")
+    return f"{round(rate)}k" if rate else "?"
+
+
+def describe_track(row):
+    """One line naming an audio track: id, language, codec, rate, size."""
+    if not row:
+        return "no track"
+    lang = _lang_tag(row) or "?"
+    return (f"{row['id']}  [{lang}]  {row['acodec'] or '?'} "
+            f"{track_bitrate(row)} {row['ext']}  ~ {human_bytes(row['bytes'])}")

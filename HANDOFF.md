@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **870 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **896 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,11 +115,11 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1207   argparse + every cmd_* handler
-│   ├── gui.py         2088   tkinter GUI, 8 tabs
+│   ├── cli.py         1246   argparse + every cmd_* handler
+│   ├── gui.py         2114   tkinter GUI, 8 tabs
 │   ├── uicmd.py        665   parser -> widget specs, build_argv, intent modes
-│   ├── formats.py      741   quality table, filters, language picking, audio tracks
-│   ├── download.py     568   yt-dlp invocation, videoId index, streams, swap_audio
+│   ├── formats.py      771   quality table, filters, language picking, audio tracks
+│   ├── download.py     634   yt-dlp invocation, videoId index, streams, swap_audio
 │   ├── util.py         553   classify, detect_browser, js_runtime, have_ffmpeg
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
@@ -128,7 +128,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py        82   cooperative stop
 ├── tests/
-│   ├── test_musictool.py 3807   36 sections, 870 assertions
+│   ├── test_musictool.py 4016   37 sections, 896 assertions
 │   └── tkstub.py          723   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -284,7 +284,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 870 assertions.
+Nothing is half-finished — `main` is green at 896 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

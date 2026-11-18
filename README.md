@@ -30,7 +30,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                870 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                896 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -419,6 +419,12 @@ checked 1 URL(s): 1 reachable, 0 blocked
 you are not blocked: download with no cookies at all
 ```
 
+A third verdict, `NO STREAMS`, means YouTube answered but yt-dlp got no audio
+or video out of it — only the storyboard pictures. That is your yt-dlp setup
+(the JS challenge went unsolved), not a login, and it comes with the fix:
+`pip install -U "yt-dlp[default]"` and a JS runtime; `doctor` shows which is
+missing. It also exits non-zero.
+
 When it *is* blocked it says which kind of block and what would fix it --
 `bot` (needs a login), `age`, `private`, `members`, `unavailable`, or `network`
 (a dead connection, which is not a block at all) -- and exits non-zero so you can
@@ -476,7 +482,17 @@ is unusable, so musictool merges it before showing it to you:
   their own -- they are what the video row gets paired with.
 
 Nothing is thrown away: `--all-formats` prints every raw row, and
-`--show-audio` puts the audio tracks back in the table.
+`--show-audio` puts the audio tracks back in the table — **the ones in your
+`--audio-lang`** (default `en`), so a dubbed video does not bury you in eight
+languages. A line under the table says how many other-language tracks it hid;
+`--audio-lang any` shows them all. If the video has no track in your language
+it shows every language and says so (the download would take the best one).
+In music mode (no `--keep-video`) the audio rows are always listed, filtered
+the same way, and the suggested command is an audio download.
+
+If the table comes back **empty**, `formats` says why instead of printing
+nothing. Nearly always it is the JS challenge: yt-dlp then sees only preview
+pictures, and the line names the fix (and quotes yt-dlp's own warning).
 
 ### Filtering it, or letting it choose
 
@@ -709,7 +725,7 @@ actually hit instead of printing a bare `ERROR:`:
 | `No supported JavaScript runtime` / `n challenge solving failed` | YouTube's n-challenge needs a JS engine (yt-dlp only enables deno by default) **and** the `yt-dlp-ejs` scripts | install deno (or node — musictool enables node itself when it is the only runtime); if `doctor` shows `ejs: MISSING`, `pip install -U "yt-dlp[default]"` or add `--remote-components ejs:github` |
 | `The page needs to be reloaded` | the bot wall, usually because the JS challenge went unsolved | same as above |
 | `[pot:bgutil:http] ... 127.0.0.1:4416` | the **bgutil PO-token plugin** is installed but its server is not running. It is not yt-dlp's own solver. | start the plugin's server, or uninstall the plugin |
-| `Requested format is not available` | that itag is not offered to your account/client -- nothing to do with Premium | `musictool formats URL --show-audio --all-formats` to see what is really there |
+| `Requested format is not available` | that itag is not offered to your account/client -- nothing to do with Premium. **If `formats` itself lists nothing**, it is the JS challenge instead (yt-dlp found only preview pictures); musictool now says so | `musictool formats URL --show-audio --all-formats` to see what is really there |
 
 `musictool doctor` reports the three things that cause the middle of that table:
 whether a JS runtime is on your PATH, whether `yt-dlp-ejs` is installed, and
@@ -1042,7 +1058,10 @@ list — not the 127 rows yt-dlp reports. From there:
   with the settings from the Download tab. Double-clicking a row downloads it.
 
 If YouTube refuses the request the tab says why and repeats the fix from
-`check` — it does not leave you staring at an empty table.
+`check` — it does not leave you staring at an empty table. The same goes for
+an answer with no audio or video in it (the JS challenge failed): both this
+tab and Audio tracks say so and name the fix. The lookup uses the Download
+tab's cookies and its `--js-runtimes` / `--remote-components`.
 
 ### The Audio tracks tab
 
@@ -1069,9 +1088,10 @@ the Quality tab, so one **Load** fills both.
   goes back to the best track in your language. The choice is per video:
   loading a different URL forgets it.
 
-On the command line, `musictool formats URL --show-audio` lists every audio
-track (all languages, not filtered) and names the spoken languages; `musictool
-get URL -f <id>` takes one.
+On the command line, `musictool formats URL --show-audio` lists the audio
+tracks in your `--audio-lang` (`--audio-lang any` for all of them) and names
+the spoken languages; `musictool get URL -f <id>` takes one. In the window,
+that is the **+ audio formats** tick beside **List qualities + sizes**.
 
 
 **Every CLI option is in the GUI, and it stays that way automatically.** The
@@ -1100,7 +1120,10 @@ so you can copy it into a shell or a cron job.
 - **Check access (no cookies)** and **List qualities + sizes** — next to the
   download button: the first tells you whether YouTube is blocking you before you
   change anything, the second prints the quality/size table into the log so you
-  can copy an id into the `-f` field. "This video only, not its playlist" is a
+  can copy an id into the `-f` field. Tick **+ audio formats** beside it to
+  list the audio-only tracks too, in the spoken language set on the tab
+  (`formats --show-audio`); unticked, a video-mode list shows the video
+  qualities only. The tick is remembered. "This video only, not its playlist" is a
   quick option at the top of the tab, since most of the time you want one video.
 - **Quick options** — the toggles you reach for constantly (`--allow-unsynced`,
   "redo files that already have lyrics", subfolders, dry run, .lrc-only) sit in a
@@ -1206,7 +1229,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 870 assertions, 0 failures**, with or without
+**Verified by running the code — 896 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

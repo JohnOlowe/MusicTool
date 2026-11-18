@@ -763,6 +763,7 @@ def run():
             extra = {"urls": urls.get("1.0", "end").strip(),
                      "download_mode": current_mode(),
                      "more_options": bool(adv_open.get()),
+                     "list_audio": bool(list_audio.get()),
                      "show_all_options": bool(panes["get"].show_all.get())}
             configmod.remember(gui_opts=opts, gui_extra=extra)
         except Exception as e:                                 # noqa: BLE001
@@ -962,7 +963,14 @@ def run():
     bcheck.pack(side="left", padx=4)
     bfmt = ttk.Button(brow, text="List qualities + sizes",
                       command=lambda: go_formats())
-    bfmt.pack(side="left", padx=4)
+    bfmt.pack(side="left", padx=(4, 0))
+    # The video list normally hides the audio-only tracks (they are paired
+    # with the video for you). Ticked, they are listed too -- only the ones in
+    # the spoken language set above, as `formats --show-audio` does.
+    list_audio = tk.BooleanVar(value=bool(EXTRA.get("list_audio")))
+    ttk.Checkbutton(brow, text="+ audio formats", variable=list_audio,
+                    command=lambda: remember_soon()).pack(side="left",
+                                                          padx=(2, 4))
     bget = ttk.Button(brow, text="Download + lyrics",
                       command=lambda: go_get())
     bget.configure(text="Download video"
@@ -998,6 +1006,8 @@ def run():
             messagebox.showwarning("musictool", "Paste a video URL first.")
             return
         vals = dict(panes["get"].values())
+        if list_audio.get():
+            vals["show_audio"] = True      # filtered by --audio-lang
         do_argv(uicmd.build_argv("formats", vals, positionals=[u[0]],
                                  parser=build_parser()))
 
@@ -1668,10 +1678,22 @@ def run():
             return
         g = panes["get"].values()
         opts = {"cookies": g.get("cookies"),
-                "cookies_from_browser": g.get("cookies_from_browser")}
+                "cookies_from_browser": g.get("cookies_from_browser"),
+                # the Download tab's JS settings: without them a video whose
+                # challenge needs node came back with no streams here
+                "js_runtimes": g.get("js_runtimes"),
+                "remote_components": g.get("remote_components")}
 
         def job():
             return download.probe(url, opts)
+
+        def redraw():
+            # one failing must not leave the other tab saying "reading ..."
+            for fn in (q_draw, a_draw):
+                try:
+                    fn()
+                except Exception as e:                      # noqa: BLE001
+                    log(f"!! {fn.__name__}: {type(e).__name__}: {e}")
 
         def after(info):
             if not isinstance(info, dict) or info.get("error"):
@@ -1683,24 +1705,27 @@ def run():
                 if hint:
                     qinfo.set(qinfo.get() + "\n-> " + hint)
                 q_loaded["url"] = ""
-                q_draw()
-                a_draw()
+                redraw()
                 ainfo.set(qinfo.get())
                 return
             q_rows[:] = formats.rows_from_info(info)
             q_loaded["url"] = url
+            q_loaded["why"] = download.no_media_reason(info) or ""
             if a_pin["url"] != url:
                 a_pin["row"], a_pin["url"] = None, ""
             title = info.get("title") or url
             log(f"{len(q_rows)} raw qualities for {title!r}")
-            q_draw()
-            a_draw()
+            redraw()
+            if q_loaded["why"]:
+                log("!! " + q_loaded["why"])
+                qinfo.set(q_loaded["why"])
+                ainfo.set(q_loaded["why"])
 
         qinfo.set(f"reading the qualities of {url} …")
         ainfo.set(f"reading the audio tracks of {url} …")
         worker(job, after=after)
 
-    q_loaded = {"url": ""}
+    q_loaded = {"url": "", "why": ""}
 
     # =============================================== Audio tracks tab
     # A dubbed video serves one audio track per spoken language, often in two
@@ -1813,7 +1838,8 @@ def run():
             if spoken else "")
         if not q_rows:
             if q_loaded["url"]:
-                ainfo.set("no formats reported for this video")
+                ainfo.set(q_loaded.get("why")
+                          or "no formats reported for this video")
             return
         tracks, note = formats.audio_tracks(q_rows, alang.get())
         pin = q_pinned()

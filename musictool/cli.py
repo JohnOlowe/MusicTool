@@ -141,7 +141,8 @@ def build_parser():
                     help="only this container")
     fm.add_argument("--codec", help="only this codec, e.g. avc1, vp9, av01, opus")
     fm.add_argument("--show-audio", action="store_true",
-                    help="include the audio-only tracks in the table")
+                    help="include the audio-only tracks in the table, in "
+                         "your --audio-lang (any = every language)")
     fm.add_argument("--sort", choices=["size_desc", "size_asc", "resolution",
                                        "container"], default="size_desc")
     fm.add_argument("--auto", choices=formats.AUTO_MODES,
@@ -279,7 +280,7 @@ def cmd_check(args):
     else:
         print("checking WITH your cookies/login (that is not the same question)")
 
-    ok = blocked = 0
+    ok = blocked = nostream = 0
     for url in args.urls:
         print(f"\n==> {url}")
         info = download.probe(url, dict(o, flat=True))
@@ -300,18 +301,31 @@ def cmd_check(args):
             print(f"    reachable  playlist of {len(entries)} items; first is "
                   f"\"{first.get('title') or first.get('id')}\"")
         else:
+            why = download.no_media_reason(info)
+            if why:
+                # YouTube answered, but the JS challenge was not solved, so
+                # there is nothing to download. Not a login problem.
+                nostream += 1
+                print(f"    NO STREAMS  \"{info.get('title') or info.get('id')}\""
+                      f"  {_duration(info.get('duration'))}")
+                print(f"    -> {why}")
+                continue
             ok += 1
             print(f"    reachable  \"{info.get('title') or info.get('id')}\""
                   f"  {_duration(info.get('duration'))}")
         print("    -> no login needed for this one")
 
     print("\n" + "=" * 60)
-    print(f"checked {ok + blocked} URL(s): {ok} reachable, {blocked} blocked")
+    print(f"checked {ok + blocked + nostream} URL(s): {ok} reachable, "
+          f"{blocked} blocked" + (f", {nostream} with no streams" if nostream
+                                  else ""))
     if blocked:
         print("cookies are needed for the blocked ones -- see the advice above")
-    else:
+    if nostream:
+        print("no streams = your yt-dlp setup, not a login: run musictool doctor")
+    if not blocked and not nostream:
         print("you are not blocked: download with no cookies at all")
-    return 0 if not blocked else 1
+    return 0 if not (blocked or nostream) else 1
 
 
 def cmd_formats(args):
@@ -331,6 +345,12 @@ def cmd_formats(args):
             rc = 1
             continue
         raw = formats.rows_from_info(info)
+        why = download.no_media_reason(info)
+        if why:
+            print(f"    {info.get('title') or info.get('id')}")
+            print(f"    !! {why}")
+            rc = 1
+            continue
         shown = formats.apply_filters(
             raw,
             max_height=None,
@@ -342,14 +362,20 @@ def cmd_formats(args):
             collapse=not getattr(args, "all_formats", False),
             dedupe=not getattr(args, "all_formats", False),
             sort=getattr(args, "sort", "size_desc"))
+        # audio rows in your spoken language only, like the download picks
+        merged = len(shown)
+        shown, lang_note = formats.filter_audio_lang(
+            shown, str(o.get("audio_lang") or ""))
         dur = _duration(info.get("duration"))
         print(formats.table(
             shown, f"    {info.get('title') or info.get('id')}"
                    + (f"  ({dur})" if dur else "")))
-        if len(shown) < len(raw):
-            print(f"    ({len(raw)} rows from yt-dlp collapsed to {len(shown)}: "
+        if merged < len(raw):
+            print(f"    ({len(raw)} rows from yt-dlp collapsed to {merged}: "
                   f"variant splits and same-quality doubles are merged -- "
                   f"--all-formats shows every row)")
+        if lang_note:
+            print(f"    ({lang_note})")
         # the *table* is the filtered list; the *picker* also gets the audio
         # tracks the table hid, or a 1080p video would be paired with the
         # 360p combined format just because the real audio was filtered out.
@@ -380,9 +406,12 @@ def cmd_formats(args):
             rows, height=height, max_bytes=cap,
             audio_only=not o.get("keep_video"),
             smallest=want in ("smallest", "worst"), lang=lang)
+        # an audio pick is extracted to --format; only a video keeps its file
+        kv = " --keep-video" if (o.get("keep_video") or (
+            getattr(args, "auto", None) and args.auto != "audio")) else ""
         if sel:
             print(f"\n    to take this one:")
-            print(f"      musictool get \"{url}\" --keep-video -f {sel}"
+            print(f"      musictool get \"{url}\"{kv} -f {sel}"
                   f"{' --merge-format ' + o['merge_format'] if o.get('merge_format') else ''}"
                   f"     # {formats.describe_choice(v, a)}")
         if note:
@@ -393,7 +422,7 @@ def cmd_formats(args):
                                                   max_bytes=cap, lang=lang)
             if asel:
                 print(f"\n    auto ({auto}): {why}")
-                print(f"      musictool get \"{url}\" --keep-video -f {asel}"
+                print(f"      musictool get \"{url}\"{kv} -f {asel}"
                       f"{' --merge-format ' + o['merge_format'] if o.get('merge_format') else ''}")
             else:
                 print(f"\n    auto ({auto}): nothing to pick -- {why}")
@@ -443,6 +472,11 @@ def _resolve_quality(url, o, log=print):
             f"{str((info or {}).get('error'))[:160]}")
         log("  !! so --quality/--max-size cannot be honoured here; yt-dlp "
             "will pick its own default")
+        return
+    why = download.no_media_reason(info)
+    if why:
+        log(f"  !! {why}")
+        log("  !! so --quality/--max-size cannot be honoured here")
         return
     rows = formats.rows_from_info(info)
     sel, v, a, note = formats.pick(
@@ -1023,6 +1057,11 @@ def cmd_relang(args):
         if not isinstance(info, dict) or info.get("error"):
             print(f"  !! could not read the tracks: "
                   f"{str((info or {}).get('error'))[:160]}")
+            n["errors"] += 1
+            continue
+        why = download.no_media_reason(info)
+        if why:
+            print(f"  !! {why}")
             n["errors"] += 1
             continue
         rows = formats.rows_from_info(info)

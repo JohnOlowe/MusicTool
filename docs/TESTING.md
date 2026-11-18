@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**870 assertions across 36 sections (plus 8b), 0 failures** — with or without
+**896 assertions across 37 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 35 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -145,6 +145,19 @@ Proven by execution:
   used, and its credit lines are stripped; lrclib records are trimmed to the
   fields read; `runtime_args` enables node when it is the only runtime, an
   explicit `--js-runtimes` wins, and `probe` passes both runtime flags
+- audio in the format list (section 37), against a second fake yt-dlp that
+  answers like the real one for a dubbed video and for a failed JS challenge
+  (storyboards only, the warning on stderr, `Requested format is not
+  available` unless `--ignore-no-formats-error`): `formats --show-audio`
+  lists audio in `--audio-lang` only, says how many it hid, falls back to every
+  language when there is none in yours, `any` shows all, music mode filters
+  too and suggests an audio download; the empty list names the JS challenge in
+  `formats`, `check` (`NO STREAMS`, its own count) and `get --quality`; a failed
+  probe leads with the ERROR and carries the explaining warning; and in the GUI
+  the **+ audio formats** tick beside **List qualities + sizes** adds
+  `--show-audio` with the tab's `--audio-lang`, the Quality/Audio probe gets
+  `--js-runtimes`, and an empty Audio tracks list explains itself. Undoing
+  the tick or the probe flag fails six of these.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

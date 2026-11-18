@@ -449,6 +449,36 @@ def apply_filters(rows, max_height=None, container=None, codec=None,
     return out
 
 
+def filter_audio_lang(rows, lang):
+    """Keep the audio-only rows in one spoken language; video rows untouched.
+
+    -> (rows, note). The download falls back to the best track when none is
+    in `lang` (audio_lang_selector ends in /ba), so the table does the same:
+    rather than an empty list it shows every language and says why.
+    'any'/'' shows everything.
+    """
+    rows = list(rows or [])
+    if is_any_lang(lang):
+        return rows, ""
+    auds = [r for r in rows if r["kind"] == "audio"]
+    if not auds:
+        return rows, ""
+    hit = [r for r in auds if _match_lang(r, lang)]
+    if hit:
+        keep = {id(r) for r in hit}
+        out = [r for r in rows if r["kind"] != "audio" or id(r) in keep]
+        dropped = len(auds) - len(hit)
+        return out, (f"audio in '{lang}' only: {dropped} track(s) in other "
+                     f"languages hidden -- --audio-lang any shows them"
+                     if dropped else "")
+    if any((r.get("lang") or "") for r in auds):
+        have = ", ".join(f"{c} (original)" if o else c
+                         for c, o, _n in languages_in(auds))
+        return rows, (f"no audio track is in '{lang}' -- showing every "
+                      f"language ({have}); the download takes the best one")
+    return rows, ""     # nothing tagged: a single-language upload
+
+
 def with_audio_pool(rows, all_rows):
     """`rows` (a filtered table) plus the audio tracks it filtered out.
 

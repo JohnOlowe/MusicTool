@@ -8,6 +8,31 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## (this commit) — audio in the quality list; empty lists explained
+*2026-11-18 · 896 assertions*
+
+- **Download tab: a "+ audio formats" tick beside "List qualities + sizes".**
+  Ticked, the list includes the audio-only tracks, in the spoken language set
+  on the tab (`formats --show-audio --audio-lang …`). Remembered between runs.
+- **`formats --show-audio` filters the audio rows by `--audio-lang`** (it
+  showed every language). It says how many it hid; with no track in your
+  language it shows all of them and says so; `any` shows all. Music mode
+  filters too, and its suggested command no longer adds `--keep-video` to an
+  audio pick.
+- **An empty format list is explained.** Reported: the Audio tracks tab
+  returned nothing for a 20-hour 4K video. The likely cause is a JS challenge
+  that was not solved (e.g. `pip install yt-dlp` without `yt-dlp-ejs`): yt-dlp
+  then has only storyboard pictures, `-J` died with "Requested format is not
+  available", and musictool's advice sent you to `formats` — the command that
+  had just failed — while `--no-warnings` dropped the warning naming the cause.
+  `probe` now passes `--ignore-no-formats-error`, keeps the warnings, and
+  `no_media_reason()` gives the fix in `formats`, `check` (a new `NO STREAMS`
+  verdict), `get --quality`, `relang` and both GUI tabs. "Only images are
+  available" and "Signature solving failed" now classify as `js_runtime`.
+- The Quality/Audio tracks lookup now uses the Download tab's
+  `--js-runtimes`/`--remote-components` (it used cookies only), and one tab
+  failing to draw no longer leaves the other saying "reading …".
+
 ## `4d63131` — first live run: three provider bugs, yt-dlp setup, README
 *2026-11-18 · 870 assertions*
 

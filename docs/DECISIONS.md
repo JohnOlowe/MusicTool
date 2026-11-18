@@ -77,6 +77,13 @@ See `RECIPES.md`.
   the sign-in cascade (dead `cookies.txt`, DPAPI App-Bound Encryption, a locked
   cookie database, no JS runtime, a PoT server on 4416, the reload wall). Each
   has a different fix, and "unknown" is not a diagnosis.
+- **`-J` still runs format selection.** When the JS challenge fails, YouTube's
+  only formats are the storyboards (`mhtml`, no codecs), selection finds
+  nothing, and `-J` dies with `Requested format is not available` — while the
+  line that says why (`n challenge solving failed`) is a WARNING, which
+  `--no-warnings` used to drop. `probe` passes `--ignore-no-formats-error` and
+  keeps the warnings. (A long 4K video, e.g. a 20-hour walkthrough, behaves
+  like any other here; it is the setup, not the video.)
 - **The YouTube challenge needs two things** (yt-dlp 2026.10.26 `--help`): a JS
   runtime — only deno is enabled by default, node/quickjs/bun must be opted
   in with `--js-runtimes` — **and** the `yt-dlp-ejs` scripts. Plain

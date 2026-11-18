@@ -46,6 +46,10 @@ BLOCKERS = (
     ("login with oauth is no longer supported", "oauth_gone"),
     ("no supported javascript runtime", "js_runtime"),
     ("n challenge solving failed", "js_runtime"),
+    ("signature solving failed", "js_runtime"),
+    # what yt-dlp says when the challenge failed and only the storyboard
+    # pictures are left -- it is the JS setup, not the video
+    ("only images are available", "js_runtime"),
     ("pot:bgutil", "pot_server"),
     ("127.0.0.1:4416", "pot_server"),
     ("the page needs to be reloaded", "reload"),
@@ -55,6 +59,13 @@ BLOCKERS = (
 # Chromium-derived browsers share one cookie format and one encryption lock,
 # which is why the error message says "Chrome" even for Edge/Brave/Vivaldi.
 CHROMIUM = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera", "whale")
+
+# What solving YouTube's JS challenge takes (yt-dlp 2026.10.26 --help).
+JS_FIX = ("It needs two things: the solver scripts -- pip install -U "
+          "\"yt-dlp[default]\" (plain 'pip install yt-dlp' leaves them out), "
+          "or add --remote-components ejs:github -- and a JavaScript runtime: "
+          "deno, or node (--js-runtimes node; musictool adds it when node is "
+          "all you have). 'musictool doctor' shows which one is missing.")
 
 ADVICE = {
     "bot": ("YouTube wants a logged-in session. Log in to YouTube in Firefox "
@@ -87,10 +98,8 @@ ADVICE = {
     "oauth_gone": ("yt-dlp dropped the TV/OAuth login. Use "
                    "--cookies-from-browser firefox, or an exported "
                    "cookies.txt with --cookies."),
-    "js_runtime": ("YouTube's n-challenge needs a JavaScript runtime. Install "
-                   "deno (the default) or node, pass --js-runtimes node if "
-                   "you use node, and add --remote-components ejs:github so "
-                   "yt-dlp is allowed to fetch the solver script."),
+    "js_runtime": ("YouTube's challenge was not solved, so yt-dlp got no audio "
+                   "or video streams. " + JS_FIX),
     "pot_server": ("The bgutil PO-token plugin is installed but its server is "
                    "not answering on 127.0.0.1:4416. Start it (docker run -p "
                    "4416:4416 brainicism/bgutil-ytdlp-pot-provider) or "
@@ -100,9 +109,11 @@ ADVICE = {
                "challenge was not solved: install deno or node and add "
                "--remote-components ejs:github (see 'js runtime' in "
                "musictool doctor)."),
-    "no_format": ("That itag is not offered to your account or client. List "
-                  "what is really there with: musictool formats URL "
-                  "--show-audio --all-formats"),
+    "no_format": ("That format is not offered to your account or client. "
+                  "List what is really there with: musictool formats URL "
+                  "--show-audio --all-formats. If that list is empty too, "
+                  "YouTube's challenge was not solved -- see 'ejs' and 'js "
+                  "runtime' in musictool doctor."),
 }
 
 
@@ -400,10 +411,20 @@ def runtime_args(o):
 
 
 def probe(url, o):
-    """Cheap metadata read, no download. -> list of dicts."""
+    """Cheap metadata read, no download. -> the info dict, or {"error": ...}.
+
+    yt-dlp's warnings come back in info["_warnings"]. They used to be thrown
+    away (--no-warnings), and with them the one line that says *why* a video
+    has no formats: "n challenge solving failed".
+    """
     args = list(ytdlp_cmd()) + [
         "--flat-playlist" if o.get("flat") else "--no-playlist",
-        "-J", "--no-warnings", url]
+        # -J still runs format selection, and when the JS challenge fails
+        # (only storyboard pictures left) that selection dies with "Requested
+        # format is not available" -- which hid the real cause and sent you
+        # to `formats`, the very command that had just failed. This keeps the
+        # info, so the empty list can be explained.
+        "-J", "--ignore-no-formats-error", url]
     args += cookie_args(o)
     # check/formats/quality picks used to ignore --js-runtimes and
     # --remote-components here, so only the download itself honoured them
@@ -412,12 +433,57 @@ def probe(url, o):
         out = subprocess.run(args, capture_output=True, text=True, timeout=180)
     except Exception as e:
         return {"error": str(e)}
+    lines = [x.strip() for x in (out.stderr or "").splitlines() if x.strip()]
+    warns = [x for x in lines if x.startswith("WARNING:")]
     if out.returncode != 0:
-        return {"error": (out.stderr or out.stdout or "").strip()[-400:]}
+        errs = [x for x in lines if x.startswith("ERROR:")]
+        # the ERROR first (callers show line one), then the warnings that
+        # explain it, so classify_error sees the cause and not just the effect
+        why = [w for w in warns if classify_error(w) != "unknown"]
+        text = "\n".join(errs + why) if errs else "\n".join(lines[-6:])
+        return {"error": (text or (out.stdout or "").strip())[-1200:]}
     try:
-        return json.loads(out.stdout)
+        info = json.loads(out.stdout)
     except Exception:
         return {"error": "could not parse yt-dlp output"}
+    if isinstance(info, dict):
+        info["_warnings"] = warns
+    return info
+
+
+def no_media_reason(info):
+    """Why a probe that worked lists no audio or video, or None if it does.
+
+    The usual cause is the JS challenge: yt-dlp then sees only the storyboard
+    pictures, which are not formats you can download, so the table is empty.
+    """
+    if not isinstance(info, dict) or info.get("error"):
+        return None
+    fmts = info.get("formats")
+    if not isinstance(fmts, list):
+        return None     # a playlist, or a site that reports no format list
+    media = [f for f in (fmts or [])
+             if (f.get("vcodec") or "none") != "none"
+             or (f.get("acodec") or "none") != "none"
+             or (f.get("vcodec") is None and f.get("acodec") is None
+                 and f.get("url") and f.get("ext") != "mhtml")]
+    if media:
+        return None
+    warns = "\n".join(info.get("_warnings") or [])
+    pics = len(fmts or [])
+    said = [w for w in (info.get("_warnings") or [])
+            if classify_error(w) == "js_runtime"]
+    if said or pics:
+        return ("no audio or video streams"
+                + (f", only {pics} preview picture(s)" if pics else "")
+                + (" -- YouTube's challenge was not solved. " if said else
+                   " -- most likely YouTube's challenge was not solved. ")
+                + JS_FIX
+                + ("\n   yt-dlp said: " + said[0][:200] if said else ""))
+    if classify_error(warns) != "unknown":
+        return ("no audio or video streams. "
+                + ADVICE[classify_error(warns)])
+    return "yt-dlp found no audio or video streams for this video."
 
 
 def print_target_name(url, o):

@@ -32,11 +32,11 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1207 | argparse for all 13 subcommands, and every `cmd_*` handler |
-| `gui.py` | 2088 | tkinter GUI, 8 tabs, the log pane, the progress panel, the queue |
+| `cli.py` | 1246 | argparse for all 13 subcommands, and every `cmd_*` handler |
+| `gui.py` | 2114 | tkinter GUI, 8 tabs, the log pane, the progress panel, the queue |
 | `uicmd.py` | 665 | parser → widget specs, `build_argv`, intent modes, pane geometry |
-| `formats.py` | 741 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
-| `download.py` | 568 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
+| `formats.py` | 771 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
+| `download.py` | 634 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
 | `util.py` | 553 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
@@ -68,6 +68,12 @@ Functions worth knowing by name because they are load-bearing:
   `http-cache.json`: `ytmusic` passes `use_cache=False` and caches its own
   compact per-videoId result, `lrclib` passes `shrink=` to keep only the
   fields it reads. Entries written under the old key are dropped on load.
+- `download.probe(url, o)` — the `-J` read behind `check`, `formats`, the
+  quality/language picks and the Quality/Audio tracks tabs. It passes
+  `--ignore-no-formats-error` (so a failed JS challenge returns the info with
+  only storyboards instead of dying in format selection) and keeps yt-dlp's
+  warnings in `info["_warnings"]`; `download.no_media_reason(info)` turns
+  "no audio/video rows" into the fix. Every caller checks it.
 - `download.runtime_args(o)` — `--remote-components`/`--js-runtimes` for every
   yt-dlp call (`build_args`, `probe`, `print_target_name`); adds
   `--js-runtimes node` when node is the only runtime. `probe` used to omit

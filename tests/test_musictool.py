@@ -3801,6 +3801,215 @@ _best, _ = _P.find_best(_P.Query("C", "Song C", video_id="UNTIMED1"),
                         [_P.YTMusic()], util.Http(delay=0), allow_unsynced=True)
 check("...and is used with it", _best is not None and _best.provider == "ytmusic")
 
+# ============ 37. audio in the format list, and the empty list explained
+print("\n--- 37. formats --show-audio by language; why a list is empty ---")
+# A fake yt-dlp that answers like the real one: a dubbed video, and a video
+# whose JS challenge failed -- storyboards only, the warning on stderr, and
+# "Requested format is not available" unless --ignore-no-formats-error.
+_FK = os.path.join(WORK, "bin37")
+os.makedirs(_FK, exist_ok=True)
+open(os.path.join(_FK, "yt-dlp"), "w").write(r"""#!/usr/bin/env python3
+import json, os, sys
+a = sys.argv[1:]
+open(os.path.join(os.path.dirname(__file__), "argv.txt"), "a").write(" ".join(a) + "\n")
+if "--version" in a:
+    print("2026.10.26-fake"); sys.exit(0)
+url = [x for x in a if x.startswith("http")][0]
+if "nochal" in url:
+    sys.stderr.write("WARNING: [youtube] Oqr0muaqH0c: n challenge solving failed: "
+                     "Some formats may be missing.\n")
+    sys.stderr.write("WARNING: Only images are available for download. use "
+                     "--list-formats to see them\n")
+    if "--ignore-no-formats-error" not in a:
+        sys.stderr.write("ERROR: [youtube] Oqr0muaqH0c: Requested format is not "
+                         "available. Use --list-formats for a list of available formats\n")
+        sys.exit(1)
+    print(json.dumps({"id": "Oqr0muaqH0c", "title": "GTA V", "duration": 73682,
+        "formats": [{"format_id": "sb%d" % i, "ext": "mhtml", "vcodec": "none",
+                     "acodec": "none"} for i in range(4)]}))
+    sys.exit(0)
+def aud(i, lang, orig, abr, ext="m4a", ac="mp4a.40.2"):
+    return {"format_id": "%s-%s" % (i, lang), "ext": ext, "vcodec": "none",
+            "acodec": ac, "abr": abr, "language": lang,
+            "language_preference": 10 if orig else -1, "filesize": abr * 75000}
+fm = [aud(140, "en", True, 129), aud(140, "es", False, 129),
+      aud(140, "fr", False, 129), aud(251, "en", True, 135, "webm", "opus"),
+      aud(251, "es", False, 135, "webm", "opus"),
+      {"format_id": "137", "ext": "mp4", "vcodec": "avc1.640028", "acodec": "none",
+       "height": 1080, "tbr": 4000, "filesize": 300000000}]
+print(json.dumps({"id": "DUB", "title": "Dubbed", "duration": 600, "formats": fm}))
+""")
+os.chmod(os.path.join(_FK, "yt-dlp"), 0o755)
+_ENV37 = dict(ENV, PATH=_FK + os.pathsep + ENV["PATH"])
+
+
+def run37(*args):
+    return subprocess.run([sys.executable, ENTRY, *args], capture_output=True,
+                          text=True, env=_ENV37)
+
+
+_r = run37("formats", "https://x/dub", "--keep-video", "--audio-lang", "es",
+           "--cookies-from-browser", "off")
+check("video mode without --show-audio: no audio-only rows",
+      "audio only" not in _r.stdout and "137" in _r.stdout, _r.stdout[-400:])
+_r = run37("formats", "https://x/dub", "--keep-video", "--show-audio",
+           "--audio-lang", "es", "--cookies-from-browser", "off")
+_aud_ids = [ln.split()[0] for ln in _r.stdout.splitlines() if "audio only" in ln]
+check("--show-audio lists the audio rows in --audio-lang only",
+      sorted(_aud_ids) == ["140-es", "251-es"], _r.stdout[-600:])
+check("...says how many other-language tracks it hid",
+      "3 track(s) in other languages hidden" in _r.stdout, _r.stdout[-400:])
+check("...and the merge count is not muddled by the language filter",
+      "collapsed to" not in _r.stdout, _r.stdout[-400:])
+_r = run37("formats", "https://x/dub", "--keep-video", "--show-audio",
+           "--audio-lang", "de", "--cookies-from-browser", "off")
+check("a language the video lacks: every track shown, and why",
+      sum("audio only" in ln for ln in _r.stdout.splitlines()) == 5
+      and "no audio track is in 'de'" in _r.stdout, _r.stdout[-500:])
+_r = run37("formats", "https://x/dub", "--keep-video", "--show-audio",
+           "--audio-lang", "any", "--cookies-from-browser", "off")
+check("--audio-lang any shows every audio track",
+      sum("audio only" in ln for ln in _r.stdout.splitlines()) == 5)
+_r = run37("formats", "https://x/dub", "--audio-lang", "fr",
+           "--cookies-from-browser", "off")
+_aud_ids = [ln.split()[0] for ln in _r.stdout.splitlines() if "audio only" in ln]
+check("music mode (audio always listed) filters by language too",
+      _aud_ids == ["140-fr"], _r.stdout[-500:])
+check("...and its suggested command is an audio download (no --keep-video)",
+      "musictool get \"https://x/dub\" -f 140-fr" in _r.stdout, _r.stdout[-300:])
+
+_r = run37("formats", "https://x/nochal", "--keep-video", "--show-audio",
+           "--cookies-from-browser", "off")
+check("a failed JS challenge is named, not reported as 'format not available'",
+      "challenge was not solved" in _r.stdout and "yt-dlp[default]" in _r.stdout
+      and "preview picture" in _r.stdout and _r.returncode == 1,
+      _r.stdout[-500:])
+check("...quoting yt-dlp's own warning",
+      "n challenge solving failed" in _r.stdout)
+_argv37 = open(os.path.join(_FK, "argv.txt")).read()
+check("probe keeps yt-dlp's warnings and survives an empty format list",
+      "--ignore-no-formats-error" in _argv37 and "--no-warnings" not in _argv37)
+_r = run37("check", "https://x/nochal", "https://x/dub")
+check("check: no streams is its own verdict, not 'reachable' and not 'blocked'",
+      "NO STREAMS" in _r.stdout and "1 reachable, 0 blocked, 1 with no streams"
+      in _r.stdout and _r.returncode == 1, _r.stdout[-400:])
+_r = run37("get", "https://x/nochal", "--keep-video", "--quality", "720",
+           "--dry-run", "--no-lyrics", "--cookies-from-browser", "off",
+           "-o", os.path.join(WORK, "out37"))
+check("get --quality says why it cannot pick, instead of 'no quality matched'",
+      "challenge was not solved" in _r.stdout + _r.stderr,
+      (_r.stdout + _r.stderr)[-400:])
+
+# the pieces, in-process
+_real_run = download.subprocess.run
+
+
+class _Out:
+    def __init__(self, rc, out, err):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+try:
+    download.subprocess.run = lambda a, **k: _Out(
+        1, "", "WARNING: [youtube] x: n challenge solving failed: Some formats "
+               "may be missing.\nERROR: [youtube] x: Requested format is not "
+               "available. Use --list-formats\n")
+    _e = download.probe("https://youtu.be/x", {})
+finally:
+    download.subprocess.run = _real_run
+check("a failed probe leads with the ERROR line...",
+      _e["error"].splitlines()[0].startswith("ERROR:"), _e)
+check("...and carries the warning that explains it, so it is classified right",
+      download.classify_error(_e["error"]) == "js_runtime", _e)
+check("'Only images are available' and signature failures mean the JS setup",
+      download.classify_error("WARNING: Only images are available for download")
+      == "js_runtime" and download.classify_error(
+          "WARNING: [youtube] x: Signature solving failed") == "js_runtime")
+check("no_media_reason: a normal video, a playlist, a plain file -> None",
+      download.no_media_reason(_AUD) is None
+      and download.no_media_reason({"_type": "playlist", "entries": []}) is None
+      and download.no_media_reason({"formats": [{"url": "http://h/a.m4a",
+                                                 "ext": "m4a"}]}) is None)
+check("the js_runtime advice names yt-dlp[default] and the runtime",
+      "yt-dlp[default]" in download.ADVICE["js_runtime"]
+      and "deno" in download.ADVICE["js_runtime"])
+_fa, _fn = F.filter_audio_lang(F.rows_from_info(_AUD), "en")
+check("filter_audio_lang keeps the video rows and the English audio",
+      {r["id"] for r in _fa} == {"248", "140-1", "251-1", "249-1"}, _fn)
+_fa, _fn = F.filter_audio_lang(F.rows_from_info(YT), "en")
+check("...and leaves untagged audio alone (a one-language upload)",
+      len(_fa) == len(F.rows_from_info(YT)) and _fn == "")
+
+# --- the GUI: the tick beside "List qualities + sizes"
+tkstub.reset()
+G.run()
+_r4 = tkstub.ROOTS[-1]
+
+
+def _drain4():
+    todo, _r4.pending[:] = list(_r4.pending), []
+    for f in todo:
+        f()
+
+
+_nb4 = [w for w in _r4.walk() if isinstance(w, tkstub.Notebook)][0]
+_dl4 = _nb4.tab_for("Download")
+_lb = _qbtn(_dl4, "List qualities + sizes")
+_tick = [w for w in _qw(_dl4, "checkbutton")
+         if w.options.get("text") == "+ audio formats"]
+check("the Download tab has a '+ audio formats' tick", len(_tick) == 1)
+check("...right beside 'List qualities + sizes'",
+      bool(_tick) and _tick[0].master is _lb.master)
+_gp4 = [w for w in _r4.walk() if isinstance(w, G.OptionsPane)
+        and w.sub == "get"][0]
+_urlbox = [w for w in _dl4.walk() if w.kind == "text"][0]
+_cli1, _probe1 = G.cli_main, G.download.probe
+_A4 = []
+G.cli_main = lambda argv: (_A4.append(list(argv)), 0)[1]
+try:
+    _urlbox.insert("end", "https://youtu.be/dub\n")
+    _gp4.vars["keep_video"].set(True)
+    _gp4.vars["audio_lang"].set("es")
+    _tick[0].var.set(False)
+    _lb.invoke()
+    _drain4()
+    check("unticked: the list is the video qualities (no --show-audio)",
+          _A4 and _A4[-1][0] == "formats" and "--show-audio" not in _A4[-1],
+          str(_A4[-1:]))
+    _tick[0].invoke()
+    _lb.invoke()
+    _drain4()
+    check("ticked: formats --show-audio, in the spoken language set above",
+          "--show-audio" in _A4[-1] and "--audio-lang" in _A4[-1]
+          and _A4[-1][_A4[-1].index("--audio-lang") + 1] == "es", str(_A4[-1]))
+    # Quality / Audio tracks tabs: the JS settings go to the probe, and an
+    # empty answer says why
+    _seen = []
+    G.download.probe = lambda url, o: (_seen.append(dict(o)), {
+        "id": "n", "title": "GTA V", "_warnings": [
+            "WARNING: [youtube] n: n challenge solving failed"],
+        "formats": [{"format_id": "sb0", "ext": "mhtml", "vcodec": "none",
+                     "acodec": "none"}]})[1]
+    _gp4.vars["js_runtimes"].set("node")
+    _at4 = _nb4.tab_for("Audio tracks")
+    [w for w in _at4.walk() if w.kind == "entry"][0].options[
+        "textvariable"].set("https://youtu.be/nochal")
+    _qbtn(_at4, "Load audio tracks").invoke()
+    _drain4()
+    check("the Quality/Audio probe gets the Download tab's --js-runtimes",
+          _seen and _seen[-1].get("js_runtimes") == "node", str(_seen[-1:]))
+    _ai4 = " ".join(str(w.options["textvariable"].get())
+                    for w in _at4.walk() if w.kind == "label"
+                    and w.options.get("textvariable"))
+    check("an empty Audio tracks list explains itself (the JS challenge)",
+          "challenge was not solved" in _ai4, _ai4[:300])
+finally:
+    G.cli_main, G.download.probe = _cli1, _probe1
+    _gp4.vars["keep_video"].set(False)
+    _gp4.vars["audio_lang"].set("en")
+    _gp4.vars["js_runtimes"].set("")
+
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

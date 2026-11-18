@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## (this commit) — first live run: three provider bugs, yt-dlp setup, README
+## `4d63131` — first live run: three provider bugs, yt-dlp setup, README
 *2026-11-18 · 870 assertions*
 
 The sandbox could finally reach the lyrics APIs, so they were run for real.

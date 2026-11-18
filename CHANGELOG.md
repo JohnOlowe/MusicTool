@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## (this commit) — audio in the quality list; empty lists explained
+## `6368070` — audio in the quality list; empty lists explained
 *2026-11-18 · 896 assertions*
 
 - **Download tab: a "+ audio formats" tick beside "List qualities + sizes".**

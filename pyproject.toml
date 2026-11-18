@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musictool"
+version = "1.0"
+description = "Download music and video from YouTube with synced lyrics, metadata, quality choice, and a GUI."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "yt-dlp",
+    "mutagen",
+]
+keywords = ["youtube", "yt-dlp", "lyrics", "lrc", "music", "downloader", "metadata"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+]
+
+# `musictool` on the PATH, alongside `python musictool.py` which needs no install.
+[project.scripts]
+musictool = "musictool.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/OWNER/MusicTool/blob/main/README.md"
+
+# Flat layout: the package sits at the repository root. `musictool.py` is a shim
+# that works without installing anything, so it is deliberately NOT shipped as a
+# module -- a module and a package cannot share the name `musictool`.
+[tool.setuptools]
+packages = ["musictool"]

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# musictool runtime files, in case a download folder is ever the repo folder
+.musictool-index.json
+*.part
+*.part-Frag*
+*.ytdl
+
+# downloaded media and metadata, which never belong in git
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.mp3
+*.opus
+*.lrc
+*.info.json
+!tests/**/*.m4a
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -10,16 +10,26 @@ multiple lyrics sources, and both a CLI and a GUI.
 
 ```
 ./
-├── musictool.py          entry point
-└── musictool/
-    ├── cli.py            command line
-    ├── gui.py            Tkinter interface
-    ├── download.py       yt-dlp wrapper + videoId index
-    ├── lyrics.py         scan / fetch / embed pipeline
-    ├── providers.py      ytmusic, lrclib, netease
-    ├── tags.py           mutagen tag + .lrc handling
-    ├── config.py         saved defaults
-    └── util.py           normalisation, LRC, HTTP
+├── README.md             this manual
+├── HANDOFF.md            context for whoever works on this next
+├── CHANGELOG.md          what changed and why, per commit
+├── pyproject.toml        installable; provides the `musictool` command
+├── musictool.py          entry point — runs with no install at all
+├── musictool/
+│   ├── cli.py            command line
+│   ├── gui.py            Tkinter interface
+│   ├── uicmd.py          parser -> widgets, argv building, intent modes
+│   ├── formats.py        quality table, filters, language picking
+│   ├── download.py       yt-dlp wrapper + videoId index
+│   ├── progress.py       yt-dlp progress lines -> the GUI's bars
+│   ├── lyrics.py         scan / fetch / embed pipeline
+│   ├── providers.py      ytmusic, lrclib, netease
+│   ├── tags.py           mutagen tag + .lrc handling
+│   ├── cancel.py         cooperative stop
+│   ├── config.py         saved defaults
+│   └── util.py           normalisation, LRC, HTTP
+├── tests/                808 assertions, no network, no display
+└── docs/                 architecture, decisions, testing, ffmpeg recipes
 ```
 
 ## Install
@@ -41,13 +51,20 @@ sudo apt install python3-tk                 # Debian/Ubuntu
 python musictool.py doctor
 ```
 
+Nothing needs installing to run it — `python musictool.py …` works straight
+from a clone. If you would rather have a `musictool` command on your `PATH`:
+
+```bash
+pip install .          # from the repository root
+musictool doctor
+```
+
 ## Quick start
 
 ```bash
 # one video
 python musictool.py get "https://music.youtube.com/watch?v=XXXX"
 
-# a whole playlist
 # a whole playlist -- each file gets its lyrics the moment it finishes,
 # so the folder is already tagged while the rest is still downloading
 python musictool.py get "https://music.youtube.com/playlist?list=PLVuMx2J3_K6w" \

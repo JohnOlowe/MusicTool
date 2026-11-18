@@ -1,0 +1,200 @@
+# Changelog
+
+Newest first. Every entry is a real commit — `git show <hash>` has the full
+reasoning. The assertion count after each change is from running
+`python3 tests/test_musictool.py`.
+
+---
+
+## `65af4a2` — progress bars open visible, a queue, remaining count + ETA, `--jobs`
+*2026-10-23 · 808 assertions*
+
+Four things the GUI was getting wrong.
+
+- **The bars opened collapsed.** `ttk.PanedWindow` leaves its sash at 0 until it
+  lays out, so the progress panel was invisible until you dragged the slider.
+  The first layout now places the sash, never below 160 px; dragging still
+  works and is still remembered.
+- **A batch of four reported as "Single download 42.0%"**, because yt-dlp only
+  sees one URL at a time and cannot know three are queued behind it. `cmd_get`
+  now emits a batch event per URL, `State` tracks it, and the panel reads
+  `video 2 of 5 · 3 still to go after this · 2m 10s elapsed · about 6m 30s left
+  in total`. The projection scales elapsed time by the fraction done; before
+  the first file finishes there is nothing to scale, so it falls back to that
+  file's own ETA instead of promising zero.
+- **Adding links mid-run was impossible** — the button was greyed out. Download
+  now stays live and queues: the button reads *Add to queue*, the log says how
+  many are waiting, and each job starts when the one before it ends. Stop drops
+  the queue rather than starting jobs into a stop.
+- **`--jobs N`** runs N videos in parallel, capped at 8. Each still resolves its
+  own quality and language, log lines are numbered so parallel output does not
+  interleave, and each download tags its progress events so the panel shows one
+  line per file instead of whichever reported last.
+
+## `6f349c4` — `relang --list`: which files are in the wrong language, and their links
+*2026-10-23 · 780 assertions*
+
+"Give me the links to the ones that got the wrong audio" should not mean
+scrolling back through an old terminal log. MusicTool already wrote each link
+into `.musictool-index.json` when it downloaded the file, so read them back:
+
+```
+musictool relang "C:\Music\Videos" --list
+```
+
+It reads the language tag inside each file and the index, and nothing else — no
+downloads, no network — so it works while YouTube is refusing to talk to you.
+Files it never downloaded have no entry, and it says so rather than guessing a
+link from the filename. GUI: *List wrong-language files*.
+
+## `6102667` — resolve quality per video, and repair language without re-downloading
+*2026-10-23 · 773 assertions*
+
+"Some of them still aren't english" had two causes.
+
+- **The bug:** `cmd_get` resolved quality once for the whole batch.
+  `_resolve_quality` writes `o["format_selector"]` on the shared options dict
+  and returns early on later URLs, so videos 2..N reused video 1's format ids.
+  Format ids are not global — `140-4` was English on one video and the Spanish
+  original on the next, and `614` did not exist at all. Each URL now gets its
+  own copy of the options dict, so every one prints its own decision.
+- **The repair:** `musictool relang PATH...` fetches only the audio track it
+  needs (tens of MiB, not hundreds) and re-muxes it into the file already on
+  disk, keeping video, cover, chapters and tags. Stream info comes from
+  `ffprobe` when present and from parsing `ffmpeg -i` when it is not.
+- Language tags are compared properly now: containers write three-letter codes
+  (`eng`, `spa`) while the picker speaks two-letter ones, and `spa` does not
+  start with `es`, so prefix matching mis-identified half the languages.
+  `formats.same_language()` carries the pairs.
+
+## `e22c0d3` — one scroll, folded options, and settings that come back
+*2026-10-23 · 755 assertions*
+
+Three complaints about the window, and one real bug found while fixing them.
+
+- **One scroll.** The Download tab had two: the URL box, the mode and the
+  fine-tune strip were pinned and only the option grid scrolled, so the wheel
+  did nothing unless you first moved the pointer down into the options. The
+  whole tab body now lives in a single `ScrollArea`. `_over_me` also stops
+  treating a short `Text` as self-scrolling: a three-line URL field with one
+  line in it passes the wheel to the tab, while one holding thirty URLs keeps it.
+- **Folded.** *More options* dumped all 41 settings at once. The grid now shows
+  rows that have something in them plus anything changed, and folds the blank
+  rest behind one button — 10 of 41 on screen instead of 41.
+- **Saved.** Every field on every tab, the mode, the open URLs and whether the
+  options were expanded are written to `gui_opts`/`gui_extra` as you change
+  them, on every run, and on close.
+- **The bug.** Choosing a mode called `apply()` with the mode's full value dict,
+  and a blank there meant "empty this out" — so picking Video wiped
+  `--max-size`. That is the "I have to insert 800M again" complaint. A blank now
+  means *no opinion*, and `uicmd.MODE_RESET` lists the only keys a mode switch
+  may clear.
+
+## `c2783bc` — which language a dubbed video arrives in, shown and chosen
+*2026-10-23 · 733 assertions*
+
+yt-dlp ranks the **original** language first, so on a video whose original is
+Spanish the default download is the Spanish audio even when an English dub is
+sitting right there. Nothing showed the language and nothing let you ask for one.
+
+`--audio-lang` (default `en`) is now on `get` and `formats`, and `formats`
+prints what is on offer with a `lang` column (`*` marks the original, and the
+column only appears when something is tagged). The preference reaches yt-dlp as
+a format filter — `ba[language^=en]/ba/b` — not `--format-sort lang:en`, which
+looks right and does nothing.
+
+## `4974eb3` — the quality you ask for is the quality you get
+*2026-10-23 · 705 assertions*
+
+Two ways the announced quality was not the downloaded one, both from a real run.
+
+1. `_ref()` offered `base/variant` on a `-f` line — `248+140/140-0`. YouTube
+   serves no format called `140` for range-delivered streams, and `/` binds
+   looser than `+`, so yt-dlp read it as `(248+140)/(140-0)`, failed the first
+   branch and silently took the second: the audio track alone. "1080p vp9 +
+   mp4a ~ 644.7 MiB" arrived as a 52 MiB `.m4a` with `--keep-video` set and
+   nothing looking wrong. A selector now names one concrete id per stream.
+2. `--quality` swallowed anything it did not understand, so a selector pasted
+   from our own `formats` output produced no `-f` at all and yt-dlp picked
+   1.74 GiB of 2160p av01. It now adopts a selector-shaped value, checks it
+   against the real format list, and refuses nonsense out loud.
+
+Also: when qualities cannot be read, the log says yt-dlp will pick its own
+default, so an unapplied `--quality` is never a silent one.
+
+## `b9b35c0` — the mode chooses the checkboxes, not the other way round
+*2026-10-23 · 690 assertions*
+
+The Download tab opened on nine checkboxes and a generated grid, and every run
+started with the same ritual. It now asks the two questions that decide all of
+it — music or video, one item or a playlist — and sets the rest itself, with a
+live one-line summary that names the drift once you edit a checkbox by hand.
+
+`is_playlist_url` treats `watch?v=X&list=PL` as a **single**: that `list=` is
+the up-next queue, and reading it as a playlist is how one song becomes ninety
+files. `pump()` also reschedules itself *before* doing any work — one bad event
+used to be able to stop the loop and freeze the log for the session.
+
+## `8e04fa5` — `--js-runtimes`, so `doctor`'s advice is advice you can follow
+*2026-10-23 · 652 assertions*
+
+The previous commit made `doctor` say "add `--js-runtimes node`", which
+MusicTool itself could not do. It is now a real flag on `get`/`check`/`formats`,
+listed in the `_opts` key tuple — where a flag goes to be silently dropped
+otherwise — passed to yt-dlp, and generated as a GUI widget. The parity harness
+picked the new flag up on its own.
+
+## `0cb80c2` — name every failure in the YouTube sign-in cascade
+*2026-10-23 · 648 assertions*
+
+A long chain of *different* failures that all look like the same problem, each
+with its own fix, so `classify_error` now tells them apart instead of reporting
+"unknown": `session`, `dpapi` (Chrome/Edge App-Bound Encryption),
+`cookies_locked`, `oauth_gone`, `js_runtime`, `pot_server` (port 4416),
+`reload` (the bot wall itself) and `no_format` (an itag, not a subscription).
+Each carries advice. `doctor` gained the probes behind the middle of that list.
+
+## `4d1c511` — Stop is always clickable
+*2026-10-23 · 624 assertions*
+
+The Stop button was not "half the time" dead — it was dead all the time. The
+status bar created it with `state="disabled"` and `busy()` was meant to enable
+it while a job ran, but fifteen lines later the shared-state block rebound the
+name (`stop_btn = None`), so `busy()`'s `if stop_btn is not None` never fired.
+
+Stop is now the one control that stays live while every other button is greyed
+out, `stop_now()` knows whether anything is running, and the in-flight count is
+data rather than a widget so it is accurate the moment a job starts and ends.
+
+## `5586876` — a quality picker: collapsed list, auto/manual choice, filters
+*2026-10-23 · 618 assertions*
+
+YouTube offers one 4K video as 127 rows — every itag split into ~18 near
+identical CDN copies, plus doubles of the same resolution. `formats` printed
+all of it, which is no way to choose.
+
+`collapse_variants` merges the copies into one row sized by the biggest,
+`dedupe_quality` drops same resolution/codec/container duplicates in favour of
+the smaller encode, `apply_filters` adds height/container/codec/size-cap/sort,
+and `auto_pick` chooses for you and says why. `with_audio_pool` keeps the audio
+tracks the table hid available to the picker — without it a filtered table
+paired a 1080p video with the 360p combined format just because the real audio
+had been filtered out. New seventh GUI tab: Quality.
+
+## `8c9e286` — initial commit
+*2026-10-23 · 560 assertions*
+
+A CLI and a tkinter GUI around yt-dlp that downloads music and video, picks
+quality by resolution or by size, and fetches synced lyrics for what it
+downloads. Commands: `get`, `check`, `formats`, `lyrics`, `scan`, `duplicates`,
+`extract`, `embed`, `providers`, `config`, `doctor`, `gui`.
+
+- `check` asks YouTube with **no** cookies, so "am I blocked?" gets an honest
+  answer, and classifies what comes back into bot / age / private / members /
+  unavailable / network.
+- `formats` lists every quality with its real size, codec, container and fps,
+  plus the exact command to take it.
+- `get` resolves quality per video, honours `--quality`/`--max-size`/`-f`, and
+  embeds metadata, thumbnails and chapters.
+- The GUI is generated from the same argparse parser, so every CLI flag is
+  reachable in it.

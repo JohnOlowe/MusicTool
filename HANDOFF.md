@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **896 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **957 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,11 +115,12 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1246   argparse + every cmd_* handler
-│   ├── gui.py         2114   tkinter GUI, 8 tabs
-│   ├── uicmd.py        665   parser -> widget specs, build_argv, intent modes
+│   ├── cli.py         1356   argparse + every cmd_* handler
+│   ├── gui.py         2341   tkinter GUI, 9 tabs
+│   ├── uicmd.py        666   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      771   quality table, filters, language picking, audio tracks
-│   ├── download.py     634   yt-dlp invocation, videoId index, streams, swap_audio
+│   ├── download.py     658   yt-dlp invocation, videoId index, streams, swap_audio
+│   ├── live.py         955   live streams: plan, scan, join, watch copy, resume
 │   ├── util.py         553   classify, detect_browser, js_runtime, have_ffmpeg
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
@@ -128,7 +129,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py        82   cooperative stop
 ├── tests/
-│   ├── test_musictool.py 4016   37 sections, 896 assertions
+│   ├── test_musictool.py 4604   38 sections (+8b), 957 assertions
 │   └── tkstub.py          723   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -144,7 +145,7 @@ MusicTool paths.
 
 ### Commands
 
-`get` · `check` · `formats` · `lyrics` · `scan` · `duplicates`(`dupes`) ·
+`get` · `check` · `formats` · `live` · `lyrics` · `scan` · `duplicates`(`dupes`) ·
 `extract` · `embed` · `providers` · `config` · `relang` · `doctor` · `gui`
 
 Two that are easy to get wrong:
@@ -160,6 +161,17 @@ re-downloading the video**: fetches only the audio track and re-muxes.
 
 `get --jobs N` (1–8) runs N *videos* in parallel. Distinct from `--concurrent`,
 which splits *one* video into fragments.
+
+```
+live [FOLDER] [--status URL] [--join] [--watch] [--out DIR]
+     [--resume URL] [--force] [--cookies] [--cookies-from-browser] [--proxy]
+```
+The leftovers of a live recording, including one made by plain yt-dlp:
+what is there, `--join` the loose `.part-FragN` pieces in place (crash-safe,
+50 at a time, recorded in a `.livejoin` note), `--watch` a remuxed
+`TITLE (so far).mp4` without touching the pieces, `--resume` the rest. `get`
+itself records a live stream from its start with one worker per stream (see
+`docs/DECISIONS.md`, "Live streams").
 
 ---
 
@@ -268,6 +280,10 @@ Read `speed=X.XXx`, divide 20 by it.
   and command wiring but not rendering. Scroll feel, actual clipping and real
   window resizing are unverified.
 - **A real download.** Every download test uses a fake `yt-dlp` on `PATH`.
+- **A real YouTube live stream.** The live handling was driven through the
+  real yt-dlp downloader with a local live-style stream (README, "Verified"),
+  never against YouTube, and the Windows file locks it waits out were
+  simulated.
 - **Live lyrics providers.** Tests use a local HTTP server replaying the
   documented response shapes.
 - **Cookie extraction** from the maintainer's Chrome/Edge — never tested on
@@ -284,7 +300,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 896 assertions.
+Nothing is half-finished — `main` is green at 957 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

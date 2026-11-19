@@ -26,6 +26,11 @@ TOPIC_FIX = ("uploader", " - Topic$", "")
 
 # What YouTube says when it will not serve a video, and what to do about it.
 BLOCKERS = (
+    # a full disk: Linux/macOS, Windows, and Python's own wording of both
+    ("no space left on device", "disk_full"),
+    ("not enough space on the disk", "disk_full"),
+    ("[errno 28]", "disk_full"),
+    ("[winerror 112]", "disk_full"),
     ("sign in to confirm you're not a bot", "bot"),
     ("not a bot", "bot"),
     ("please sign in", "bot"),
@@ -109,6 +114,11 @@ ADVICE = {
                "challenge was not solved: install deno or node and add "
                "--remote-components ejs:github (see 'js runtime' in "
                "musictool doctor)."),
+    "disk_full": ("The disk is full. Nothing downloaded so far is lost: free "
+                  "some space (or choose another folder with -o) and run the "
+                  "same download again -- it carries on from where it stopped. "
+                  "A live stream can be watched meanwhile: musictool live "
+                  "FOLDER --watch."),
     "no_format": ("That format is not offered to your account or client. "
                   "List what is really there with: musictool formats URL "
                   "--show-audio --all-formats. If that list is empty too, "
@@ -122,7 +132,8 @@ def classify_error(text):
 
     'bot', 'age', 'private', 'members', 'unavailable', 'network', 'unknown',
     plus the cookie/anti-bot ones: 'session', 'dpapi', 'cookies_locked',
-    'oauth_gone', 'js_runtime', 'pot_server', 'reload', 'no_format'.
+    'oauth_gone', 'js_runtime', 'pot_server', 'reload', 'no_format', and
+    'disk_full'.
     """
     t = (text or "").lower()
     for needle, kind in BLOCKERS:
@@ -347,6 +358,14 @@ def build_args(url, o):
         args += ["--proxy", o["proxy"]]
     if o.get("concurrent"):
         args += ["--concurrent-fragments", str(o["concurrent"])]
+    # live streams (see live.plan): from the start, wait for one that has not
+    # begun, or only a stretch of a video (the rest of a stopped recording)
+    if o.get("live_from_start"):
+        args.append("--live-from-start")
+    if o.get("wait_for_video"):
+        args += ["--wait-for-video", str(o["wait_for_video"])]
+    if o.get("download_sections"):
+        args += ["--download-sections", str(o["download_sections"])]
     args += ["--retries", str(o.get("retries", 5))]
     args += ["--fragment-retries", str(o.get("retries", 5))]
     # --continue resumes a half-finished .part file after an outage
@@ -425,6 +444,11 @@ def probe(url, o):
         # to `formats`, the very command that had just failed. This keeps the
         # info, so the empty list can be explained.
         "-J", "--ignore-no-formats-error", url]
+    # A live stream offers different formats from the start than from now,
+    # and from the start is what `get` records -- so list those. It changes
+    # nothing for a video that is not live.
+    if not o.get("live_from_now"):
+        args.insert(-1, "--live-from-start")
     args += cookie_args(o)
     # check/formats/quality picks used to ignore --js-runtimes and
     # --remote-components here, so only the download itself honoured them

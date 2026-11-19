@@ -8,7 +8,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 - **Python 3.8+, stdlib only** plus two dependencies: `yt-dlp` and `mutagen`
 - Works offline for scanning; the only network calls are to yt-dlp and lyrics APIs
 
-**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Live streams](#live-streams-from-the-start-watch-it-so-far-carry-on-after-a-stop) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
 
 ```
 ./
@@ -23,6 +23,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── uicmd.py          parser -> widgets, argv building, intent modes
 │   ├── formats.py        quality table, filters, language picking
 │   ├── download.py       yt-dlp wrapper + videoId index
+│   ├── live.py           live streams: record from the start, watch, carry on
 │   ├── progress.py       yt-dlp progress lines -> the GUI's bars
 │   ├── lyrics.py         scan / fetch / embed pipeline
 │   ├── providers.py      ytmusic, lrclib, netease
@@ -30,7 +31,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                896 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                957 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -348,6 +349,7 @@ videos. In the GUI it is the **jobs** field under More Options.
 | `get URL...` | download, embedding each file's lyrics as it lands |
 | `check URL...` | is this reachable, or does YouTube want a login? (no cookies used) |
 | `formats URL...` | the qualities on offer (variant splits merged), with sizes, plus the command to take one |
+| `live [FOLDER]` | live streams: `--status URL` (live? how big? room?), what is in a stopped recording, `--join`/`--watch` to watch it so far, `--resume URL` for the rest |
 | `relang PATH...` | put the language you want into files already downloaded (audio only, video kept) |
 | `lyrics PATH...` | fetch/fix lyrics for existing files or folders |
 | `scan PATH...` | offline state report (`--json` for scripting) |
@@ -369,7 +371,9 @@ videos. In the GUI it is the **jobs** field under More Options.
 `--jobs N` (videos in parallel, 1–8) ·
 `--archive FILE` (skip already-downloaded videos) · `--items 1-50` ·
 `--no-playlist` · `--yes-playlist` · `--retries N` (attempts across a network
-drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240)
+drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240) ·
+`--live-from-now` (a stream that is live is recorded from its start unless
+this is given)
 
 ### Quality options (video downloads)
 
@@ -804,6 +808,69 @@ The stop is cooperative, which is what makes it safe:
 Ctrl+C in a terminal asks once ("stopping after the current file..."); a second
 Ctrl+C quits immediately.
 
+## Live streams: from the start, watch it so far, carry on after a stop
+
+`get` notices by itself when a link is a live stream (it reads the video's
+details first -- one request, which a quality pick reuses) and then:
+
+- **records it from the very start**, even if it began hours ago (YouTube
+  keeps 120 hours to rewind); `--live-from-now` takes it from now instead;
+- **adds every piece to the file as it arrives.** yt-dlp gives each stream
+  `ceil(N / streams)` workers, and with more than one worker it does not
+  join a single piece of a live stream until the broadcast ends -- with the
+  usual `-N 4` you get thousands of `NAME.f299.mp4.part-FragN` files, nothing
+  to play, and a full disk leaves nothing at all. A live recording therefore
+  runs with one worker per stream (2 for video + audio, 1 for audio only):
+  video and audio still download side by side, the file always holds
+  everything so far, and a stop -- full disk, Stop, power cut -- loses
+  nothing;
+- puts the **video id in the file name** (`Chan - Title [xMXp80Cntxw].mp4`), so
+  a second run finds the pieces to carry on from even if the streamer renamed
+  the stream, and a later download of the finished video never lands on them;
+- says **how big it is and how much room there is** before downloading
+  (`size: up to about 2.6 GiB so far, growing up to about 2.6 GiB an hour
+  while it runs`, `room: ...`), and warns when the disk cannot hold it -- joining video and
+  audio at the end needs about as much space again;
+- waits for a stream that has **not started yet** (`--wait-for-video`), and
+  takes a stream that has **just ended** from the start too (otherwise
+  YouTube offers only its last 2 hours);
+- fetches no lyrics -- a broadcast is not a song.
+
+After a stop, **run the same download again**: it continues from the last
+piece. Or use `musictool live`, which also rescues a recording made by plain
+yt-dlp:
+
+```bash
+musictool live --status URL                    # live? since when? how big? room?
+musictool live "D:\Videos\Stream"                # what is there, how far it got
+musictool live "D:\Videos\Stream" --join         # join loose pieces + "TITLE (so far).mp4"
+musictool live "D:\Videos\Stream" --join --out E:\   # the copy on another drive
+musictool live "D:\Videos\Stream" --watch        # copy only: safe while it records
+musictool live "D:\Videos\Stream" --resume URL   # download the rest
+```
+
+- **Joining** works in place: it needs room for about two pieces, not for the
+  video. It adds only pieces that follow the file without a gap, in steps of
+  50 that are synced and recorded before any piece is deleted -- so it can be
+  cut off at any moment, and the next run (or yt-dlp) carries on without
+  adding anything twice. It also undoes a run that stopped between adding a
+  piece and recording it. Windows' brief "Access is denied" locks (Defender,
+  the indexer, OneDrive) are waited out, and a piece that stays locked is
+  reported, not fatal. It refuses while a download is still writing to the
+  files (changed in the last 30 s); `--watch` never touches them.
+- **The copy to watch** is a remux (`ffmpeg -c copy`, nothing re-encoded) and
+  needs about as much free space as the recording -- `--out` puts it on
+  another drive. Without ffmpeg or room it prints the `mpv`/VLC way to play
+  the pieces as they are.
+- **`--resume`**: while the stream is live or has just ended, the same pieces
+  carry on under the existing name -- nothing already there is fetched again.
+  Once it is a normal video those pieces no longer fit, so only the part
+  after yours is fetched (`--download-sections`, 5 s overlap, same height) as
+  `TITLE (rest).mp4`, with the ffmpeg line to make one file of the two.
+
+A full disk is recognised (`No space left on device`, `There is not enough
+space on the disk`) and answered with what to do, not a bare error.
+
 ## Live download progress (why you used to see nothing)
 
 `musictool` previously captured yt-dlp's output and only printed it when the
@@ -1031,9 +1098,9 @@ override the tags in your files.
 python musictool.py gui
 ```
 
-Eight tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
-**Tools**, **Lyrics files**, **Quality**, **Audio tracks** — over the same code
-paths as the CLI.
+Nine tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
+**Tools**, **Lyrics files**, **Quality**, **Audio tracks**, **Live streams** —
+over the same code paths as the CLI.
 
 ### The Quality tab
 
@@ -1092,6 +1159,28 @@ On the command line, `musictool formats URL --show-audio` lists the audio
 tracks in your `--audio-lang` (`--audio-lang any` for all of them) and names
 the spoken languages; `musictool get URL -f <id>` takes one. In the window,
 that is the **+ audio formats** tick beside **List qualities + sizes**.
+
+### The Live streams tab
+
+The stream's link, the folder, an optional **Copy to watch goes to** folder
+(another drive when this one is full) and an **Audio only** tick, then:
+
+- **Is it live? How big?** — `live --status`: live since when, how big so
+  far, how fast it grows, how much room the folder has.
+- **Record from the start** — `get` with the picture kept (or audio only),
+  no lyrics, this video only, into the folder; the live handling above does
+  the rest.
+- **What's in the folder?** — what a stopped recording holds and what is
+  missing, including one made by plain yt-dlp.
+- **Watch what's there so far** — after a stop it joins the loose pieces and
+  makes `TITLE (so far).mp4`. During a recording it stays clickable and only
+  reads the pieces into a copy, alongside the recording rather than queued
+  behind it.
+- **Download the rest** — `live --resume`.
+- **Open the copy** — plays the newest copy with the system's player.
+
+Cookies, proxy and the JavaScript settings come from the Download tab, and
+the tab's fields come back next time.
 
 
 **Every CLI option is in the GUI, and it stays that way automatically.** The
@@ -1229,7 +1318,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 896 assertions, 0 failures**, with or without
+**Verified by running the code — 957 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1268,8 +1357,20 @@ subcommand.
   yt-dlp's own help still says `--print` implies `--quiet`, that only deno
   is enabled by default, and that `--remote-components` is unneeded when
   `yt-dlp-ejs` is installed — which plain `pip install yt-dlp` does not do.
+- **Live streams, with the real yt-dlp downloader** (2026-11-19): a local
+  server fed yt-dlp a stream whose pieces arrive over time, the way its
+  YouTube extractor does. With `-N 4` all 78 pieces piled up loose and the
+  file was still 0 bytes halfway; with one worker per stream there was never
+  a loose piece and the file was growing (2 MiB halfway), in the same time.
+  A recording killed outright (`kill -9`) after 17 of 40 s: the copy to watch
+  played 17.4 s, and carrying on under the name `live` reuses fetched exactly
+  the 46 missing pieces of 80; the result was 40.02 s, 1200 frames, no decode
+  errors. `musictool live --join` on a folder that `-N 4` left behind joined
+  all 18 pieces and made an 18 s copy. The argv `get` builds for a live
+  stream was parsed by yt-dlp's own option parser.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
-  opened and screenshotted, including the Audio tracks and Quality tabs; that
+  opened and screenshotted, including the Audio tracks, Quality and Live
+  streams tabs; that
   caught two layout faults no stub could (log lines running together, a
   clipped label), both fixed.
 
@@ -1286,6 +1387,10 @@ the newer one).
   above), so no video or audio stream could be fetched or listed. The format
   logic is tested against the shapes yt-dlp reports for YouTube, including a
   dubbed video, but a real dubbed video has not been loaded into the tab.
+- **A real YouTube live stream** -- for the same reason. yt-dlp's live
+  handling was read in its source and driven with a live-style stream (above);
+  the Windows "Access is denied" locks were simulated, not produced by
+  Defender.
 - **Timed lyrics from `ytmusic`.** The code reads them when YouTube sends
   them; on 2026-11-18 it almost never did. `python musictool.py providers
   --test` asks for a sample video's lyrics and tells you which it is today

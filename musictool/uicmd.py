@@ -50,6 +50,7 @@ HINTS = {
     "auto": "best, compatible (H.264/mp4), fit (best under the size limit), smallest, audio",
     "sort": "size_desc = biggest file first",
     "show_audio": "the audio-only tracks, which normally get merged into the video choice",
+    "live_from_now": "a live stream is recorded from its start unless this is ticked",
 }
 
 # ---------------------------------------------------------------------------

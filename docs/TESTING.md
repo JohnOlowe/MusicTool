@@ -4,8 +4,8 @@
 python3 tests/test_musictool.py
 ```
 
-**896 assertions across 37 sections (plus 8b), 0 failures** — with or without
-tkinter installed, with or without a display. About 35 seconds. No network.
+**957 assertions across 38 sections (plus 8b), 0 failures** — with or without
+tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
 `pip install imageio-ffmpeg`. Nothing else — no display, no yt-dlp login, no
@@ -158,6 +158,18 @@ Proven by execution:
   `--show-audio` with the tab's `--audio-lang`, the Quality/Audio probe gets
   `--js-runtimes`, and an empty Audio tracks list explains itself. Undoing
   the tick or the probe flag fails six of these.
+- live streams (section 38), on real fragmented mp4 made by ffmpeg and cut
+  into the pieces yt-dlp leaves (`NAME.f299.mp4.part-FragN`, a `.ytdl`
+  index): joining is byte-exact and plays; it survives Windows locks that
+  clear (and reports one that does not), a cut between appending and
+  recording (no piece added twice), a missing or empty piece (stops at the
+  gap), and refuses a folder still being written unless `--force`; the watch
+  copy plays and leaves the pieces alone; `plan` sets from-start, one worker
+  per stream, the id in the name and the leftover name with `%` doubled;
+  `build_args`/`probe` carry the live flags; a full disk is `disk_full` with
+  advice; and end to end through `get` (no lyrics for a live recording),
+  `check`, `formats`, `live --status/--join/--watch/--resume` (both the
+  same-pieces and the `(rest)` path) and the Live streams tab's buttons.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

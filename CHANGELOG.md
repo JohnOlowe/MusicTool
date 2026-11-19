@@ -8,6 +8,43 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — live streams: record from the start, watch it so far, carry on
+*2026-11-19 · 957 assertions*
+
+Reported: a live stream recorded with `yt-dlp --live-from-start -N 4`
+stopped when the disk filled, leaving ~2000 `.part-FragN` pieces per stream
+and nothing to play. A stand-alone `livejoin.py` rescued it; this puts all of
+it into musictool.
+
+- **`get` recognises a live stream** (one probe of a single URL, reused by the
+  quality pick) and records it from the start, with **one worker per
+  stream**: yt-dlp gives each stream `ceil(N/streams)` workers, and with more
+  than one it appends nothing until the broadcast ends. Measured through the
+  real downloader: `-N 4` left 78 loose pieces and an empty file halfway,
+  `-N 2` none. The file now always holds everything so far, so a stop loses
+  nothing and a rerun carries on exactly.
+- The video id goes into the name (`[%(id)s]`), leftover pieces of the same
+  video are found and their exact name reused (`%` doubled), a half-finished
+  join is undone first; size and free space are reported before starting;
+  upcoming streams are waited for; a just-ended stream is also taken from the
+  start (otherwise YouTube serves its last 2 hours); no lyrics are fetched.
+  `--live-from-now` records from now. `probe` asks for from-start formats.
+- **New `musictool live`**: what a stopped recording holds (also one from plain
+  yt-dlp), `--join` the loose pieces in place (gap-free only, 50 at a time,
+  fsynced and recorded before deleting; restartable at any point; Windows
+  "Access is denied" locks retried; refuses while a download still writes
+  unless `--force`), `--watch` a remuxed `TITLE (so far).mp4` without touching
+  the pieces, `--out` for another drive, `--status URL`, and `--resume URL`
+  (same pieces while live/just ended; afterwards only the missing end as
+  `TITLE (rest).mp4`).
+- **A full disk is its own error** (`disk_full`: ENOSPC / WinError 112) with
+  advice instead of "unknown".
+- **GUI: a Live streams tab** (ninth): is it live / how big, record from the
+  start, what's in the folder, watch what's there so far (also during a
+  recording), download the rest, open the copy.
+- Tests: section 38 (61 checks) on real fragmented mp4 pieces; the tab list
+  and scroll-area checks updated.
+
 ## `6368070` — audio in the quality list; empty lists explained
 *2026-11-18 · 896 assertions*
 

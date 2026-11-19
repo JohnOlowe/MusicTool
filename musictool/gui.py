@@ -32,6 +32,7 @@ from . import cancel
 from . import config as configmod
 from . import download
 from . import formats
+from . import live
 from . import progress
 from . import uicmd
 from .cli import build_parser, main as cli_main
@@ -41,6 +42,20 @@ WHEEL = ("<MouseWheel>", "<Button-4>", "<Button-5>")   # Windows/mac, then X11
 
 
 FINISH = "__finish__"     # sentinel: worker done -> bars to 100%
+
+
+def open_path(path):
+    """Open a file with whatever the system plays it with."""
+    import subprocess
+    import sys
+    if hasattr(os, "startfile"):                      # Windows
+        os.startfile(path)                            # noqa: S606
+        return
+    from .util import is_termux
+    cmd = ("termux-open" if is_termux() else
+           "open" if sys.platform == "darwin" else "xdg-open")
+    subprocess.Popen([cmd, path], stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
 
 
 class QueueStream:
@@ -743,6 +758,7 @@ def run():
     # restart is never a form to fill in again.
     SAVED = dict(cfg.get("gui_opts") or {})
     EXTRA = dict(cfg.get("gui_extra") or {})
+    live_state = {}         # the Live streams tab's fields, once it exists
     run_buttons = []
     # Buttons that must stay clickable mid-run, because clicking one now means
     # "do this next" rather than "start a second download".
@@ -765,6 +781,7 @@ def run():
                      "more_options": bool(adv_open.get()),
                      "list_audio": bool(list_audio.get()),
                      "show_all_options": bool(panes["get"].show_all.get())}
+            extra.update({k: v.get() for k, v in live_state.items()})
             configmod.remember(gui_opts=opts, gui_extra=extra)
         except Exception as e:                                 # noqa: BLE001
             log(f"!! could not save your settings: {type(e).__name__}: {e}")
@@ -1944,6 +1961,216 @@ def run():
             q_load()
         else:
             a_draw()
+
+    # =============================================== Live streams tab
+    # Record a stream that is live from its very start, watch what has come
+    # down so far at any time, and carry on after a stop (a full disk, Stop,
+    # a power cut). live.py explains why the pieces no longer pile up.
+    ltab = ttk.Frame(nb)
+    nb.add(ltab, text="  Live streams  ")
+    areas["live"] = ScrollArea(ltab)
+    lbody = areas["live"].frame
+    ttk.Label(lbody, text="Record a live stream from its start, watch what you "
+                          "have so far, and download the rest after a "
+                          "stop:").pack(anchor="w", padx=8, pady=(8, 2))
+    _lr = ttk.Frame(lbody)
+    _lr.pack(fill="x", padx=8, pady=2)
+    ttk.Label(_lr, text="Stream URL:").pack(side="left")
+    lurl = tk.StringVar(value=str(EXTRA.get("live_url") or ""))
+    ttk.Entry(_lr, textvariable=lurl, width=58).pack(
+        side="left", padx=6, fill="x", expand=True)
+    blstat = ttk.Button(_lr, text="Is it live? How big?",
+                        command=lambda: l_status())
+    blstat.pack(side="left", padx=4)
+
+    def _l_dir_row(label, var, hint):
+        row = ttk.Frame(lbody)
+        row.pack(fill="x", padx=8, pady=2)
+        ttk.Label(row, text=label).pack(side="left")
+        ttk.Entry(row, textvariable=var, width=52).pack(
+            side="left", padx=6, fill="x", expand=True)
+
+        def browse():
+            d = filedialog.askdirectory()
+            if d:
+                var.set(d)
+                remember_soon()
+        ttk.Button(row, text="Browse...", command=browse).pack(side="left")
+        ttk.Label(lbody, text=hint, foreground="#888").pack(anchor="w",
+                                                            padx=10)
+
+    lfolder = tk.StringVar(value=str(EXTRA.get("live_folder")
+                                     or cfg.get("output_dir") or "."))
+    _l_dir_row("Folder:", lfolder, "where the recording goes -- and where a "
+                                   "stopped one is (also one made by plain "
+                                   "yt-dlp)")
+    lout = tk.StringVar(value=str(EXTRA.get("live_out") or ""))
+    _l_dir_row("Copy to watch goes to:", lout,
+               "empty = the same folder. The copy needs as much free space "
+               "as the recording: pick another drive when this one is full")
+    laudio = tk.BooleanVar(value=bool(EXTRA.get("live_audio")))
+    ttk.Checkbutton(lbody, text="Audio only (no picture)", variable=laudio,
+                    command=lambda: remember_soon()).pack(anchor="w", padx=8,
+                                                          pady=(2, 0))
+    live_state.update(live_url=lurl, live_folder=lfolder, live_out=lout,
+                      live_audio=laudio)
+
+    _lb = ttk.Frame(lbody)
+    _lb.pack(fill="x", padx=8, pady=6)
+    blrec = ttk.Button(_lb, text="Record from the start",
+                       command=lambda: l_record())
+    blrec.pack(side="left", padx=(0, 4))
+    bllook = ttk.Button(_lb, text="What's in the folder?",
+                        command=lambda: l_look())
+    bllook.pack(side="left", padx=4)
+    # stays clickable during a recording: it then only reads the pieces
+    blwatch = ttk.Button(_lb, text="Watch what's there so far",
+                         command=lambda: l_watch())
+    blwatch.pack(side="left", padx=4)
+    blrest = ttk.Button(_lb, text="Download the rest",
+                        command=lambda: l_resume())
+    blrest.pack(side="left", padx=4)
+    ttk.Button(_lb, text="Open the copy",
+               command=lambda: l_open()).pack(side="left", padx=4)
+    run_buttons.extend([blstat, blrec, bllook, blrest])
+
+    linfo = tk.StringVar(value="Paste the stream's link, then press "
+                               "\u201cRecord from the start\u201d.")
+    ttk.Label(lbody, textvariable=linfo, foreground="#06a", wraplength=980,
+              justify="left").pack(anchor="w", padx=8, pady=(2, 4))
+    ttk.Label(lbody, foreground="#555", wraplength=980, justify="left", text=(
+        "\u2022 Record from the start: from the stream's first minute, even "
+        "if it began hours ago. Video and audio are added to the file as they "
+        "arrive, so it can be watched while it records, and a stop loses "
+        "nothing.\n"
+        "\u2022 Watch what's there so far: makes \u201cTITLE (so far).mp4\u201d "
+        "without re-encoding. During a recording it only reads the pieces; "
+        "after a stop it first joins any loose ones.\n"
+        "\u2022 Download the rest: after a stop. While the stream is live or "
+        "has just ended it carries on with the same pieces -- nothing already "
+        "here is fetched again. Once it is a normal video it fetches only "
+        "the part you are missing.\n"
+        "\u2022 Cookies, proxy and the JavaScript settings come from the "
+        "Download tab (More options).")).pack(anchor="w", padx=8,
+                                               pady=(0, 8))
+    areas["live"].pack(fill="both", expand=True)
+    l_made = {"path": ""}
+
+    def l_net_args():
+        vals = panes["get"].values()
+        argv = []
+        for dest, flag in (("cookies", "--cookies"),
+                           ("cookies_from_browser", "--cookies-from-browser"),
+                           ("proxy", "--proxy"),
+                           ("js_runtimes", "--js-runtimes"),
+                           ("remote_components", "--remote-components")):
+            v = str(vals.get(dest) or "").strip()
+            if v:
+                argv += [flag, v]
+        return argv
+
+    def l_url():
+        u = lurl.get().strip()
+        if not u:
+            messagebox.showwarning("musictool", "Paste the stream's link first.")
+        return u
+
+    def l_dir(must_exist=True):
+        d = os.path.abspath(os.path.expanduser(lfolder.get().strip() or "."))
+        if must_exist and not os.path.isdir(d):
+            messagebox.showwarning("musictool", "Pick the folder the recording "
+                                   "is in.")
+            return ""
+        return d
+
+    def l_copies():
+        """Copies made so far, newest first."""
+        found = []
+        for d in {lout.get().strip() or l_dir(False), l_dir(False)}:
+            try:
+                for n in os.listdir(d):
+                    if " (so far)." in n and not n.endswith(".tmp"):
+                        p = os.path.join(d, n)
+                        found.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+        return [p for _t, p in sorted(found, reverse=True)]
+
+    def l_after(_rc=None):
+        log(f"\n(exit {_rc})")
+        made = l_copies()
+        if made and made[0] != l_made["path"]:
+            l_made["path"] = made[0]
+            linfo.set(f"ready to watch: {made[0]}   -- \u201cOpen the copy\u201d "
+                      f"plays it")
+
+    def l_status():
+        u = l_url()
+        if u:
+            remember(url=u)
+            do_argv(["live", l_dir(False), "--status", u] + l_net_args())
+
+    def l_record():
+        u = l_url()
+        if not u:
+            return
+        d = l_dir(False)
+        vals = dict(panes["get"].values())
+        vals.update(keep_video=not laudio.get(), no_lyrics=True,
+                    no_playlist=True, yes_playlist=False, lyrics_only=False,
+                    live_from_now=False, output_dir=d)
+        remember(url=u, path=d)
+        linfo.set("recording -- \u201cWatch what's there so far\u201d works "
+                  "while it runs")
+        do_argv(uicmd.build_argv("get", vals, positionals=[u],
+                                 parser=build_parser()), after=l_after)
+
+    def l_look():
+        d = l_dir()
+        if d:
+            do_argv(["live", d])
+
+    def l_watch():
+        d = l_dir()
+        if not d:
+            return
+        out = lout.get().strip()
+        remember_soon()
+        if running["n"]:
+            # Something is running -- most likely the recording itself. Its
+            # pieces are not touched: they are only read into a copy, on a
+            # thread of its own, so the recording carries on undisturbed.
+            log("\nmaking a copy of what has been recorded so far (the "
+                "recording carries on) ...")
+            linfo.set("making a copy of what has been recorded so far ...")
+
+            def job():
+                rc, made = live.watch_copy(d, live.scan(d), out or None, log=log)
+                ui(lambda: l_after(rc))
+            threading.Thread(target=job, daemon=True).start()
+            return
+        do_argv(["live", d, "--join"] + (["--out", out] if out else []),
+                after=l_after)
+
+    def l_resume():
+        u = l_url()
+        d = l_dir() if u else ""
+        if u and d:
+            remember(url=u, path=d)
+            do_argv(["live", d, "--resume", u] + l_net_args(), after=l_after)
+
+    def l_open():
+        p = l_made["path"] if os.path.exists(l_made["path"] or "") else \
+            next(iter(l_copies()), "")
+        if not p:
+            messagebox.showinfo("musictool", "No copy yet -- press \u201cWatch "
+                                "what's there so far\u201d first.")
+            return
+        log(f"opening {p}")
+        try:
+            open_path(p)
+        except Exception as e:                              # noqa: BLE001
+            log(f"!! could not open it: {e}")
 
     # ================================================== log pane (resizable)
     logf = ttk.LabelFrame(root, text="log")

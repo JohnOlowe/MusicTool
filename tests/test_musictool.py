@@ -847,10 +847,10 @@ def check_named(w, prefix):
 
 
 check("run() builds a window", root is not None and root.looped)
-check("all eight tabs exist (incl. Quality and Audio tracks)",
+check("all nine tabs exist (incl. Quality, Audio tracks, Live streams)",
       [t.get("text", "").strip() for t in nb.tabs] ==
       ["Download", "Fix lyrics", "Scan & duplicates", "Report", "Tools",
-       "Lyrics files", "Quality", "Audio tracks"],
+       "Lyrics files", "Quality", "Audio tracks", "Live streams"],
       str([t.get("text", "").strip() for t in nb.tabs]))
 
 check("tabs and log share a vertical PanedWindow",
@@ -1027,7 +1027,7 @@ def inside(w, anc):
 
 
 check("every non-Report tab is wrapped in a scroll area",
-      len(areas) == 5, str(len(areas)))
+      len(areas) == 6, str(len(areas)))
 check("the Report tab is not (its tree scrolls itself)",
       not any(inside(nb.tab_for("Report"), a.frame) for a in areas))
 check("every scroll area has a vertical AND a horizontal scrollbar",
@@ -4008,6 +4008,594 @@ finally:
     _gp4.vars["keep_video"].set(False)
     _gp4.vars["audio_lang"].set("en")
     _gp4.vars["js_runtimes"].set("")
+
+
+# ============ 38. live streams: from the start, watch so far, carry on
+print("\n--- 38. live streams: record from the start, watch, carry on ---")
+import random as _rnd38   # noqa: E402
+import struct as _st38    # noqa: E402
+import time as _t38       # noqa: E402
+from musictool import live as LV  # noqa: E402
+
+_L = os.path.join(WORK, "live38")
+os.makedirs(_L, exist_ok=True)
+# Real fragmented media, cut into the pieces yt-dlp leaves behind: every
+# piece carries its own init (as YouTube's live segments do), 1 s each.
+_v38, _a38 = os.path.join(_L, "v.mp4"), os.path.join(_L, "a.mp4")
+_FRAGF = ["-movflags", "frag_keyframe+empty_moov+default_base_moof",
+          "-frag_duration", "1000000"]
+subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                "testsrc2=size=160x90:rate=30", "-t", "20", "-c:v", "libx264",
+                "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30",
+                *_FRAGF, "-an", _v38], check=True)
+subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=20", "-c:a", "aac", "-b:a", "64k",
+                *_FRAGF, _a38], check=True)
+
+
+def _pieces(path):
+    b, i, init, cur, out = open(path, "rb").read(), 0, b"", b"", []
+    while i < len(b):
+        n, t = _st38.unpack(">I4s", b[i:i + 8])
+        box, i = b[i:i + n], i + n
+        if t in (b"ftyp", b"moov"):
+            init += box
+        elif t == b"moof":
+            cur = box
+        elif t == b"mdat":
+            out.append(init + cur + box)
+    return out
+
+
+_PV, _PA = _pieces(_v38), _pieces(_a38)
+check("test media: real fragmented video and audio, cut into pieces",
+      len(_PV) >= 15 and len(_PA) >= 15, f"{len(_PV)} / {len(_PA)}")
+# '%' in the name on purpose: as a yt-dlp template it has to be doubled
+_BASE = "Chan - Launch Stream 100% [LIVEID]"
+_STREAMS = (("299", _PV), ("140", _PA))      # audio as .mp4, as live serves it
+
+
+def _tmp38(d, fid):
+    return os.path.join(d, f"{_BASE}.f{fid}.mp4.part")
+
+
+def _age(d, secs):
+    t = _t38.time() - secs
+    for n in os.listdir(d):
+        os.utime(os.path.join(d, n), (t, t))
+
+
+def _rec(d, upto=0, frags=True, old=60):
+    """A stopped recording: pieces 1..upto inside the .part, the rest loose."""
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    for fid, P in _STREAMS:
+        tmp = _tmp38(d, fid)
+        with open(tmp, "wb") as fh:
+            for x in P[:upto]:
+                fh.write(x)
+        open(tmp[:-5] + ".ytdl", "w").write(json.dumps(
+            {"downloader": {"current_fragment": {"index": upto}}}))
+        if frags:
+            for n in range(upto + 1, len(P) + 1):
+                open(f"{tmp}-Frag{n}", "wb").write(P[n - 1])
+    _age(d, old)
+
+
+def _exact(d):
+    return all(open(_tmp38(d, f), "rb").read() == b"".join(P)
+               for f, P in _STREAMS)
+
+
+def _idx(d, fid):
+    return LV.Stream(d, os.path.basename(_tmp38(d, fid))).index()
+
+
+def _loose(d):
+    return sorted(n for n in os.listdir(d) if "-Frag" in n)
+
+
+_logs = []
+
+
+def _lg(m):
+    _logs.append(str(m))
+
+
+_D = os.path.join(_L, "rec")
+_rec(_D)
+_ss = LV.scan(_D)
+check("scan finds both streams of a stopped recording",
+      sorted(s.fid for s in _ss) == ["140", "299"], str([s.tmp for s in _ss]))
+_au = {s.fid: s.is_audio(_ss) for s in _ss}
+check("audio is told apart by what is inside -- even named .f140.mp4",
+      _au == {"140": True, "299": False}, str(_au))
+
+# --- the state the standalone livejoin.py crashed into on Windows: piece 7
+#     copied in, not yet recorded, still on disk, a .ytdl.tmp left behind
+_rec(_D, upto=6)
+for _f, _P in _STREAMS:
+    with open(_tmp38(_D, _f), "ab") as _fh:
+        _fh.write(_P[6])
+    open(_tmp38(_D, _f)[:-5] + ".ytdl.tmp", "w").write("{}")
+_age(_D, 60)
+_rr, _rm, _sl = os.replace, os.remove, LV.time.sleep
+_nlock = {"rep": 0, "rm": 0}
+_R38 = _rnd38.Random(7)
+
+
+def _frep(a, b):
+    if _R38.random() < 0.3:
+        _nlock["rep"] += 1
+        raise PermissionError(5, "Access is denied", a)
+    return _rr(a, b)
+
+
+def _frm(a):
+    if _R38.random() < 0.15:
+        _nlock["rm"] += 1
+        raise PermissionError(5, "Access is denied", a)
+    return _rm(a)
+
+
+os.replace, os.remove, LV.time.sleep = _frep, _frm, (lambda s: None)
+try:
+    _logs.clear()
+    _rc = LV.join(_D, LV.scan(_D), log=_lg)
+finally:
+    os.replace, os.remove, LV.time.sleep = _rr, _rm, _sl
+check("Windows' 'Access is denied' locks are waited out -- the join finishes",
+      _rc == 0 and _nlock["rep"] + _nlock["rm"] > 5, str((_rc, _nlock)))
+check("the piece the stopped run had already added is not added twice",
+      any("not adding it twice" in x for x in _logs) and _exact(_D),
+      " | ".join(_logs[:3]))
+check("...every piece joined and recorded; nothing loose, no .tmp, no note",
+      not _loose(_D) and _idx(_D, "299") == len(_PV)
+      and _idx(_D, "140") == len(_PA)
+      and not [n for n in os.listdir(_D) if n.endswith((".tmp", ".livejoin"))],
+      str(os.listdir(_D)))
+
+_COP = os.path.join(_L, "copies", "on another drive")
+_logs.clear()
+_rc, _made = LV.watch_copy(_D, LV.scan(_D), _COP, log=_lg)
+check("a copy to watch is made, in a folder of your choice (created)",
+      _rc == 0 and len(_made) == 1 and os.path.exists(_made[0])
+      and _made[0].endswith(f"{_BASE} (so far).mp4"), str((_rc, _made)))
+_dec = subprocess.run([FF, "-v", "error", "-i", _made[0], "-f", "null", "-"],
+                      capture_output=True, text=True) if _made else None
+_hdr = subprocess.run([FF, "-hide_banner", "-i", _made[0]], capture_output=True,
+                      text=True).stderr if _made else ""
+_secs, _wh = LV._probe_media(_made[0]) if _made else (None, None)
+check("...it plays: picture and sound, all 20 s, no decode errors",
+      _dec is not None and not _dec.stderr.strip() and "Video:" in _hdr
+      and "Audio:" in _hdr and _secs and abs(_secs - 20) < 1.5,
+      f"{_secs} {(_dec.stderr if _dec else '')[:200]}")
+check("the pieces it came from are kept (so the download can carry on)",
+      os.path.getsize(_tmp38(_D, "299")) == len(b"".join(_PV)))
+
+# --- a join cut off in the middle of a step, then run again
+_rec(_D)
+_cf, _b0 = shutil.copyfileobj, LV.BATCH
+_k38 = {"n": 0}
+
+
+def _boom(*a, **kw):
+    _k38["n"] += 1
+    if _k38["n"] == 7:
+        raise KeyboardInterrupt("window closed")
+    return _cf(*a, **kw)
+
+
+LV.BATCH, shutil.copyfileobj = 4, _boom
+try:
+    LV.join(_D, LV.scan(_D), log=_lg)
+    _cut = False
+except KeyboardInterrupt:
+    _cut = True
+finally:
+    shutil.copyfileobj = _cf
+# whichever stream was being joined when it stopped (scan order is free)
+_mid = [(f, _idx(_D, f), os.path.getsize(_tmp38(_D, f)), len(b"".join(P[:4])))
+        for f, P in _STREAMS]
+_age(_D, 60)
+_logs.clear()
+try:
+    _rc = LV.join(_D, LV.scan(_D), log=_lg)
+finally:
+    LV.BATCH = _b0
+check("cut off mid-step: the count says 4, the file holds more",
+      _cut and any(i == 4 and n > want for _f, i, n, want in _mid), str(_mid))
+check("...the next join cuts the extra back and finishes -- byte for byte",
+      _rc == 0 and any("half-finished step" in x for x in _logs) and _exact(_D),
+      " | ".join(_logs[:2]))
+
+# --- a piece Windows will not let go of
+_rec(_D)
+
+
+def _lock7(a):
+    if a.endswith("-Frag7"):
+        raise PermissionError(5, "Access is denied", a)
+    return _rm(a)
+
+
+os.remove, LV.time.sleep = _lock7, (lambda s: None)
+try:
+    _logs.clear()
+    _rc = LV.join(_D, LV.scan(_D), log=_lg)
+finally:
+    os.remove, LV.time.sleep = _rm, _sl
+check("a piece that stays locked is reported, not fatal",
+      _rc == 0 and any("could not be deleted" in x for x in _logs)
+      and [n[-6:] for n in _loose(_D)] == ["-Frag7", "-Frag7"],
+      str(_loose(_D)))
+_age(_D, 60)
+_rc = LV.join(_D, LV.scan(_D), log=_lg)
+check("...the next join clears it away without adding it twice",
+      _rc == 0 and not _loose(_D) and _exact(_D))
+
+# --- a download still writing there
+_rec(_D, upto=5, old=2)
+_logs.clear()
+_rc = LV.join(_D, LV.scan(_D), log=_lg)
+check("join refuses while a download is still writing to the files",
+      _rc == 1 and "still writing" in " ".join(_logs)
+      and len(_loose(_D)) == len(_PV) + len(_PA) - 10, " | ".join(_logs))
+_rc2, _m2 = LV.watch_copy(_D, LV.scan(_D), _COP, log=_lg)
+_s2, _ = LV._probe_media(_m2[0]) if _m2 else (None, None)
+check("...but a copy to watch is made (it only reads): what is joined, 5 s",
+      _rc2 == 0 and _m2 and _s2 and abs(_s2 - 5) < 1.5, str((_rc2, _s2)))
+check("...and --force joins anyway",
+      LV.join(_D, LV.scan(_D), log=_lg, force=True) == 0 and _exact(_D))
+
+# --- a missing piece and an empty one
+_rec(_D)
+os.remove(_tmp38(_D, "299") + "-Frag9")
+open(_tmp38(_D, "299") + "-Frag12", "wb").close()
+_age(_D, 60)
+_logs.clear()
+LV.report(_D, LV.scan(_D), log=_lg)
+check("the report names the missing piece",
+      any("missing piece(s): 9" in x for x in _logs), " | ".join(_logs))
+LV.join(_D, LV.scan(_D), log=_lg)
+check("joining stops before a missing piece; an empty one is removed",
+      _idx(_D, "299") == 8 and not os.path.exists(_tmp38(_D, "299") + "-Frag12")
+      and os.path.exists(_tmp38(_D, "299") + "-Frag10")
+      and _idx(_D, "140") == len(_PA))
+
+# --- the pure parts
+_NOW = 2_000_000_000
+_FM = [{"format_id": "299", "ext": "mp4", "vcodec": "avc1.64002a",
+        "acodec": "none", "height": 1080, "tbr": 6000},
+       {"format_id": "140", "ext": "m4a", "vcodec": "none",
+        "acodec": "mp4a.40.2", "tbr": 128}]
+_LIVE = {"id": "LIVEID", "title": "Launch", "live_status": "is_live",
+         "release_timestamp": _NOW - 3600, "formats": _FM}
+check("status / started_ago read yt-dlp's fields",
+      LV.status(_LIVE) == "is_live" and LV.status({"is_live": True}) == "is_live"
+      and LV.status({"error": "x"}) is None
+      and LV.started_ago(_LIVE, now=_NOW) == 3600)
+_e = LV.estimate(_LIVE, "299+140", now=_NOW)
+check("estimate: the chosen formats' rate x time since it began",
+      _e and _e["exact"] and int(_e["per_hour"]) == 6128 * 1000 // 8 * 3600
+      and int(_e["so_far"]) == int(_e["per_hour"]), str(_e))
+check("...an upper bound when nothing is chosen; audio only is small",
+      not LV.estimate(_LIVE, now=_NOW)["exact"]
+      and LV.estimate(_LIVE, keep_video=False, now=_NOW)["per_hour"]
+      == 128 * 1000 / 8 * 3600)
+check("one worker per stream: 2 for video + audio, 1 for audio only",
+      LV.stream_count({"keep_video": True}) == 2
+      and LV.stream_count({"keep_video": False}) == 1
+      and LV.stream_count({"format_selector": "299+140-1"}) == 2
+      and LV.stream_count({"format_selector": "95/b"}) == 1)
+check("the live file name gets the video id; a custom one is left alone",
+      LV.live_template("%(uploader)s - %(title)s.%(ext)s")
+      == "%(uploader)s - %(title)s [%(id)s].%(ext)s"
+      and LV.live_template("%(title)s.%(ext)s") == "%(title)s [%(id)s].%(ext)s"
+      and LV.live_template("%(id)s.%(ext)s") == "%(id)s.%(ext)s"
+      and LV.literal("100%") == "100%%")
+
+_PL = os.path.join(_L, "plan")
+_rec(_PL, upto=3)
+_o38 = {"output_dir": _PL, "template": "%(uploader)s - %(title)s.%(ext)s",
+        "keep_video": True, "concurrent": 4}
+_logs.clear()
+LV.plan(dict(_LIVE, release_timestamp=_t38.time() - 3600), _o38, log=_lg)
+check("plan: from the start, 2 workers, no lyrics",
+      _o38.get("live_from_start") and _o38["concurrent"] == 2
+      and _o38.get("no_lyrics"), str(_o38))
+check("...a second run carries on with the pieces already there (% doubled)",
+      _o38["template"] == "Chan - Launch Stream 100%% [LIVEID].%(ext)s"
+      and any("carrying on with the pieces" in x for x in _logs),
+      _o38["template"])
+check("...and says how big it is and how much room there is",
+      any("size:" in x and "an hour" in x for x in _logs)
+      and any("room:" in x for x in _logs), " | ".join(_logs))
+_fb = LV.free_bytes
+LV.free_bytes = lambda d: 10 * 2 ** 20
+try:
+    _logs.clear()
+    LV.plan(dict(_LIVE, release_timestamp=_t38.time() - 3600),
+            {"output_dir": _L, "keep_video": True}, log=_lg)
+finally:
+    LV.free_bytes = _fb
+check("...and warns, before downloading, when the disk cannot hold it",
+      any("not enough room" in x for x in _logs), " | ".join(_logs))
+_o38 = {"output_dir": _L, "keep_video": True, "live_from_now": True}
+LV.plan(_LIVE, _o38, log=_lg)
+check("--live-from-now: recorded from now, no from-the-start plumbing",
+      not _o38.get("live_from_start") and "concurrent" not in _o38)
+_o38 = {"output_dir": _L}
+LV.plan({"id": "U", "live_status": "is_upcoming"}, _o38, log=_lg)
+check("not started yet: wait for it, then from the start",
+      _o38.get("wait_for_video") == "60" and _o38.get("live_from_start")
+      and _o38.get("concurrent") == 1)
+_logs.clear()
+LV.plan({"id": "LIVEID", "live_status": "was_live"}, {"output_dir": _PL},
+        log=_lg)
+check("an ended stream with a stopped recording here points at --resume",
+      any("--resume" in x for x in _logs), " | ".join(_logs))
+
+_ba = download.build_args("u", {"live_from_start": True, "wait_for_video": "60",
+                                "download_sections": "*0:01:00-inf"})
+check("build_args: --live-from-start, --wait-for-video, --download-sections",
+      "--live-from-start" in _ba and _ba[_ba.index("--wait-for-video") + 1] == "60"
+      and _ba[_ba.index("--download-sections") + 1] == "*0:01:00-inf")
+_pa38, _run0 = [], download.subprocess.run
+
+
+def _cap38(args, **kw):
+    _pa38.append(list(args))
+    raise RuntimeError("captured")
+
+
+download.subprocess.run = _cap38
+try:
+    download.probe("https://youtu.be/x", {})
+    download.probe("https://youtu.be/x", {"live_from_now": True})
+finally:
+    download.subprocess.run = _run0
+check("the probe lists what a live download really gets (from the start)",
+      "--live-from-start" in _pa38[0] and "--live-from-start" not in _pa38[1]
+      and "https://youtu.be/x" in _pa38[0], str(_pa38[0][-4:]))
+check("a full disk is named (Linux, Windows) and has its own advice",
+      download.classify_error("ERROR: [Errno 28] No space left on device")
+      == "disk_full" and download.classify_error(
+          "OSError: [WinError 112] There is not enough space on the disk")
+      == "disk_full" and "carries on" in download.ADVICE["disk_full"])
+
+# --- end to end through the CLI, with a yt-dlp that plays a live stream
+_FB = os.path.join(WORK, "bin38")
+os.makedirs(_FB, exist_ok=True)
+open(os.path.join(_FB, "yt-dlp"), "w").write(r'''#!/usr/bin/env python3
+import json, os, sys, time
+a = sys.argv[1:]
+open(os.path.join(os.path.dirname(__file__), "argv.txt"), "a").write(json.dumps(a) + "\n")
+if "--version" in a:
+    print("2026.10.26-fake"); sys.exit(0)
+url = [x for x in a if x.startswith("http")][-1]
+def fm(proto):
+    return [{"format_id": "299", "ext": "mp4", "vcodec": "avc1.64002a", "acodec": "none",
+             "height": 1080, "tbr": 6000, "protocol": proto},
+            {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+             "tbr": 128, "protocol": proto}]
+if "-J" in a:
+    if "upcoming" in url:
+        info = {"id": "UPID", "title": "Soon", "live_status": "is_upcoming",
+                "release_timestamp": int(time.time()) + 600, "formats": []}
+    elif "vod" in url:
+        info = {"id": "LIVEID", "title": "Launch", "live_status": "was_live",
+                "duration": 7200, "formats": fm("https")}
+    elif "live" in url:
+        info = {"id": "LIVEID", "title": "Launch", "uploader": "Chan",
+                "live_status": "is_live", "release_timestamp": int(time.time()) - 3600,
+                "formats": fm("http_dash_segments_generator")}
+    else:
+        info = {"id": "PLAIN", "title": "Plain", "live_status": "not_live",
+                "duration": 100, "formats": fm("https")}
+    print(json.dumps(info)); sys.exit(0)
+if "full" in url:
+    sys.stderr.write("ERROR: unable to write data: [Errno 28] No space left on device\n")
+    sys.exit(1)
+sys.exit(0)
+''')
+os.chmod(os.path.join(_FB, "yt-dlp"), 0o755)
+_ENV38 = dict(ENV, PATH=_FB + os.pathsep + ENV["PATH"])
+_ARGV38 = os.path.join(_FB, "argv.txt")
+
+
+def run38(*args):
+    if os.path.exists(_ARGV38):
+        os.remove(_ARGV38)
+    return subprocess.run([sys.executable, ENTRY, *args, "--cookies-from-browser",
+                           "off"], capture_output=True, text=True, env=_ENV38)
+
+
+def _dl38():
+    """The yt-dlp calls that were downloads, not probes."""
+    if not os.path.exists(_ARGV38):
+        return []
+    rows = [json.loads(x) for x in open(_ARGV38) if x.strip()]
+    return [r for r in rows if "-J" not in r and "--version" not in r]
+
+
+def _val(argv, flag):
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+_URL = "https://www.youtube.com/live/LIVEID"
+_GD = os.path.join(_L, "get")
+_r = run38("get", _URL, "--keep-video", "-o", _GD)
+_d = (_dl38() or [[]])[-1]
+check("get on a live stream: --live-from-start, 2 workers (video + audio)",
+      "--live-from-start" in _d and _val(_d, "--concurrent-fragments") == "2",
+      _r.stdout[-600:] + _r.stderr[-300:])
+check("...the video id in the file name",
+      str(_val(_d, "-o")).endswith(" [%(id)s].%(ext)s"), str(_val(_d, "-o")))
+check("...told, before it starts, how far back it goes, how big, how much room",
+      "recording it from the very start" in _r.stdout and "size:" in _r.stdout
+      and "room:" in _r.stdout, _r.stdout[-800:])
+check("...and no lyrics hunt for a broadcast",
+      "no lyrics to fetch" in _r.stdout and "==> lyrics for" not in _r.stdout,
+      _r.stdout[-300:])
+_r = run38("get", _URL, "-o", _GD)
+_d = (_dl38() or [[]])[-1]
+check("music mode on a live stream: 1 worker (audio only)",
+      "--live-from-start" in _d and _val(_d, "--concurrent-fragments") == "1",
+      str(_d[-12:]))
+_r = run38("get", "https://www.youtube.com/watch?v=upcoming", "--keep-video",
+           "-o", _GD)
+_d = (_dl38() or [[]])[-1]
+check("a stream that has not started: waits for it (--wait-for-video)",
+      _val(_d, "--wait-for-video") == "60" and "--live-from-start" in _d,
+      _r.stdout[-400:])
+_r = run38("get", "https://youtu.be/plain", "--keep-video", "--no-lyrics",
+           "-o", _GD)
+_d = (_dl38() or [[]])[-1]
+check("an ordinary video is downloaded exactly as before",
+      "--live-from-start" not in _d and "[%(id)s]" not in str(_val(_d, "-o"))
+      and _val(_d, "--concurrent-fragments") == "4", str(_d[-14:]))
+_r = run38("get", "https://www.youtube.com/live/full", "--keep-video", "-o", _GD)
+check("a live recording that hits a full disk says nothing is lost, and how "
+      "to watch it and carry on",
+      "Nothing downloaded so far is lost" in _r.stdout
+      and "free some space" in _r.stdout and "live" in _r.stdout
+      and "--watch" in _r.stdout, _r.stdout[-700:])
+_r = run38("check", _URL)
+check("check says when a URL is live, and since when",
+      "LIVE now, started 1:00:0" in _r.stdout, _r.stdout[-400:])
+_r = run38("live", _L, "--status", _URL)
+check("live --status: live since when, how big, how much room",
+      "LIVE now" in _r.stdout and "started 1:00:0" in _r.stdout
+      and "free in" in _r.stdout and "an hour" in _r.stdout, _r.stdout[-600:])
+_r = run38("formats", _URL, "--keep-video")
+check("formats on a live stream says these are the from-the-start formats",
+      "formats from the start" in _r.stdout, _r.stdout[-500:])
+
+_rec(_D, upto=4)
+_r = run38("live", _D)
+check("live FOLDER: what is there and what to do next",
+      "loose piece(s)" in _r.stdout and "can be joined now" in _r.stdout
+      and "next:" in _r.stdout, _r.stdout[-500:])
+_r = run38("live", _D, "--resume", _URL)
+_d = (_dl38() or [[]])[-1]
+check("resume while live: joins first, then carries on with the same pieces",
+      _r.returncode == 0 and not _loose(_D) and _exact(_D),
+      _r.stdout[-600:] + _r.stderr[-300:])
+check("...same formats, from the start, 2 workers, the existing name (%%)",
+      _val(_d, "-f") == "299+140" and "--live-from-start" in _d
+      and _val(_d, "--concurrent-fragments") == "2"
+      and _val(_d, "-o") == "Chan - Launch Stream 100%% [LIVEID].%(ext)s"
+      and _val(_d, "-P") == _D and _val(_d, "--merge-output-format") == "mp4"
+      and "--embed-thumbnail" not in _d, str(_d))
+_rec(_D, upto=15, frags=False)
+_r = run38("live", _D, "--resume", "https://youtu.be/vod-LIVEID")
+_d = (_dl38() or [[]])[-1]
+_sec = str(_val(_d, "--download-sections"))
+check("resume once it is a normal video: only from where yours ends (-5 s)",
+      _r.returncode == 0 and _sec.startswith("*0:00:")
+      and abs(int(_sec[6:8]) - 10) <= 1 and _sec.endswith("-inf")
+      and "--live-from-start" not in _d, _sec + " " + _r.stdout[-400:])
+check("...in the quality you have, as 'TITLE (rest)'",
+      "[height<=90]" in str(_val(_d, "-f"))
+      and _val(_d, "-o") == "Chan - Launch Stream 100%% [LIVEID] (rest).%(ext)s",
+      str(_d))
+
+# --- the Live streams tab
+tkstub.reset()
+G.run()
+_r8 = tkstub.ROOTS[-1]
+
+
+def _drain8():
+    todo, _r8.pending[:] = list(_r8.pending), []
+    for f in todo:
+        f()
+
+
+_nb8 = [w for w in _r8.walk() if isinstance(w, tkstub.Notebook)][0]
+_lt = _nb8.tab_for("Live streams")
+_le = [w for w in _lt.walk() if w.kind == "entry"]
+check("the Live streams tab has the link, the folder and the copy folder",
+      len(_le) == 3, str(len(_le)))
+_gp8 = [w for w in _r8.walk() if isinstance(w, G.OptionsPane)
+        and w.sub == "get"][0]
+_cfb8 = _gp8.vars["cookies_from_browser"].get()
+_A8, _cli8, _wc8, _op8 = [], G.cli_main, G.live.watch_copy, G.open_path
+G.cli_main = lambda argv: (_A8.append(list(argv)), 0)[1]
+try:
+    _le[0].options["textvariable"].set(_URL)
+    _le[1].options["textvariable"].set(_D)
+    _le[2].options["textvariable"].set(_COP)
+    _gp8.vars["cookies_from_browser"].set("firefox")
+    _qbtn(_lt, "Is it live? How big?").invoke()
+    _drain8()
+    check("'Is it live? How big?' -> live --status, with your cookie setting",
+          _A8[-1][:4] == ["live", _D, "--status", _URL]
+          and _val(_A8[-1], "--cookies-from-browser") == "firefox", str(_A8[-1:]))
+    _qbtn(_lt, "Record from the start").invoke()
+    _drain8()
+    _g8 = _A8[-1]
+    check("'Record from the start' -> get the video, no lyrics, this video, "
+          "into the folder",
+          _g8[0] == "get" and _URL in _g8 and "--keep-video" in _g8
+          and "--no-lyrics" in _g8 and "--no-playlist" in _g8
+          and _val(_g8, "--output-dir") == _D, str(_g8))
+    _ao = [w for w in _qw(_lt, "checkbutton")
+           if w.options.get("text") == "Audio only (no picture)"][0]
+    _ao.invoke()
+    _qbtn(_lt, "Record from the start").invoke()
+    _drain8()
+    check("...ticked 'Audio only': no --keep-video",
+          _A8[-1][0] == "get" and "--keep-video" not in _A8[-1], str(_A8[-1]))
+    _ao.invoke()
+    _qbtn(_lt, "What's in the folder?").invoke()
+    _drain8()
+    check("'What's in the folder?' -> live FOLDER", _A8[-1] == ["live", _D],
+          str(_A8[-1:]))
+    _qbtn(_lt, "Watch what's there so far").invoke()
+    _drain8()
+    check("'Watch what's there so far' (idle) -> live FOLDER --join --out",
+          _A8[-1] == ["live", _D, "--join", "--out", _COP], str(_A8[-1:]))
+    _qbtn(_lt, "Download the rest").invoke()
+    _drain8()
+    check("'Download the rest' -> live FOLDER --resume URL + cookies",
+          _A8[-1][:4] == ["live", _D, "--resume", _URL]
+          and _val(_A8[-1], "--cookies-from-browser") == "firefox", str(_A8[-1:]))
+    _seen8 = []
+    G.live.watch_copy = lambda d, ss, out=None, log=print: (
+        _seen8.append((d, out, len(ss))), (0, []))[1]
+
+    def _recording(argv):
+        _A8.append(list(argv))
+        if argv[0] == "get":         # pressed while the recording runs
+            _qbtn(_lt, "Watch what's there so far").invoke()
+        return 0
+    G.cli_main = _recording
+    _n8 = len(_A8)
+    _qbtn(_lt, "Record from the start").invoke()
+    _drain8()
+    check("during a recording 'Watch' only reads the pieces into a copy -- "
+          "no join, nothing queued",
+          _seen8 == [(_D, _COP, len(LV.scan(_D)))] and len(_A8) == _n8 + 1,
+          str((_seen8, _A8[_n8:])))
+    os.makedirs(_COP, exist_ok=True)
+    open(os.path.join(_COP, "X (so far).mp4"), "wb").write(b"x")
+    _opened = []
+    G.open_path = _opened.append
+    _qbtn(_lt, "Open the copy").invoke()
+    check("'Open the copy' opens the newest copy",
+          _opened and _opened[-1].endswith(" (so far).mp4"), str(_opened))
+    from musictool import config as _cfg38
+    _ex8 = _cfg38.load().get("gui_extra") or {}
+    check("the tab's fields come back next time",
+          _ex8.get("live_url") == _URL and _ex8.get("live_folder") == _D
+          and _ex8.get("live_out") == _COP, str({k: v for k, v in _ex8.items()
+                                                 if k.startswith("live")}))
+finally:
+    G.cli_main, G.live.watch_copy, G.open_path = _cli8, _wc8, _op8
+    _gp8.vars["cookies_from_browser"].set(_cfb8)
+shutil.rmtree(_L, ignore_errors=True)
 
 
 srv.shutdown()

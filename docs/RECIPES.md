@@ -6,6 +6,38 @@ way.
 
 These are hand-run commands, not (yet) `musictool` subcommands. Turning the
 metadata recipe into `musictool meta URL FILE` is a known piece of future work.
+The one exception is the first recipe, which is a `musictool live` command.
+
+---
+
+## A live recording that stopped (disk full) -- watch it, then get the rest
+
+The case it was written for: a live stream recorded with plain
+`yt-dlp --live-from-start -N 4` stopped when the disk filled, leaving
+thousands of `TITLE.f299.mp4.part-FragN` pieces and a `.part` with little in
+it. Windows, cookies in Downloads:
+
+```bat
+musictool live "C:\Users\Beloved\Videos\GTA V\New Stream"
+musictool live "C:\Users\Beloved\Videos\GTA V\New Stream" --join
+musictool live "C:\Users\Beloved\Videos\GTA V\New Stream" --watch --out E:\
+musictool live "C:\Users\Beloved\Videos\GTA V\New Stream" --resume https://www.youtube.com/live/xMXp80Cntxw --cookies "%USERPROFILE%\Downloads\cookies.txt"
+```
+
+1. The first line only reads: how many pieces of each stream, which can be
+   joined, free space.
+2. `--join` appends the pieces to the `.part` files in place (it needs room
+   for about two pieces), frees their space, and makes `TITLE (so far).mp4`.
+   If it is stopped or Windows locks a file, run it again -- it carries on.
+3. `--watch --out E:\` puts the copy on another drive; it needs about as
+   much room as the recording. Delete it when done -- the pieces stay.
+4. `--resume`, after making room: while the stream is live or just ended, the
+   same pieces continue (nothing fetched twice); once it is a normal video,
+   only the part after yours, as `TITLE (rest).mp4`, plus the ffmpeg line
+   that makes one file of the two.
+
+In the window: the **Live streams** tab, **What's in the folder?**, **Watch
+what's there so far**, **Download the rest**.
 
 ---
 

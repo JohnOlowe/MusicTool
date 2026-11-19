@@ -93,6 +93,43 @@ See `RECIPES.md`.
   `pyproject.toml` depends on `yt-dlp[default]`, `doctor` has an `ejs` line,
   and `runtime_args` enables node when it is the only runtime.
 
+
+### Live streams
+
+Read in yt-dlp 2026.10.26's source, then driven through its real downloader
+with a local stream whose pieces arrive over time (`fragments` as a
+generator, the way the YouTube extractor feeds a live stream):
+
+- **More than one worker per stream means nothing is joined until the
+  broadcast ends.** `download_and_append_fragments_multiple` gives each format
+  `ceil(concurrent_fragment_downloads / formats)` workers; with more than one
+  it uses `pool.map`, which for a live generator downloads every piece to its
+  own `-FragN` file and appends none until the stream is over. Measured: `-N 4`
+  on video+audio left 78 loose pieces and a 0-byte `.part` halfway; `-N 2`
+  never had a loose piece and the `.part` was growing, in the same time. So
+  a live recording runs with `-N` = number of streams. A full disk under
+  `-N 4` is the worst case: thousands of pieces and no playable file.
+- **`--live-from-start` for a stream that just ended, too.** In "post-live"
+  mode YouTube's manifests cover only the last 2 hours (yt-dlp labels them
+  "(Last 2 hours)") unless from-start is asked for. Rewind is limited to
+  120 h.
+- **Without `--live-from-start` the title gets the date appended**
+  (`Title 2026-11-18 21:05`), and with it, formats are filtered to the
+  from-start ones; asking for from-start on a stream that has none is an
+  error suggesting `--no-live-from-start`. `probe` therefore passes it unless
+  `--live-from-now`.
+- **Resuming is exact.** The `.ytdl` file holds
+  `{"downloader": {"current_fragment": {"index": N}}}` and the DASH generator
+  skips `frag_index <= N`. A piece is deleted only after it is appended. An
+  index > 0 with a 0-byte `.part` is treated as inconsistent and restarts.
+  Measured: a recording killed with `kill -9` after 17 of 40 s fetched exactly
+  the 46 missing pieces of 80 when run again under the same name.
+- **yt-dlp has no handling for a full disk** (no ENOSPC anywhere); the OSError
+  text is matched instead (`No space left on device`, WinError 112).
+- **On Windows a just-written file is often briefly locked** (Defender, the
+  indexer, OneDrive): `os.replace`/`os.remove` raise WinError 5 "Access is
+  denied". Every rename and delete in `live.py` retries.
+
 ---
 
 ## Lyrics APIs, as seen live (2026-11-18)

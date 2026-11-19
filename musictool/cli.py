@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import cancel
 from . import config as configmod
-from . import download, formats, lyrics, progress, providers, tags
+from . import download, formats, live, lyrics, progress, providers, tags
+from .uicmd import is_playlist_url
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
                    is_windows, js_runtime, pot_server_reachable, ytdlp_cmd,
@@ -59,6 +60,9 @@ def _add_download_flags(p):
                    help="if the URL is in a playlist, take only this video")
     g.add_argument("--yes-playlist", action="store_true",
                    help="take the whole playlist (default when given a playlist URL)")
+    g.add_argument("--live-from-now", dest="live_from_now", action="store_true",
+                   help="a stream that is live right now is recorded from the "
+                        "start by default; this records from now instead")
 
 
 def _add_quality_flags(p):
@@ -219,6 +223,39 @@ def build_parser():
     rl.add_argument("--list", action="store_true",
                     help="just list what language each file is in and the "
                          "link it came from (no downloads, no network)")
+    lv = sub.add_parser(
+        "live", help="live streams: is it live and how big; what is in a "
+                     "stopped recording; watch it so far; download the rest")
+    lv.add_argument("folder", nargs="?",
+                    help="the folder the recording is in (default: your "
+                         "download folder)")
+    lv.add_argument("--status", metavar="URL",
+                    help="is this stream live, since when, how big so far, "
+                         "and is there room for it")
+    lv.add_argument("--join", action="store_true",
+                    help="join the loose pieces, then make 'TITLE (so far)"
+                         ".mp4' to watch")
+    lv.add_argument("--no-copy", dest="no_copy", action="store_true",
+                    help="with --join: join only, make no copy")
+    lv.add_argument("--watch", action="store_true",
+                    help="only make the copy to watch -- safe while the "
+                         "recording is still running")
+    lv.add_argument("--out", help="folder for the copy to watch, e.g. another "
+                                  "drive when this one is full")
+    lv.add_argument("--resume", metavar="URL",
+                    help="download the rest of a stopped recording; pieces "
+                         "already here are not downloaded again")
+    lv.add_argument("--force", action="store_true",
+                    help="join even though the files changed in the last 30 s "
+                         "(only when no download is running)")
+    lv.add_argument("--cookies", help="cookies.txt, if YouTube asks")
+    lv.add_argument("--cookies-from-browser", dest="cookies_from_browser",
+                    help="auto | off | firefox | chrome | edge ...")
+    lv.add_argument("--proxy", help="proxy URL")
+    lv.add_argument("--js-runtimes", dest="js_runtimes",
+                    help="JavaScript runtime for YouTube's challenge, e.g. node")
+    lv.add_argument("--remote-components", dest="remote_components",
+                    help="e.g. ejs:github")
     sub.add_parser("doctor", help="check that yt-dlp, ffmpeg and tkinter are available")
     sub.add_parser("gui", help="launch the graphical interface")
     return ap
@@ -231,7 +268,7 @@ def _opts(args):
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
               "quality", "max_size", "format_selector", "merge_format",
-              "audio_lang",
+              "audio_lang", "live_from_now",
               "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
               "retries", "net_max_wait", "download_archive", "lyrics_dir",
@@ -313,6 +350,14 @@ def cmd_check(args):
             ok += 1
             print(f"    reachable  \"{info.get('title') or info.get('id')}\""
                   f"  {_duration(info.get('duration'))}")
+            st = live.status(info)
+            if st in live.LIVE or st == "is_upcoming":
+                ago = live.started_ago(info)
+                print(f"    {live.STATUS_TEXT[st]}"
+                      + (f", started {live.hms(ago)} ago"
+                         if st == "is_live" and ago else "")
+                      + " -- `get` records it from the start; musictool live "
+                        "--status URL says how big it is")
         print("    -> no login needed for this one")
 
     print("\n" + "=" * 60)
@@ -367,6 +412,10 @@ def cmd_formats(args):
         shown, lang_note = formats.filter_audio_lang(
             shown, str(o.get("audio_lang") or ""))
         dur = _duration(info.get("duration"))
+        if live.status(info) in live.LIVE:
+            print(f"    {live.STATUS_TEXT[live.status(info)]}: these are the "
+                  f"formats from the start (what `get` records); sizes grow "
+                  f"while it runs")
         print(formats.table(
             shown, f"    {info.get('title') or info.get('id')}"
                    + (f"  ({dur})" if dur else "")))
@@ -429,10 +478,11 @@ def cmd_formats(args):
     return rc
 
 
-def _resolve_quality(url, o, log=print):
+def _resolve_quality(url, o, log=print, info=None):
     """Turn --quality / --max-size into a concrete -f for this URL.
 
     Costs one metadata request, and only when asked: an explicit -f always wins.
+    `info` is a probe already made for this URL (get's live check), reused.
     """
     if o.get("format_selector"):
         return
@@ -449,7 +499,7 @@ def _resolve_quality(url, o, log=print):
             o["format_selector"] = raw
             log(f"  note: '{raw}' is a raw format selector, not a height "
                 f"-- using it as -f")
-            info = download.probe(url, o)
+            info = info if info is not None else download.probe(url, o)
             if isinstance(info, dict) and not info.get("error"):
                 for warn in formats.check_selector(
                         raw, formats.rows_from_info(info)):
@@ -466,7 +516,7 @@ def _resolve_quality(url, o, log=print):
     if (height or want) and not o.get("keep_video"):
         log("  note: video quality needs --keep-video; without it you get "
             "audio only")
-    info = download.probe(url, o)
+    info = info if info is not None else download.probe(url, o)
     if not isinstance(info, dict) or info.get("error"):
         log(f"  !! could not read the qualities: "
             f"{str((info or {}).get('error'))[:160]}")
@@ -519,7 +569,7 @@ def cmd_get(args):
         done.add(path)
         if vid:
             download.record(o["output_dir"], path, vid, url)
-        if o.get("no_lyrics") or cancel.requested():
+        if o.get("no_lyrics") or url in live_urls or cancel.requested():
             return
         infos = lyrics.gather([path], (o["lyrics_dir"],))
         if not infos:
@@ -530,6 +580,7 @@ def cmd_get(args):
         res["total"] += 1
 
     targets = []
+    live_urls = set()        # live recordings: a broadcast has no lyrics
     stopped = False
     urls = [u for u in args.urls if not o.get("lyrics_only")]
     n_jobs = max(1, min(8, int(getattr(args, "jobs", 1) or 1)))
@@ -553,7 +604,20 @@ def cmd_get(args):
         # reusing the selector is how a dubbed video slips through in the
         # wrong language while everything reports success.
         per = dict(o)
-        _resolve_quality(url, per, log=say)
+        # One metadata read per single video: is it a live stream? (It is
+        # reused for the quality pick, so that costs nothing extra.) A
+        # playlist is not read item by item -- that would double its time.
+        info = None
+        if not is_playlist_url(url) and not per.get("yes_playlist"):
+            info = download.probe(url, per)
+            if not isinstance(info, dict) or info.get("error"):
+                info = None          # the download itself will say why
+        live_st = live.status(info) if info else None
+        _resolve_quality(url, per, log=say, info=info)
+        if live_st in live.LIVE or live_st in ("is_upcoming", "was_live"):
+            live.plan(info, per, log=say)
+            if per.get("no_lyrics"):
+                live_urls.add(url)
         # yt-dlp only ever sees one URL, so it cannot tell the UI how many are
         # queued behind it. musictool can.
         progress.report({"type": "batch", "i": idx, "n": len(urls)})
@@ -569,6 +633,8 @@ def cmd_get(args):
             return
         if err:
             say(f"!! {err}")
+            if per.get("live_from_start"):
+                live.after_failure(per, err, log=say)
             return
         say(f"    {len(files)} file(s)")
 
@@ -596,6 +662,11 @@ def cmd_get(args):
     if o.get("no_lyrics"):
         print("\n==> skipping lyrics (--no-lyrics)")
         return 0
+    if urls and live_urls >= set(urls):
+        # only live recordings: no lyrics to look for -- and no sweep of the
+        # whole folder when one stopped early
+        print("\n==> live recording(s): no lyrics to fetch")
+        return 0 if targets else (130 if stopped else 1)
     if stopped and not targets:
         http.save()
         return 130
@@ -1131,6 +1202,45 @@ def cmd_relang(args):
     return 1 if n["errors"] else 0
 
 
+def cmd_live(args):
+    """Live streams: status, look at a folder, join + watch, resume."""
+    o = _opts(args)
+    if args.status:
+        folder = args.folder or o.get("output_dir") or "."
+        info = download.probe(args.status, o)
+        if not isinstance(info, dict) or info.get("error"):
+            err = str((info or {}).get("error") or "no answer")
+            print("!! " + err.splitlines()[0][:300])
+            hint = download.ADVICE.get(download.classify_error(err))
+            if hint:
+                print("-> " + hint)
+            return 1
+        live.describe(info, folder if os.path.isdir(folder) else ".")
+        return 0
+    folder = os.path.abspath(os.path.expanduser(
+        args.folder or o.get("output_dir") or "."))
+    if not os.path.isdir(folder):
+        print(f"!! not a folder: {folder}")
+        return 2
+    if args.resume:
+        return live.resume(folder, args.resume, o, force=args.force)
+    streams = live.scan(folder)
+    if args.watch:
+        rc, _made = live.watch_copy(folder, streams, args.out)
+        return rc
+    if args.join:
+        rc = live.join(folder, streams, force=args.force)
+        if rc == 0 and not args.no_copy:
+            rc, _made = live.watch_copy(folder, live.scan(folder), args.out)
+        live.report(folder, live.scan(folder))
+        return rc
+    live.report(folder, streams)
+    if streams:
+        print(f'\nnext:  musictool live "{folder}" --join     (or --watch '
+              f'while it is still recording)')
+    return 0
+
+
 def ejs_status():
     """yt-dlp-ejs holds the scripts yt-dlp runs (with deno/node) to solve
     YouTube's challenges. `pip install yt-dlp` does NOT bring it; the
@@ -1238,7 +1348,7 @@ def main(argv=None):
                "duplicates": cmd_duplicates, "dupes": cmd_duplicates,
                "extract": cmd_extract, "embed": cmd_embed,
                "providers": cmd_providers, "config": cmd_config,
-               "relang": cmd_relang,
+               "relang": cmd_relang, "live": cmd_live,
                "doctor": cmd_doctor, "gui": cmd_gui}.get(args.cmd)
     if handler is None:
         print(f"unknown command: {args.cmd}")

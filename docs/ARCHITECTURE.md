@@ -12,6 +12,7 @@ musictool.py ──▶ cli.py ──▶ download.py ──▶ (yt-dlp subprocess
                    │            │
                    │            └──▶ progress.py ──▶ gui.py (via a hook)
                    │
+                   ├──▶ live.py ──▶ download.py, (ffmpeg for the watch copy)
                    ├──▶ formats.py ──▶ (yt-dlp -J output)
                    ├──▶ lyrics.py ──▶ providers.py ──▶ tags.py ──▶ mutagen
                    ├──▶ config.py      saved defaults, one JSON file
@@ -32,11 +33,12 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1246 | argparse for all 13 subcommands, and every `cmd_*` handler |
-| `gui.py` | 2114 | tkinter GUI, 8 tabs, the log pane, the progress panel, the queue |
-| `uicmd.py` | 665 | parser → widget specs, `build_argv`, intent modes, pane geometry |
+| `cli.py` | 1356 | argparse for all 14 subcommands, and every `cmd_*` handler |
+| `gui.py` | 2341 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue |
+| `uicmd.py` | 666 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 771 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
-| `download.py` | 634 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
+| `download.py` | 658 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
+| `live.py` | 955 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `util.py` | 553 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
@@ -78,6 +80,17 @@ Functions worth knowing by name because they are load-bearing:
   yt-dlp call (`build_args`, `probe`, `print_target_name`); adds
   `--js-runtimes node` when node is the only runtime. `probe` used to omit
   both, so `formats --js-runtimes node` did nothing.
+- `live.plan(info, o, log)` — called by `get` with the probe of a single URL.
+  For a live, upcoming or just-ended stream it sets `live_from_start`, one
+  worker per stream (`concurrent`), `[%(id)s]` in the template, and — when
+  pieces of the same video are already in the folder — their exact name
+  (`literal()` doubles any `%`), after `recover()` has undone a half-finished
+  join. It prints the size and room. Returns nothing for a normal video.
+- `live.join(folder, log, force)` — appends only the pieces that follow the
+  `.part` without a gap, 50 at a time: append, fsync, write the `.ytdl` index
+  and a `.livejoin` note, then delete the pieces. Every rename/remove goes
+  through `retry()` (Windows locks). `watch_copy` remuxes the `.part` plus the
+  contiguous pieces into `TITLE (so far).mp4` without changing them.
 - `download.streams(path)` — reads stream info by parsing
   `ffmpeg -hide_banner -i` stderr, because `ffprobe` is frequently absent
   (imageio-ffmpeg never ships it; stripped Windows and Termux installs often

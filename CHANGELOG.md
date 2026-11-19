@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — a part no longer crawls at 2x real time
+## `86be9ea` — a part no longer crawls at 2x real time
 *2026-11-19 · 1067 assertions*
 
 Reported: `get --range 1:50:00- --exact -f 299+140` on 45FqURpMNCs "stays

@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — Force stop; Stop no longer leaves ffmpeg downloading
+## `9da2195` — Force stop; Stop no longer leaves ffmpeg downloading
 *2026-11-19 · 1083 assertions*
 
 Asked for: a way to stop *immediately* when it really has to stop.

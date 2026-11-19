@@ -8,6 +8,27 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — a part no longer crawls at 2x real time
+*2026-11-19 · 1067 assertions*
+
+Reported: `get --range 1:50:00- --exact -f 299+140` on 45FqURpMNCs "stays
+stuck on downloading, it never starts". It had started: the `.part` file grew,
+but at about 2x real time. For the first minutes the bar read 0.0% with an
+ETA of 45 hours, then settled at about 45 minutes for 1:30:30 of video.
+
+- **Cause:** ffmpeg (which fetches every part) asks YouTube for the rest of
+  the file in one request, and YouTube slows such a request to about 2x real
+  time. yt-dlp's own downloader asks in 10 MB pieces, so a full download of
+  the same 5.56 GiB format ran at 30-140 MiB/s.
+- **Fix:** when `ffmpeg -h protocol=http` lists `-request_size` (ffmpeg
+  8.1+), a part is fetched with `-multiple_requests 1 -request_size 10485760
+  -short_seek_size 10485760` after the reconnect options (`download.http_opts`).
+  Same command, same stream: 39% in 44 s at up to 70x, against 1.3% in 50 s.
+- With an older ffmpeg nothing extra is passed, because an unknown option
+  would stop the download. `get --range` instead says that the part comes at
+  about 2x real time, how long that will be, and that ffmpeg 8.1 fixes it.
+- Tests: section 41 (6 assertions).
+
 ## `476d533` — live chat replay as subtitles; only part of a video
 *2026-11-19 · 1061 assertions*
 

@@ -5317,6 +5317,44 @@ finally:
     G.cli_main = _cli40
 
 
+# --- 41. a part is asked for in 10 MB pieces (YouTube slows one long request)
+print("\n41. get --range: ffmpeg asks in pieces when it can")
+from musictool import download as D41, cli as C41
+_new41 = ("  -reconnect <boolean>\n  -reconnect_streamed <boolean>\n"
+          "  -reconnect_on_network_error <boolean>\n  -reconnect_delay_max <int>\n"
+          "  -multiple_requests <boolean>\n  -request_size <int64>\n"
+          "  -short_seek_size <int>\n")
+_old41 = "\n".join(l for l in _new41.splitlines() if "request_size" not in l)
+_o41 = D41.http_opts(_new41)
+check("ffmpeg with -request_size: 10 MB requests, kept-alive connection",
+      "-request_size 10485760" in _o41 and "-multiple_requests 1" in _o41
+      and "-short_seek_size 10485760" in _o41
+      and _o41.startswith("-reconnect 1 -reconnect_streamed 1"), _o41)
+_p41 = D41.http_opts(_old41)
+check("...an older ffmpeg: only the reconnect options (an unknown one would "
+      "stop the download)", "request" not in _p41 and "short_seek" not in _p41
+      and "-reconnect_delay_max 30" in _p41, _p41)
+check("...an ffmpeg that lists nothing gets nothing", D41.http_opts("") == "")
+_save41 = list(D41._RECONNECT)
+try:
+    for _h41, _want41 in ((_old41, True), (_new41, False)):
+        D41._RECONNECT[:] = [D41.http_opts(_h41)]
+        _said41, _per41 = [], {}
+        _ok41 = C41._plan_part("https://youtu.be/ABCDEFGHIJK", _per41,
+                               {"duration": 12030}, "was_live",
+                               (6600.0, None), _said41.append)
+        _txt41 = " ".join(_said41)
+        check(("old" if _want41 else "new") + " ffmpeg: "
+              + ("warned that the part is slow, with how long"
+                 if _want41 else "no slowness warning"),
+              _ok41 and _per41.get("download_sections") == "*6600-inf"
+              and (("2x real time" in _txt41 and "0:45:15" in _txt41
+                    and "8.1" in _txt41) if _want41
+                   else "real time" not in _txt41), _txt41)
+finally:
+    D41._RECONNECT[:] = _save41
+
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

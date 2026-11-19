@@ -32,7 +32,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1061 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1067 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -953,6 +953,15 @@ anything downloads, and parts get no lyrics.
   bit-identical to an undisturbed one. Afterwards the length of the file is
   compared with what was asked for, and a short file prints the `--range`
   that fetches the missing end.
+- **Speed: use ffmpeg 8.1 or newer.** YouTube slows one long, open-ended
+  request to about 2x real time, so with an older ffmpeg 1:30:30 of a 1080p
+  stream takes about 45 minutes, and for the first minutes the percentage
+  sits near 0.0% with an ETA of hours: it looks stuck, but the `.part` file
+  is growing. When `ffmpeg -h protocol=http` lists `-request_size`, musictool
+  asks for 10 MB at a time (`-request_size 10485760 -multiple_requests 1
+  -short_seek_size 10485760`). On the same stream that ran at 17-70x: 39% of
+  the 1:30:30 part in 44 s, against 1.3% in 50 s before. With an older ffmpeg,
+  `get --range` says so before it starts and estimates how long it will take.
 - Progress: ffmpeg gives a position rather than a percentage, so it is turned
   into `13.3% of the part  4m 00s of 30m 00s  2.42x  ETA 10m 44s`, on one
   line. ffmpeg's description of its input and output, and the one line it
@@ -1472,7 +1481,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1061 assertions, 0 failures**, with or without
+**Verified by running the code — 1067 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

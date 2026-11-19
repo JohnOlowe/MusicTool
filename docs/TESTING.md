@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1061 assertions across 40 sections (plus 8b), 0 failures** — with or without
+**1067 assertions across 41 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -200,6 +200,11 @@ Proven by execution:
   a live stream; ffmpeg's status line becoming a percentage with time left,
   and its chatter kept out of the log; a short part being caught; and the
   Live streams tab's **Download this part** / **Get the chat** argv.
+- parts in pieces (section 41): an ffmpeg that lists `-request_size` gets
+  `-multiple_requests 1 -request_size 10485760 -short_seek_size 10485760`
+  after the reconnect options; an older one gets only the reconnect options,
+  and `get --range` then warns that the part comes at about 2x real time,
+  with how long that is.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

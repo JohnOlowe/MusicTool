@@ -180,6 +180,17 @@ that drops the connection on cue and against R0GdEkPZSvM with cookies:
   a part bit-identical to an undisturbed one. Only the options this ffmpeg
   lists are passed (`ffmpeg -h protocol=http`), because an unknown option
   would fail every part. The file's length is checked afterwards anyway.
+- **YouTube throttles one open-ended request to about 2x real time.** ffmpeg
+  normally reads the whole URL with a single `Range: bytes=N-` request.
+  Measured on 45FqURpMNCs (itag 299, 1080p60, plain https DASH): 1:00 of
+  video in 30 s (2x), 1.3% of a 1:30:30 part after 50 s, an ETA of 45 min,
+  while yt-dlp's own full download of the same format ran at 30-140 MiB/s.
+  ffmpeg's `-request_size` (http protocol, added Feb 2026, in 8.1) caps each
+  request. With `-request_size 10485760 -multiple_requests 1` the same part
+  ran at 17-70x, and a 5:00 cut came out 5:00.02 with both streams. Its docs
+  pair it with `-multiple_requests` and `-short_seek_size`, so all three are
+  passed, and only when this ffmpeg lists `-request_size`. `--concurrent` does
+  not help a part: FFmpegFD uses one connection per stream.
 - **YouTube served the part from HLS** (itag 605 etc.,
   `.../playlist/index.m3u8`). ffmpeg then logs one `[https @ 0x…] Opening
   '…' for reading` line per piece. Lines from an ffmpeg component that do not

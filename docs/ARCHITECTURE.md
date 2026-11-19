@@ -34,11 +34,11 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1611 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_check_part` for `get --range` |
+| `cli.py` | 1618 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_check_part` for `get --range` |
 | `gui.py` | 2590 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue |
 | `uicmd.py` | 672 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
-| `download.py` | 850 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` for a part), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `download.py` | 873 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 985 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `chat.py` | 870 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `to_ass`/`to_srt`/`to_vtt`/`to_txt`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
 | `util.py` | 610 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |

@@ -707,6 +707,13 @@ def _plan_part(url, per, info, live_st, part, say):
                                    else "the end")
     say(f"  only part of it: {span}" + (f", {live.hms(end - a)} of video"
                                          if end else ""))
+    if not download.ffmpeg_chunked():
+        slow = f" ({live.hms((end - a) / 2)} or longer here)" if end else ""
+        say("  note: this ffmpeg fetches the part in one long request, which "
+            "YouTube slows to about 2x real time" + slow + ", so the "
+            "percentage creeps at first. ffmpeg 8.1 or newer asks in 10 MB "
+            "pieces and is 10-20x faster (check: ffmpeg -h protocol=http "
+            "lists -request_size).")
     return True
 
 

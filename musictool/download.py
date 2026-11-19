@@ -441,13 +441,32 @@ def build_args(url, o):
 
 _RECONNECT = []
 
+# YouTube slows ONE open-ended request to about 2x real time -- measured on a
+# 1080p stream: 1:00 of video in 30 s. Asked for in 10 MB requests the same
+# part came at 17-40x (ffmpeg's -request_size, new in ffmpeg 8.1; its docs
+# pair it with -multiple_requests and -short_seek_size).
+CHUNK = 10 * 1024 * 1024
+
+
+def http_opts(have):
+    """The ffmpeg input options for a part, from `ffmpeg -h protocol=http`
+    output `have` -- only the ones listed there (an unknown option would stop
+    every part download)."""
+    want = [("reconnect", "1"), ("reconnect_streamed", "1"),
+            ("reconnect_on_network_error", "1"), ("reconnect_delay_max", "30")]
+    known = {w for w in ("request_size", "multiple_requests", "short_seek_size")
+             if re.search(rf"^\s*-{w}\b", have or "", re.M)}
+    if "request_size" in known:
+        want += [("multiple_requests", "1"), ("request_size", str(CHUNK)),
+                 ("short_seek_size", str(CHUNK))]
+    return " ".join(f"-{w} {v}" for w, v in want
+                    if re.search(rf"^\s*-{w}\b", have or "", re.M))
+
 
 def ffmpeg_reconnect_args():
-    """ffmpeg's reconnect options, as one string -- only the ones this ffmpeg
-    knows (an unknown option would stop every part download). Checked once."""
+    """ffmpeg's options for fetching a part (reconnect after a drop; ask in
+    10 MB pieces when it can), as one string. Checked once."""
     if not _RECONNECT:
-        want = ["reconnect", "reconnect_streamed", "reconnect_on_network_error",
-                "reconnect_delay_max"]
         have = ""
         try:
             exe = shutil.which("ffmpeg")
@@ -457,10 +476,14 @@ def ffmpeg_reconnect_args():
                                       errors="replace").stdout or ""
         except Exception:                                   # noqa: BLE001
             have = ""
-        opts = [w for w in want if re.search(rf"^\s*-{w}\b", have, re.M)]
-        val = {"reconnect_delay_max": "30"}
-        _RECONNECT.append(" ".join(f"-{w} {val.get(w, '1')}" for w in opts))
+        _RECONNECT.append(http_opts(have))
     return _RECONNECT[0]
+
+
+def ffmpeg_chunked():
+    """Does this ffmpeg ask for a part in pieces (fast) or in one long,
+    throttled request (about 2x real time)?"""
+    return "-request_size" in ffmpeg_reconnect_args()
 
 
 def runtime_args(o):

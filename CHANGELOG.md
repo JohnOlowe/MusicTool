@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — live chat replay as subtitles; only part of a video
+## `476d533` — live chat replay as subtitles; only part of a video
 *2026-11-19 · 1061 assertions*
 
 Asked for, on R0GdEkPZSvM (a finished 3h39m stream with one hour already

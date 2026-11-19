@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import __version__
+from . import __version__, cancel
 
 # LRCLIB asks every client to name itself: app name, version and a link
 # (https://lrclib.net/docs). The old default carried a you@example.com
@@ -584,8 +584,10 @@ class Http:
                 break
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    time.sleep(retry_after_seconds(
-                        (e.headers or {}).get("Retry-After")))
+                    if not cancel.sleep(retry_after_seconds(
+                            (e.headers or {}).get("Retry-After"))):
+                        result = None
+                        break
                     continue
                 result = None
                 break
@@ -596,7 +598,9 @@ class Http:
                 if w is None:
                     result = None
                     break
-                time.sleep(w)
+                if not cancel.sleep(w):     # Stop: give up on this request
+                    result = None
+                    break
                 continue
             except Exception:
                 result = None

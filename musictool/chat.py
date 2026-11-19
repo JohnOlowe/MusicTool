@@ -22,6 +22,8 @@ import json
 import os
 import re
 
+from . import cancel
+
 
 FORMATS = ("ass", "srt", "vtt", "txt")
 SIDES = ("right", "left", "center")
@@ -592,9 +594,9 @@ def fetch(url, folder, o, log=print):
               "-o", os.path.join(folder, "%(title)s [%(id)s].%(ext)s"), url])
     log("downloading the chat replay (text only, a few MB for a long stream)")
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                encoding="utf-8", errors="replace")
+        proc = cancel.popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace")
     except OSError as e:
         return None, f"could not run yt-dlp: {e}"
     errors, got_id = [], vid
@@ -612,6 +614,9 @@ def fetch(url, folder, o, log=print):
                 line.startswith("[info]"):
             log("   " + line)
     rc = proc.wait()
+    cancel.done(proc)
+    if cancel.requested():
+        return None, cancel.CANCELLED
     path = find_json(folder, got_id) if got_id else None
     if path:
         return path, None
@@ -629,12 +634,11 @@ def _ffmpeg():
 
 def _streams(path):
     """[(index, kind, title)] of a media file, read from `ffmpeg -i`."""
-    import subprocess
     exe = _ffmpeg()
     try:
-        err = subprocess.run([exe, "-hide_banner", "-i", path], capture_output=True,
-                             text=True, encoding="utf-8", errors="replace",
-                             timeout=60).stderr
+        err = cancel.run([exe, "-hide_banner", "-i", path], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace",
+                         timeout=60).stderr
     except Exception:                                        # noqa: BLE001
         return []
     out, cur = [], None
@@ -667,7 +671,7 @@ def first_times(path):
     if not exe or not os.path.exists(path):
         return None, None
     try:
-        proc = subprocess.Popen(
+        proc = cancel.popen(
             [exe, "-v", "error", "-nostdin", "-i", path, "-map", "0:V?",
              "-map", "0:a?", "-c", "copy", "-f", "framemd5", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -697,6 +701,7 @@ def first_times(path):
             proc.wait(timeout=5)
         except Exception:                                    # noqa: BLE001
             pass
+        cancel.done(proc)
     if not first:
         return None, None
     audio = [t for i, t in first.items() if kinds.get(i) == "audio"]
@@ -710,7 +715,6 @@ def embed(video, sub, log=print):
     NAME.mkv next to it and the original stays -- MP4 cannot hold an ASS
     track, and its own subtitle type loses the placement. -> (path, error)."""
     import shutil
-    import subprocess
     import time
     exe = _ffmpeg()
     if not exe:
@@ -754,8 +758,8 @@ def embed(video, sub, log=print):
             tmp]
     log(f"adding the chat to {os.path.basename(out)} (copying, not "
         f"re-encoding; {os.path.getsize(video) / 2**30:.2f} GB)")
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace")
+    r = cancel.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                   errors="replace")
     if r.returncode != 0 or not os.path.exists(tmp):
         try:
             os.remove(tmp)

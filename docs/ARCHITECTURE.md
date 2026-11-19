@@ -17,7 +17,7 @@ musictool.py ──▶ cli.py ──▶ download.py ──▶ (yt-dlp subprocess
                    ├──▶ formats.py ──▶ (yt-dlp -J output)
                    ├──▶ lyrics.py ──▶ providers.py ──▶ tags.py ──▶ mutagen
                    ├──▶ config.py      saved defaults, one JSON file
-                   ├──▶ cancel.py      one shared stop request
+                   ├──▶ cancel.py      Stop / Force stop, every subprocess
                    └──▶ util.py        normalisation, LRC, HTTP, detection
 
 gui.py ──▶ uicmd.py ──▶ cli.build_parser()
@@ -34,20 +34,20 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1618 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_check_part` for `get --range` |
-| `gui.py` | 2590 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue |
+| `cli.py` | 1624 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_check_part` for `get --range` |
+| `gui.py` | 2621 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 672 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
-| `download.py` | 873 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
-| `live.py` | 985 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
-| `chat.py` | 870 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `to_ass`/`to_srt`/`to_vtt`/`to_txt`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
-| `util.py` | 610 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |
+| `download.py` | 880 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
+| `chat.py` | 874 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `to_ass`/`to_srt`/`to_vtt`/`to_txt`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
+| `util.py` | 614 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
 | `progress.py` | 431 | parses yt-dlp's progress lines (per stream, retries, skips), and ffmpeg's for a part (position, its noise), into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
 | `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
-| `cancel.py` | 82 | one cooperative stop flag shared by every worker |
+| `cancel.py` | 303 | the stop flag shared by every worker; `popen`/`run` (every long-running program goes through them so Force stop can find it), `force`, `kill_tree` (with children: `taskkill /T` on Windows, `/proc` or `ps` elsewhere), `stop_process`, a `sleep` that Stop cuts short |
 
 Functions worth knowing by name because they are load-bearing:
 

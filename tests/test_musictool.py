@@ -3669,8 +3669,9 @@ finally:
     util.urllib.request.urlopen, util.time.sleep = _uo, _sl
 check("a 429 with a fractional Retry-After is retried, not dropped",
       _res == {"ok": True} and len(_calls429) == 2, str((_res, _calls429)))
+# (the wait is taken in short steps, so that a Stop can cut it short)
 check("...after waiting what the server asked (plus jitter)",
-      _slept and 0.5 <= _slept[0] <= 0.65, str(_slept))
+      _slept and 0.5 <= sum(_slept) <= 0.65, str(_slept))
 check("the User-Agent names the app, its version and a link (LRCLIB asks)",
       util.USER_AGENT.startswith("musictool/")
       and "github.com/JohnOlowe/MusicTool" in util.USER_AGENT
@@ -3777,16 +3778,16 @@ try:
     _ra3 = download.runtime_args({})
     download.js_runtime = lambda: ("node", "/usr/bin/node")
     _pa = []
-    _real_run = download.subprocess.run
+    _real_run = download.cancel.run
 
     def _cap(args, **kw):
         _pa.append(list(args))
         raise RuntimeError("captured")
-    download.subprocess.run = _cap
+    download.cancel.run = _cap
     try:
         download.probe("https://youtu.be/x", {"remote_components": "ejs:github"})
     finally:
-        download.subprocess.run = _real_run
+        download.cancel.run = _real_run
 finally:
     download.js_runtime = _jr
 check("node is enabled automatically when it is the only JS runtime (no deno)",
@@ -3904,7 +3905,7 @@ check("get --quality says why it cannot pick, instead of 'no quality matched'",
       (_r.stdout + _r.stderr)[-400:])
 
 # the pieces, in-process
-_real_run = download.subprocess.run
+_real_run = download.cancel.run
 
 
 class _Out:
@@ -3913,13 +3914,13 @@ class _Out:
 
 
 try:
-    download.subprocess.run = lambda a, **k: _Out(
+    download.cancel.run = lambda a, **k: _Out(
         1, "", "WARNING: [youtube] x: n challenge solving failed: Some formats "
                "may be missing.\nERROR: [youtube] x: Requested format is not "
                "available. Use --list-formats\n")
     _e = download.probe("https://youtu.be/x", {})
 finally:
-    download.subprocess.run = _real_run
+    download.cancel.run = _real_run
 check("a failed probe leads with the ERROR line...",
       _e["error"].splitlines()[0].startswith("ERROR:"), _e)
 check("...and carries the warning that explains it, so it is classified right",
@@ -4344,7 +4345,7 @@ _ba = download.build_args("u", {"live_from_start": True, "wait_for_video": "60",
 check("build_args: --live-from-start, --wait-for-video, --download-sections",
       "--live-from-start" in _ba and _ba[_ba.index("--wait-for-video") + 1] == "60"
       and _ba[_ba.index("--download-sections") + 1] == "*0:01:00-inf")
-_pa38, _run0 = [], download.subprocess.run
+_pa38, _run0 = [], download.cancel.run
 
 
 def _cap38(args, **kw):
@@ -4352,12 +4353,12 @@ def _cap38(args, **kw):
     raise RuntimeError("captured")
 
 
-download.subprocess.run = _cap38
+download.cancel.run = _cap38
 try:
     download.probe("https://youtu.be/x", {})
     download.probe("https://youtu.be/x", {"live_from_now": True})
 finally:
-    download.subprocess.run = _run0
+    download.cancel.run = _run0
 check("the probe lists what a live download really gets (from the start)",
       "--live-from-start" in _pa38[0] and "--live-from-start" not in _pa38[1]
       and "https://youtu.be/x" in _pa38[0], str(_pa38[0][-4:]))
@@ -5353,6 +5354,189 @@ try:
                    else "real time" not in _txt41), _txt41)
 finally:
     D41._RECONNECT[:] = _save41
+
+
+# --- 42. Force stop: everything started ends at once, children too
+print("\n42. Force stop")
+import time as _t42
+_W42 = os.path.join(WORK, "force42")
+os.makedirs(_W42, exist_ok=True)
+# a program that starts a child of its own which keeps writing a heartbeat --
+# yt-dlp starting ffmpeg, in miniature
+_GRAND42 = ("import sys, time\n"
+            "while True:\n"
+            "    open(sys.argv[1], 'a').write('.')\n"
+            "    time.sleep(0.05)\n")
+_PARENT42 = ("import subprocess, sys, time\n"
+             "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
+             "time.sleep(60)\n")
+
+
+def _beat42(path):
+    """Is something still writing `path`? (portable: no signals)"""
+    a = os.path.getsize(path) if os.path.exists(path) else -1
+    _t42.sleep(0.6)
+    b = os.path.getsize(path) if os.path.exists(path) else -1
+    return b > a
+
+
+def _wait_beat42(path):
+    for _ in range(100):
+        if os.path.exists(path) and os.path.getsize(path) > 2:
+            return True
+        _t42.sleep(0.05)
+    return False
+
+
+_cx.reset()
+_hb = os.path.join(_W42, "hb-stop")
+_p42 = _cx.popen([sys.executable, "-c", _PARENT42, _GRAND42, _hb])
+_wait_beat42(_hb)
+_t0 = _t42.time()
+_cx.stop_process(_p42)
+_cx.done(_p42)
+check("Stop ends the program AND what it started (yt-dlp's ffmpeg used to "
+      "go on downloading by itself)",
+      _p42.poll() is not None and not _beat42(_hb) and _t42.time() - _t0 < 8,
+      f"{_t42.time() - _t0:.1f}s")
+
+_hb = os.path.join(_W42, "hb-run")
+_res42 = {}
+
+
+def _runner42():
+    _t1 = _t42.time()
+    try:
+        _r = _cx.run([sys.executable, "-c", _PARENT42, _GRAND42, _hb],
+                     capture_output=True, text=True, timeout=120)
+        _res42["rc"] = _r.returncode
+    except Exception as e:                                   # noqa: BLE001
+        _res42["err"] = repr(e)
+    _res42["secs"] = _t42.time() - _t1
+
+
+_th42 = threading.Thread(target=_runner42, daemon=True)
+_th42.start()
+_wait_beat42(_hb)
+_n42 = _cx.force()
+_th42.join(15)
+check("Force stop ends a blocking run() at once, from another thread",
+      not _th42.is_alive() and _n42 == 1 and _res42.get("rc") not in (None, 0)
+      and _res42.get("secs", 99) < 10, str((_n42, _res42)))
+check("...and the child it had started stops too", not _beat42(_hb))
+check("...a stop is requested and marked forced", _cx.requested() and _cx.forced())
+_hb = os.path.join(_W42, "hb-late")
+_p42 = _cx.popen([sys.executable, "-c", _GRAND42, _hb])
+_p42.wait(timeout=10)
+_cx.done(_p42)
+check("a program started AFTER Force stop is ended as it starts",
+      _p42.returncode != 0 and not _beat42(_hb), str(_p42.returncode))
+_cx.reset()
+check("reset() clears it for the next run", not _cx.requested()
+      and not _cx.forced())
+_r42 = _cx.run([sys.executable, "-c", "print('hi')"], capture_output=True,
+               text=True, timeout=30)
+check("run() returns what subprocess.run would",
+      _r42.returncode == 0 and _r42.stdout.strip() == "hi"
+      and _r42.args[0] == sys.executable, repr(_r42))
+try:
+    _cx.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5)
+    _to42 = False
+except subprocess.TimeoutExpired:
+    _to42 = True
+check("...and raises TimeoutExpired on a timeout, like subprocess.run", _to42)
+check("finished programs are forgotten (nothing for Force stop to find)",
+      not [x for x in _cx._procs if x.poll() is None], str(_cx._procs))
+
+# waits are cut short: a 60 s network wait must not keep a Stop waiting
+_cx.reset()
+threading.Timer(0.3, _cx.request).start()
+_t0 = _t42.time()
+_sl42 = _cx.sleep(60)
+check("cancel.sleep(60) returns as soon as Stop is pressed",
+      _sl42 is False and _t42.time() - _t0 < 3, f"{_t42.time() - _t0:.1f}s")
+_cx.reset()
+check("...and sleeps normally otherwise", _cx.sleep(0.3) is True)
+
+# the CLI: a second Ctrl+C is a Force stop
+if threading.current_thread() is threading.main_thread():
+    import signal as _sg42
+    _old42 = _sg42.getsignal(_sg42.SIGINT)
+    try:
+        _cx.reset()
+        _cx.install_sigint(announce=lambda: None)
+        _h42 = _sg42.getsignal(_sg42.SIGINT)
+        _h42(_sg42.SIGINT, None)
+        _first42 = (_cx.requested(), _cx.forced())
+        _hb = os.path.join(_W42, "hb-sigint")
+        _p42 = _cx.popen([sys.executable, "-c", _PARENT42, _GRAND42, _hb])
+        _wait_beat42(_hb)
+        _ki42 = False
+        _o42 = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(_o42):
+                _h42(_sg42.SIGINT, None)
+        except KeyboardInterrupt:
+            _ki42 = True
+        check("Ctrl+C once: a normal stop, not forced", _first42 == (True, False),
+              str(_first42))
+        check("Ctrl+C twice: Force stop -- everything running ends, then it "
+              "quits", _ki42 and _cx.forced() and _p42.poll() is not None
+              and not _beat42(_hb) and "force stop" in _o42.getvalue(),
+              _o42.getvalue())
+        _cx.done(_p42)
+    finally:
+        _sg42.signal(_sg42.SIGINT, _old42)
+        _cx.reset()
+
+# the GUI button
+_fb42 = [x for x in _r40.walk()
+         if x.kind == "button" and x.options.get("text") == "Force stop"]
+check("there is one Force stop button, beside Stop, never greyed out",
+      len(_fb42) == 1 and _fb42[0].options.get("state") != "disabled",
+      str(len(_fb42)))
+_cx.reset()
+_fb42[0].options["command"]()
+check("...with nothing running it arms nothing for the next run",
+      not _cx.requested() and not _cx.forced())
+_cli42 = G.cli_main
+_hb = os.path.join(_W42, "hb-gui")
+_gp42 = {}
+
+
+def _cli_force42(argv):
+    ARGV.append(list(argv))
+    _gp42["p"] = _cx.popen([sys.executable, "-c", _PARENT42, _GRAND42, _hb])
+    _wait_beat42(_hb)
+    _fb42[0].options["command"]()          # the user hits Force stop mid-run
+    _gp42["forced"] = _cx.forced()
+    return 130
+
+
+try:
+    G.cli_main = _cli_force42
+    _nb42 = [w for w in _r40.walk() if isinstance(w, tkstub.Notebook)][0]
+    _utxt42 = [w for w in _nb42.tab_for("Download").walk() if w.kind == "text"][0]
+    _utxt42.delete("1.0", "end")
+    _utxt42.insert("end", "http://x/watch?v=abc\n")
+    _drain40()
+    _gb42 = [x for x in _nb42.tab_for("Download").walk() if x.kind == "button"
+             and x.options.get("text") in ("Download + lyrics",
+                                           "Download video")]
+    _gb42[0].invoke()
+    _drain40()
+    _logs42 = " ".join(w.buf for w in _r40.walk() if w.kind == "text")
+    check("Force stop mid-run ends what the job started, children too",
+          _gp42.get("forced") and _gp42["p"].poll() is not None
+          and not _beat42(_hb), str(_gp42))
+    check("...and says so in the log",
+          "force stop: ended 1 running program(s)" in _logs42, _logs42[-400:])
+finally:
+    G.cli_main = _cli42
+    if _gp42.get("p"):
+        _cx.kill_tree(_gp42["p"])
+        _cx.done(_gp42["p"])
+    _cx.reset()
 
 
 srv.shutdown()

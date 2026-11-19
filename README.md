@@ -29,10 +29,10 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── lyrics.py         scan / fetch / embed pipeline
 │   ├── providers.py      ytmusic, lrclib, netease
 │   ├── tags.py           mutagen tag + .lrc handling
-│   ├── cancel.py         cooperative stop
+│   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1067 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1083 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -804,12 +804,38 @@ The stop is cooperative, which is what makes it safe:
   run resumes it;
 - every file that already finished keeps its lyrics, because lyrics are embedded
   the moment each file lands, not at the end;
-- yt-dlp is terminated rather than abandoned, so no orphan process keeps writing;
+- yt-dlp is ended *together with the ffmpeg it started*, so nothing keeps
+  downloading in the background. Before, only yt-dlp was ended: in a test its two
+  ffmpeg processes went on writing 5 MB in the next 5 seconds. On Windows,
+  `yt-dlp.exe` can also be a launcher with the real yt-dlp inside it;
+- an ffmpeg step that is writing a file (a merge, adding a chat track) is allowed
+  to finish it;
 - a summary and `lyrics-report.txt` are still written for the part that completed,
   so you can see exactly what is done and what is left.
 
-Ctrl+C in a terminal asks once ("stopping after the current file..."); a second
-Ctrl+C quits immediately.
+Stop acts at the next safe point: when yt-dlp next prints a line, between files,
+at the end of a wait. A network wait (up to `--net-max-wait`) and a lyrics retry
+are now cut short by it.
+
+### Force stop
+
+**Force stop** (next to Stop) is for when the next safe point is not soon enough.
+It ends **everything musictool started, at once**: yt-dlp, ffmpeg, a merge, and
+every program those started (`taskkill /F /T` on Windows; on Linux, macOS and
+Termux the children are found through `/proc` or `ps`). Waits end, anything
+started after it is ended as it starts, and nothing more is done: no lyrics, no
+merge. Queued jobs are dropped. In a test on a real `--range` download, the job
+had ended 0.0 s after Force stop, nothing was left running, and nothing more was
+written.
+
+What is left behind: unfinished downloads stay as `.part` / `.fNNN` files, and
+running the same command again carries on from them. A part (`--range`) is
+fetched by `ffmpeg -y`, which cannot resume, so it starts that part over. An
+ffmpeg killed mid-merge leaves the two separate streams, and the next run merges
+them again.
+
+In a terminal: **Ctrl+C** once is Stop ("stopping... press Ctrl+C again to force
+stop"). Ctrl+C a second time is Force stop, and then musictool quits (exit 130).
 
 ### Exactly the streams you chose, copied (`--exact`)
 
@@ -1368,7 +1394,8 @@ so you can copy it into a shell or a cron job.
 - **The output folder is remembered.** Downloading somewhere saves that folder,
   and it is the default the next time you open the window (or run the CLI). The
   URLs and folders you use are kept as history too.
-- **Stop** — bottom right, never greyed out; see "Stopping a run".
+- **Stop** and **Force stop** — bottom right, never greyed out; see "Stopping a
+  run".
 - **Check access (no cookies)** and **List qualities + sizes** — next to the
   download button: the first tells you whether YouTube is blocking you before you
   change anything, the second prints the quality/size table into the log so you
@@ -1481,7 +1508,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1067 assertions, 0 failures**, with or without
+**Verified by running the code — 1083 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1548,7 +1575,8 @@ subcommand.
   clipped label), both fixed.
 
 Earlier, against yt-dlp 2026.08.19: the stop path (a real download sent
-`SIGINT` three seconds in came back with `stopping after the current file...`,
+`SIGINT` three seconds in came back with `stopping after the current file...`
+(the wording at the time),
 then `==> stopped by user`, exit 0, no orphan process), and `--cookies`
 accepted by a real `yt-dlp`. Browser-cookie detection is unit-tested against a
 fake Windows profile tree (two browsers, different cookie timestamps -> picks

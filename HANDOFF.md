@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1067 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1083 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,22 +115,22 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1618   argparse + every cmd_* handler
-│   ├── gui.py         2590   tkinter GUI, 9 tabs
+│   ├── cli.py         1624   argparse + every cmd_* handler
+│   ├── gui.py         2621   tkinter GUI, 9 tabs
 │   ├── uicmd.py        672   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     873   yt-dlp invocation, retries, error text, videoId index, swap_audio
-│   ├── live.py         985   live streams: plan, scan, join, watch copy, resume
-│   ├── chat.py         870   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
-│   ├── util.py         610   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
+│   ├── download.py     880   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
+│   ├── chat.py         874   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
+│   ├── util.py         614   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
 │   ├── progress.py     431   yt-dlp + ffmpeg line parsing (per stream) + batch State
 │   ├── tags.py         143   mutagen tag + .lrc handling
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
-│   └── cancel.py        82   cooperative stop
+│   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 5361   41 sections (+8b), 1067 assertions
+│   ├── test_musictool.py 5545   42 sections (+8b), 1083 assertions
 │   └── tkstub.py          728   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -239,7 +239,10 @@ attempt violated them. Do not drop them.
 
 **GUI**
 - Every CLI option must be reachable. A clipped-off widget counts as missing.
-- Stop must **never** be disabled.
+- Stop and Force stop must **never** be disabled. Force stop must end everything
+  at once, children included. Start every long-running program through
+  `cancel.popen` / `cancel.run`, never `subprocess` directly, or Force stop
+  cannot find it.
 - Checkboxes driven by *intent*, not by the user. Videos ≠ music and
   playlists ≠ singles must be visible distinctions.
 - Save previous paths and selections automatically — nothing retyped after restart.
@@ -333,7 +336,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1067 assertions.
+Nothing is half-finished — `main` is green at 1083 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

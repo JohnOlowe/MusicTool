@@ -8,6 +8,29 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — Force stop; Stop no longer leaves ffmpeg downloading
+*2026-11-19 · 1083 assertions*
+
+Asked for: a way to stop *immediately* when it really has to stop.
+
+- **Force stop** button beside Stop. Ctrl+C a second time in a terminal does
+  the same. It ends every program musictool started, along with every
+  program those started, at once. It also cuts waits short, ends anything
+  started after it, and drops the queue. Every long-running subprocess now
+  goes through `cancel.popen` / `cancel.run` (download, live, chat, the probes),
+  so it can be found. A real `--range` download: the job ended 0.0 s after it,
+  nothing left running.
+- **Stop left yt-dlp's ffmpeg running.** It ended only yt-dlp, and the ffmpeg
+  under it (every part, every merge) kept downloading: measured, 5 MB in the 5
+  s after Stop. `stop_process` now ends the tree (`taskkill /F /T` on Windows;
+  children from `/proc` or `ps` elsewhere, SIGTERM then SIGKILL). Same test:
+  0.9 s, 0 bytes after.
+- **Waits ignored Stop.** The network wait (up to 240 s) and the lyrics
+  retry waits were plain `time.sleep`. `cancel.sleep` checks every 0.25 s.
+- After a stopped `--range`, the log said the `.part` would resume. ffmpeg
+  (`-y`) starts a part over, and it now says so.
+- Tests: section 42 (16 assertions); probe tests patch `download.cancel.run`.
+
 ## `86be9ea` — a part no longer crawls at 2x real time
 *2026-11-19 · 1067 assertions*
 

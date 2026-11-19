@@ -180,6 +180,14 @@ that drops the connection on cue and against R0GdEkPZSvM with cookies:
   a part bit-identical to an undisturbed one. Only the options this ffmpeg
   lists are passed (`ffmpeg -h protocol=http`), because an unknown option
   would fail every part. The file's length is checked afterwards anyway.
+- **Ending yt-dlp does not end its ffmpeg.** A part (and a merge) runs ffmpeg
+  as a child of yt-dlp. `Popen.terminate()` on yt-dlp alone (what Stop did) left
+  two ffmpeg processes downloading, 5 MB in the next 5 s. On Windows,
+  `terminate()` is `TerminateProcess` on one process, and `yt-dlp.exe` may be a
+  launcher. So the whole tree is ended: `taskkill /F /T /PID` on Windows, and
+  elsewhere children read from `/proc/*/stat` (or `ps -A -o pid= -o ppid=`)
+  *before* the parent goes, because orphans lose their parent id. Stop sends
+  SIGTERM first (ffmpeg then closes its file properly); Force stop sends SIGKILL.
 - **YouTube throttles one open-ended request to about 2x real time.** ffmpeg
   normally reads the whole URL with a single `Range: bytes=N-` request.
   Measured on 45FqURpMNCs (itag 299, 1080p60, plain https DASH): 1:00 of

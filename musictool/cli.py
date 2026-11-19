@@ -883,8 +883,14 @@ def cmd_get(args):
                   f"that finished (they already have their lyrics)")
         else:
             print(f"\n==> {cancel.CANCELLED}")
-        print("    a half-finished file keeps its .part, so the next run "
-              "resumes it instead of starting over")
+        if part:
+            # FFmpegFD runs `ffmpeg -y`: a part is never resumed
+            print("    a part (--range) is fetched by ffmpeg, which cannot "
+                  "resume: running it again fetches the part from its start "
+                  "(or give --range the time where it stopped)")
+        else:
+            print("    a half-finished file keeps its .part, so the next run "
+                  "resumes it instead of starting over")
 
     if refused and not targets:
         return 1

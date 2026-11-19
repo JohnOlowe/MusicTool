@@ -228,7 +228,7 @@ def streams(path):
     exe = ffprobe_cmd()
     if exe:
         try:
-            out = subprocess.run(
+            out = cancel.run(
                 [exe, "-v", "error", "-of", "csv=p=0",
                  "-show_entries", "stream=codec_type:stream_tags=language",
                  path], capture_output=True, text=True, timeout=120)
@@ -246,8 +246,8 @@ def streams(path):
     if not exe:
         return []
     try:
-        out = subprocess.run([exe, "-hide_banner", "-i", path],
-                             capture_output=True, text=True, timeout=120)
+        out = cancel.run([exe, "-hide_banner", "-i", path],
+                         capture_output=True, text=True, timeout=120)
     except Exception:                                    # noqa: BLE001
         return []
     text = (out.stderr or "") + (out.stdout or "")
@@ -285,8 +285,8 @@ def fetch_format(url, o, fmt_id, workdir, log=print):
     args += cookie_args(o)
     log("  $ " + " ".join(_q(a) for a in args))
     try:
-        proc = subprocess.run(args, capture_output=True, text=True,
-                              timeout=3600)
+        proc = cancel.run(args, capture_output=True, text=True,
+                          timeout=3600)
     except Exception as e:                               # noqa: BLE001
         log(f"  !! {type(e).__name__}: {e}")
         return None
@@ -320,7 +320,7 @@ def swap_audio(video_path, audio_path, log=print):
            "-map", "0", "-map", "-0:a", "-map", "1:a:0",
            "-c", "copy", "-map_metadata", "0", "-map_chapters", "0", out]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        proc = cancel.run(cmd, capture_output=True, text=True, timeout=1800)
     except Exception as e:                               # noqa: BLE001
         log(f"  !! {type(e).__name__}: {e}")
         return False
@@ -529,7 +529,7 @@ def probe(url, o):
     # --remote-components here, so only the download itself honoured them
     args += runtime_args(o)
     try:
-        out = subprocess.run(args, capture_output=True, text=True, timeout=180)
+        out = cancel.run(args, capture_output=True, text=True, timeout=180)
     except Exception as e:
         return {"error": str(e)}
     lines = [x.strip() for x in (out.stderr or "").splitlines() if x.strip()]
@@ -595,7 +595,7 @@ def print_target_name(url, o):
     args += cookie_args(o)
     args += runtime_args(o)
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        r = cancel.run(args, capture_output=True, text=True, timeout=120)
     except Exception:
         return None
     line = (r.stdout or "").strip().splitlines()
@@ -610,12 +610,19 @@ def _run_once(args, log, on_line=None, on_file=None):
     read would buffer everything until the process exits.
     """
     try:
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT)
+        proc = cancel.popen(args, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
     except FileNotFoundError:
         return [], 'yt-dlp not found. Install it: pip install -U "yt-dlp[default]"'
     except Exception as e:
         return [], str(e)
+    try:
+        return _read_run(proc, on_line, on_file)
+    finally:
+        cancel.done(proc)
+
+
+def _read_run(proc, on_line, on_file):
     segments = []
     results = []
     with proc.stdout:
@@ -847,7 +854,7 @@ def download(url, o, log=print, on_file=None, tag=""):
             f"(not restarting)")
         progress.report({"type": "wait", "secs": w, "tag": tag} if tag else
                         {"type": "wait", "secs": w})
-        time.sleep(w)
+        cancel.sleep(w)                  # Stop / Force stop cut this short
         if cancel.requested():
             return results, cancel.CANCELLED
 

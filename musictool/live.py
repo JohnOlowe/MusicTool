@@ -483,9 +483,9 @@ class Stream:
                   else self.part_path if self.part_size() else None)
         if exe and sample:
             try:
-                r = subprocess.run([exe, "-hide_banner", "-i", sample],
-                                   capture_output=True, text=True,
-                                   errors="replace", timeout=60)
+                r = cancel.run([exe, "-hide_banner", "-i", sample],
+                               capture_output=True, text=True,
+                               errors="replace", timeout=60)
                 kinds = re.findall(r"Stream #\S+.*?: (Video|Audio):", r.stderr or "")
             except Exception:                                # noqa: BLE001
                 kinds = []
@@ -557,8 +557,8 @@ def _probe_media(path):
     if not exe or not path or not os.path.exists(path):
         return None, None
     try:
-        r = subprocess.run([exe, "-hide_banner", "-i", path], capture_output=True,
-                           text=True, errors="replace", timeout=120)
+        r = cancel.run([exe, "-hide_banner", "-i", path], capture_output=True,
+                       text=True, errors="replace", timeout=120)
     except Exception:                                        # noqa: BLE001
         return None, None
     err = r.stderr or ""
@@ -579,10 +579,10 @@ def media_seconds(path):
     if not exe or not os.path.exists(path):
         return None
     try:
-        r = subprocess.run([exe, "-hide_banner", "-nostats", "-progress",
-                            "pipe:1", "-i", path, "-map", "0", "-c", "copy",
-                            "-f", "null", "-"], capture_output=True, text=True,
-                           errors="replace", timeout=1800)
+        r = cancel.run([exe, "-hide_banner", "-nostats", "-progress",
+                        "pipe:1", "-i", path, "-map", "0", "-c", "copy",
+                        "-f", "null", "-"], capture_output=True, text=True,
+                       errors="replace", timeout=1800)
     except Exception:                                        # noqa: BLE001
         return None
     us = re.findall(r"out_time_(?:us|ms)=(\d+)", r.stdout or "")
@@ -787,14 +787,19 @@ def _run_ffmpeg(args):
     """Run ffmpeg, honouring Stop. -> (ok, error text)."""
     with tempfile.TemporaryFile() as errf:
         try:
-            p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=errf)
+            p = cancel.popen(args, stdout=subprocess.DEVNULL, stderr=errf)
         except OSError as e:
             return False, str(e)
-        while p.poll() is None:
-            if cancel.requested():
-                cancel.stop_process(p)
-                return False, cancel.CANCELLED
-            time.sleep(0.2)
+        try:
+            while p.poll() is None:
+                if cancel.requested():
+                    cancel.stop_process(p)
+                    return False, cancel.CANCELLED
+                time.sleep(0.2)
+        finally:
+            cancel.done(p)
+        if cancel.requested():
+            return False, cancel.CANCELLED
         errf.seek(0)
         text = errf.read().decode("utf-8", "replace")
     return p.returncode == 0, text

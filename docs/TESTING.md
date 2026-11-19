@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1067 assertions across 41 sections (plus 8b), 0 failures** — with or without
+**1083 assertions across 42 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -205,6 +205,15 @@ Proven by execution:
   after the reconnect options; an older one gets only the reconnect options,
   and `get --range` then warns that the part comes at about 2x real time,
   with how long that is.
+- Force stop (section 42), on real processes that start a child of their own
+  which keeps writing a heartbeat file (yt-dlp starting ffmpeg, in miniature;
+  portable, with no signals used to check): Stop ends the child too;
+  `cancel.force()` from another thread ends a blocking `cancel.run` and its
+  child at once; a program started after it is ended as it starts; `reset()`
+  clears it; `run` returns and times out like `subprocess.run`; `cancel.sleep(60)`
+  returns as soon as Stop is pressed; Ctrl+C once is a normal stop and twice is
+  Force stop; the GUI's Force stop button is never greyed out, arms nothing when
+  idle, and mid-run ends what the job started and logs it.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

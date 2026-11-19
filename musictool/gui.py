@@ -617,8 +617,11 @@ def run():
         # Stop deliberately keeps its state: it stays clickable while every
         # other button is greyed out, and while idle it can clear a request
         # you made by mistake.
-        status.set("stopping..." if cancel.requested() else
-                   ("working..." if on else "idle"))
+        if cancel.requested():
+            status.set(("force stopping..." if cancel.forced() else
+                        "stopping...") if on else "stopped")
+        else:
+            status.set("working..." if on else "idle")
 
     def ui(fn):
         """Queue a widget touch for the main thread (pump runs it)."""
@@ -644,8 +647,32 @@ def run():
             status.set("idle")
             return
         cancel.request()
-        log("\nstopping -- the current file finishes, then the run ends "
-            "(files already downloaded keep their lyrics)")
+        status.set("stopping...")
+        log("\nstopping -- yt-dlp (and the ffmpeg it started) is stopped at "
+            "its next line, a file being written is finished, files already "
+            "downloaded keep their lyrics. Force stop ends everything now.")
+
+    def force_now():
+        """Force stop: end every program musictool started, with whatever
+        they started, at once. Nothing more is done (no lyrics, no merging);
+        unfinished downloads stay as .part files for next time."""
+        if not running["n"]:
+            n = cancel.force()          # strays from an earlier run, if any
+            cancel.reset()
+            log(f"force stop: ended {n} leftover program(s)" if n else
+                "nothing is running -- there is nothing to stop")
+            status.set("idle")
+            return
+        status.set("force stopping...")
+        log("\nforce stop -- ending yt-dlp, ffmpeg and everything they "
+            "started, now")
+
+        def kill():
+            n = cancel.force()
+            log(f"force stop: ended {n} running program(s). Unfinished "
+                f"downloads stay as .part files -- run the same thing again "
+                f"to carry on from there (a --range part starts over).")
+        threading.Thread(target=kill, daemon=True).start()
 
     def worker(fn, after=None):
         # Called from a button, i.e. the main thread, so grey the other
@@ -742,6 +769,10 @@ def run():
     ttk.Label(bar, textvariable=report_headline, foreground="#0a6").pack(side="right")
     # Stop is the one control that must never be greyed out: it is what you
     # reach for precisely when a run is going wrong.
+    # Force stop sits next to it, for when "at the next safe point" is not
+    # soon enough: everything started is ended at once.
+    force_btn = ttk.Button(bar, text="Force stop", width=11, command=force_now)
+    force_btn.pack(side="right", padx=(0, 6))
     stop_btn = ttk.Button(bar, text="Stop", width=8, command=stop_now)
     stop_btn.pack(side="right", padx=6)
 

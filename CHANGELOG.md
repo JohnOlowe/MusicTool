@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — exact streams, copied; one progress line; drops resume
+## `24d5a93` — exact streams, copied; one progress line; drops resume
 *2026-11-19 · 1002 assertions*
 
 Reported on R0GdEkPZSvM (a finished stream): a way to take exactly the

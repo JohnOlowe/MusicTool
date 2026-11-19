@@ -78,6 +78,12 @@ def _add_quality_flags(p):
     g.add_argument("-f", "--format-selector", dest="format_selector",
                    help="a raw yt-dlp -f selector, e.g. 137+140 (overrides the "
                         "two above)")
+    g.add_argument("--exact", action="store_true",
+                   help="take exactly the stream(s) given with -f, e.g. -f "
+                        "299+140 -- never a substitute -- and only copy them: "
+                        "nothing is converted (audio keeps its codec; video "
+                        "and audio go into a container that holds both as "
+                        "they are)")
     g.add_argument("--merge-format", dest="merge_format",
                    choices=["mkv", "mp4", "webm", "mov"],
                    help="container to merge video+audio into (mkv accepts "
@@ -267,7 +273,7 @@ def _opts(args):
     for k in ("output_dir", "template", "audio_format", "audio_quality",
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
-              "quality", "max_size", "format_selector", "merge_format",
+              "quality", "max_size", "format_selector", "merge_format", "exact",
               "audio_lang", "live_from_now",
               "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
@@ -478,6 +484,67 @@ def cmd_formats(args):
     return rc
 
 
+def _apply_exact(o, info, log=print):
+    """--exact: check the ids against this video and set up a copy-only run.
+
+    -> False when a stream id is not on this video (nothing is downloaded --
+    a substitute is exactly what --exact rules out). Otherwise `o` is set so
+    that nothing gets converted:
+      * a video stream picked -> the video is kept (that is what was chosen)
+        and video + audio are merged with a plain copy into a container that
+        holds both (mp4, webm, or mkv for a mixed pair), unless
+        --merge-format names one;
+      * audio alone -> taken out with its own codec (-x --audio-format best:
+        Opus stays Opus in .opus, AAC stays AAC in .m4a), never re-encoded
+        to --format;
+      * no subtitle streams are added (they would be converted for mp4).
+    Without a probe (a playlist) only the ids' form was checked.
+    """
+    sel = o["format_selector"]
+    o["embed_subs"] = False
+    if not isinstance(info, dict) or info.get("error"):
+        o["audio_format"] = "best"
+        log(f"  exactly: -f {sel}, copied as it is (no list to check the ids "
+            f"against -- yt-dlp stops if one is missing)")
+        return True
+    rows = formats.rows_from_info(info)
+    plan = formats.exact_plan(sel, rows)
+    if plan["error"]:
+        log("!! --exact: " + plan["error"])
+        return False
+    if plan["video"]:
+        o["keep_video"] = True
+        if len(plan["rows"]) > 1 and not o.get("merge_format"):
+            box = plan["container"]
+            if box == "webm" and o.get("embed_thumbnail"):
+                # yt-dlp cannot put a cover picture in webm and fails the
+                # run AFTER downloading; mkv takes the same streams unchanged
+                box = "mkv"
+                log("  (webm cannot hold the thumbnail -> .mkv, the same "
+                    "streams unchanged; --no-thumbnail keeps .webm)")
+            o["merge_format"] = box
+        elif len(plan["rows"]) == 1 and plan["rows"][0]["ext"] == "webm":
+            o["embed_thumbnail"] = False    # same reason, and nothing to merge
+    else:
+        o["audio_format"] = "best"
+    if len(plan["video"]) > 1:
+        o["video_multistreams"] = True
+    if len([r for r in plan["audio"] if r["kind"] == "audio"]) > 1:
+        o["audio_multistreams"] = True
+    what = " + ".join(formats.describe_stream(r) for r in plan["rows"])
+    if plan["video"] and len(plan["rows"]) > 1:
+        into = f"put together as they are in .{o.get('merge_format') or plan['container']}"
+    elif plan["video"]:
+        into = f"kept as it is (.{plan['rows'][0]['ext']})"
+    else:
+        a = plan["rows"][0]
+        into = ("taken out as it is (." + {"opus": "opus", "mp4a": "m4a",
+                                            "aac": "m4a", "vorbis": "ogg"}.get(
+                    a["acodec"], a["ext"]) + ")")
+    log(f"  exactly: {what}\n    -> {into}; nothing is converted")
+    return True
+
+
 def _resolve_quality(url, o, log=print, info=None):
     """Turn --quality / --max-size into a concrete -f for this URL.
 
@@ -552,6 +619,19 @@ def cmd_get(args):
         # Remember an explicit -o so the next run (CLI or GUI) starts here.
         configmod.remember(output_dir=o["output_dir"])
     o["lyrics_dir"] = configmod.lyrics_dir_for(o, o["output_dir"])
+    if o.get("exact") and not o.get("lyrics_only"):
+        # Checked before anything is downloaded: --exact means "these
+        # streams and nothing else", so a selector that lets yt-dlp choose,
+        # or none at all, is refused rather than quietly widened.
+        if not o.get("format_selector"):
+            print("!! --exact needs the stream ids: -f 299+140 (video+audio) "
+                  "or -f 140 (one stream). `musictool formats URL` lists "
+                  "them; the Live streams tab and the Quality tab show them "
+                  "too.")
+            return 2
+        if formats.exact_ids(o["format_selector"]) is None:
+            print("!! " + formats.exact_plan(o["format_selector"], [])["error"])
+            return 2
     for problem in download.preflight(o):
         print("WARNING: " + problem)
 
@@ -580,6 +660,7 @@ def cmd_get(args):
         res["total"] += 1
 
     targets = []
+    refused = []             # --exact: the stream ids are not on this video
     live_urls = set()        # live recordings: a broadcast has no lyrics
     stopped = False
     urls = [u for u in args.urls if not o.get("lyrics_only")]
@@ -614,6 +695,10 @@ def cmd_get(args):
                 info = None          # the download itself will say why
         live_st = live.status(info) if info else None
         _resolve_quality(url, per, log=say, info=info)
+        if per.get("exact") and not _apply_exact(per, info, say):
+            with lock:
+                refused.append(url)
+            return
         if live_st in live.LIVE or live_st in ("is_upcoming", "was_live"):
             live.plan(info, per, log=say)
             if per.get("no_lyrics"):
@@ -659,6 +744,8 @@ def cmd_get(args):
         print("    a half-finished file keeps its .part, so the next run "
               "resumes it instead of starting over")
 
+    if refused and not targets:
+        return 1
     if o.get("no_lyrics"):
         print("\n==> skipping lyrics (--no-lyrics)")
         return 0
@@ -1215,7 +1302,9 @@ def cmd_live(args):
             if hint:
                 print("-> " + hint)
             return 1
+        live.LAST_PROBE[args.status] = info
         live.describe(info, folder if os.path.isdir(folder) else ".")
+        live.list_streams(info, url=f'"{args.status}"')
         return 0
     folder = os.path.abspath(os.path.expanduser(
         args.folder or o.get("output_dir") or "."))

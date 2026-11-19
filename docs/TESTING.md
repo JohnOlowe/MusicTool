@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**957 assertions across 38 sections (plus 8b), 0 failures** — with or without
+**1002 assertions across 39 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -170,6 +170,17 @@ Proven by execution:
   advice; and end to end through `get` (no lyrics for a live recording),
   `check`, `formats`, `live --status/--join/--watch/--resume` (both the
   same-pieces and the `(rest)` path) and the Live streams tab's buttons.
+- exact streams, quiet progress, drops (section 39): `--exact` accepts only
+  `+`-joined ids, refuses missing ids before downloading (rc 1) and
+  selectors yt-dlp could choose from (rc 2), picks mp4/webm/mkv by the
+  streams (mkv for webm with a thumbnail), keeps audio's own codec with no
+  `--audio-quality`; redraws without a % and with a `2:` stream prefix
+  parse; 300 redraws + 40 retries give at most 5 log lines; a bare or
+  glued `ERROR:` is logged whole; the terminal redraw is one `\r` line;
+  `retryable` follows yt-dlp's final ERROR; the bar follows the slower
+  stream; the Live streams tab's stream pickers produce `--exact -f 315+251`.
+  The copy-only claim itself (packet checksums) was checked outside the
+  suite against real yt-dlp; see README.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

@@ -769,3 +769,119 @@ def describe_track(row):
     lang = _lang_tag(row) or "?"
     return (f"{row['id']}  [{lang}]  {row['acodec'] or '?'} "
             f"{track_bitrate(row)} {row['ext']}  ~ {human_bytes(row['bytes'])}")
+
+
+# ---------------------------------------------------------------- --exact
+EXACT_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def exact_ids(selector):
+    """The stream ids in an exact selector ("299+140" -> ["299", "140"]).
+
+    None when it is not a plain list of ids: a fallback ("/"), a filter
+    ("[height<=720]") or a keyword ("bv", "best") lets yt-dlp choose a
+    different stream, which is what --exact is there to rule out."""
+    sel = str(selector or "").strip()
+    if not sel:
+        return None
+    ids = sel.split("+")
+    if not all(EXACT_ID.fullmatch(i) for i in ids):
+        return None
+    if any(i.lower() in ("b", "best", "bv", "ba", "w", "worst", "wv", "wa",
+                         "bestvideo", "bestaudio", "worstvideo", "worstaudio",
+                         "all", "mergeall") for i in ids):
+        return None
+    return ids
+
+
+def merge_container(rows):
+    """A container that takes these streams exactly as they are.
+
+    mp4 when every stream is an mp4/m4a stream, webm when every one is webm,
+    otherwise mkv -- which accepts any codec. Nothing has to be re-encoded
+    for any of them; this only decides the box they are put in."""
+    exts = {str(r.get("ext") or "").lower() for r in rows}
+    if exts and exts <= {"mp4", "m4a", "mov"}:
+        return "mp4"
+    if exts == {"webm"}:
+        return "webm"
+    return "mkv"
+
+
+def exact_plan(selector, rows):
+    """Check an exact selector against a video's streams.
+
+    -> {"ids", "rows", "video", "audio", "container", "error"}. `error` names
+    the ids that do not exist and lists the ones that do -- --exact never
+    falls back to something else."""
+    ids = exact_ids(selector)
+    if ids is None:
+        return {"error": f"'{selector}' is not a list of stream ids -- --exact "
+                         f"takes ids only, joined by + (e.g. 299+140), so "
+                         f"yt-dlp cannot pick something else"}
+    by_id = {str(r["id"]): r for r in rows}
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        vids = [r for r in rows if r["kind"] in ("video", "both")]
+        auds = [r for r in rows if r["kind"] == "audio"]
+        have = ("video: " + ", ".join(
+            f"{r['id']} ({r['height'] or '?'}p {r['vcodec'] or r['ext']})"
+            for r in sorted(vids, key=lambda r: -(r["height"] or 0))[:12])
+            + ("\n   audio: " + ", ".join(
+                f"{r['id']} ({r['acodec']} {r['ext']})" for r in auds[:12])
+               if auds else ""))
+        return {"error": f"this video has no stream {', '.join(missing)} -- "
+                         f"nothing was downloaded instead.\n   {have}"}
+    chosen = [by_id[i] for i in ids]
+    video = [r for r in chosen if r["kind"] in ("video", "both")]
+    audio = [r for r in chosen if r["kind"] in ("audio", "both")]
+    return {"ids": ids, "rows": chosen, "video": video, "audio": audio,
+            "container": merge_container(chosen) if len(chosen) > 1
+            else (chosen[0]["ext"] if chosen else ""),
+            "error": None}
+
+
+def describe_stream(r):
+    """One line for a stream in a picker or a log: what it is, how big, id."""
+    if r["kind"] == "audio":
+        rate = f"{int(r['abr'] or r['tbr'] or 0)}k" if (r["abr"] or r["tbr"]) else ""
+        lang = _lang_tag(r)
+        return " ".join(x for x in (
+            r["acodec"] or "?", rate, r["ext"], f"[{lang}]" if lang else "",
+            f"~{human_bytes(r['bytes'])}" if r["bytes"] else "",
+            f"(id {r['id']})") if x)
+    h = f"{r['height']}p" if r["height"] else "?p"
+    if r["fps"] and r["fps"] > 30:
+        h += str(r["fps"])
+    return " ".join(x for x in (
+        h, r["vcodec"] or "?", r["ext"],
+        "+ audio" if r["kind"] == "both" else "",
+        f"~{human_bytes(r['bytes'])}" if r["bytes"] else "",
+        f"(id {r['id']})") if x)
+
+
+def matching_audio(rows, video, lang=None):
+    """The audio stream to pair with `video` when only the video was picked:
+    in your language, the same family of container (mp4 with m4a, webm with
+    webm) so the pair stays an mp4/webm, the plain track before a DRC one,
+    then the highest bitrate."""
+    auds = [r for r in rows if r["kind"] == "audio"]
+    if not auds:
+        return None
+    if lang and not is_any_lang(lang):
+        mine = [r for r in auds if _match_lang(r, lang)]
+        auds = mine or auds
+    fam = {"mp4": "m4a", "m4a": "m4a", "webm": "webm"}.get(
+        str((video or {}).get("ext") or "").lower())
+
+    def key(r):
+        return (r["ext"] == fam, "drc" not in str(r["id"]).lower(),
+                track_bitrate_num(r))
+    return max(auds, key=key)
+
+
+def track_bitrate_num(r):
+    try:
+        return float(r.get("abr") or r.get("tbr") or 0)
+    except (TypeError, ValueError):
+        return 0.0

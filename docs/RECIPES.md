@@ -41,6 +41,36 @@ what's there so far**, **Download the rest**.
 
 ---
 
+## A finished stream: exactly the streams you want, nothing converted
+
+R0GdEkPZSvM (a 3 h 39 min stream that has ended) offers, among others,
+avc1 1080p60 `299` (6.5 GB), vp9 1080p60 `303` (4.8 GB), vp9 4K `315`
+(24.5 GB), av01 4K `401` (27.4 GB), and audio `140` (AAC, 213 MB) and `251`
+(Opus, 192 MB), read with the maintainer's cookies on 2026-11-18:
+
+```bat
+musictool live --status https://www.youtube.com/live/R0GdEkPZSvM --cookies "%USERPROFILE%\Downloads\cookies.txt"
+musictool get https://www.youtube.com/live/R0GdEkPZSvM --exact -f 299+140 --cookies "%USERPROFILE%\Downloads\cookies.txt"
+musictool get https://www.youtube.com/live/R0GdEkPZSvM --exact -f 303+251 --no-thumbnail --cookies "%USERPROFILE%\Downloads\cookies.txt"
+musictool get https://www.youtube.com/live/R0GdEkPZSvM --exact -f 251 --cookies "%USERPROFILE%\Downloads\cookies.txt"
+```
+
+1. Lists every stream with its id (and the size of each).
+2. H.264 + AAC, copied into one `.mp4` -- plays everywhere.
+3. VP9 + Opus, copied into `.webm` (with the thumbnail on it would be `.mkv`,
+   the same streams).
+4. The Opus audio alone, as `.opus`, not re-encoded.
+
+While YouTube is still processing a stream that has just ended, it offers
+it from the start only as pieces (`frag i/n` in the progress), so that is
+how it downloads; once processed, the same ids are single files. Either way
+nothing is converted.
+
+In the window: **Live streams** tab, **Is it live? How big?**, then pick the
+**Video stream** (the audio follows) and **Record from the start**.
+
+---
+
 ## Embed metadata and cover art into a file you already have
 
 `yt-dlp --skip-download --embed-metadata` does **not** work here — with

@@ -51,6 +51,8 @@ HINTS = {
     "sort": "size_desc = biggest file first",
     "show_audio": "the audio-only tracks, which normally get merged into the video choice",
     "live_from_now": "a live stream is recorded from its start unless this is ticked",
+    "exact": "needs one id per stream in the selector box (e.g. 299+140); "
+             "refuses rather than take another stream",
 }
 
 # ---------------------------------------------------------------------------
@@ -90,7 +92,7 @@ MODE_VALUES = {
         "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
         "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
         "no_playlist": True, "playlist_items": "", "quality": "",
-        "max_size": "", "format_selector": "", "merge_format": "",
+        "max_size": "", "format_selector": "", "merge_format": "", "exact": False,
         "template": "%(uploader)s - %(title)s.%(ext)s",
     },
     "music_playlist": {
@@ -98,7 +100,7 @@ MODE_VALUES = {
         "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
         "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
         "no_playlist": False, "quality": "", "max_size": "",
-        "format_selector": "", "merge_format": "",
+        "format_selector": "", "merge_format": "", "exact": False,
         "template": "%(playlist_title)s/%(playlist_index)03d - "
                     "%(title)s.%(ext)s",
     },
@@ -107,14 +109,14 @@ MODE_VALUES = {
         "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
         "no_lyrics": True, "lyrics_only": False, "no_playlist": True,
         "playlist_items": "", "quality": "1080", "max_size": "",
-        "format_selector": "",
+        "format_selector": "", "exact": False,
         "template": "%(title)s.%(ext)s",
     },
     "video_playlist": {
         "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
         "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
         "no_lyrics": True, "lyrics_only": False, "no_playlist": False,
-        "quality": "1080", "max_size": "", "format_selector": "",
+        "quality": "1080", "max_size": "", "format_selector": "", "exact": False,
         "template": "%(playlist_title)s/%(playlist_index)03d - "
                     "%(title)s.%(ext)s",
     },
@@ -233,6 +235,7 @@ LABELS = {
     "format_selector": "yt-dlp -f selector",
     "audio_lang": "Spoken language (en)",
     "merge_format": "Merge video+audio into",
+    "exact": "Exactly these streams, copied (nothing converted)",
     "embed_subs": "Embed subtitles",
     "sub_langs": "Subtitle languages",
     "remote_components": "Remote components (e.g. ejs:github)",

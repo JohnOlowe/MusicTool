@@ -918,6 +918,36 @@ def resume(folder, url, o, log=print, force=False):
     return 0
 
 
+# `live --status URL` keeps what it read, so the GUI (same process) can fill
+# its stream pickers without asking YouTube a second time.
+LAST_PROBE = {}
+
+
+def list_streams(info, log=print, url="URL", limit=10):
+    """The streams on offer, with the ids that --exact takes."""
+    rows = formats.rows_from_info(info)
+    vids = sorted((r for r in rows if r["kind"] in ("video", "both")),
+                  key=lambda r: (-(r["height"] or 0), -(r["fps"] or 0),
+                                 -(r["bytes"] or 0)))
+    auds = sorted((r for r in rows if r["kind"] == "audio"),
+                  key=lambda r: -formats.track_bitrate_num(r))
+    if not vids and not auds:
+        return
+    log("  streams (id in brackets; sizes for the whole thing" +
+        (" so far" if status(info) == "is_live" else "") + "):")
+    for r in vids[:limit]:
+        log("    video  " + formats.describe_stream(r))
+    if len(vids) > limit:
+        log(f"    ... {len(vids) - limit} more: musictool formats {url}")
+    for r in auds[:limit]:
+        log("    audio  " + formats.describe_stream(r))
+    v = next((r for r in vids if r["kind"] == "video"), None)
+    a = formats.matching_audio(rows, v) if v else (auds[0] if auds else None)
+    if v and a:
+        log(f"  take exactly the streams you want, copied as they are:\n"
+            f"    musictool get {url} --exact -f {v['id']}+{a['id']}")
+
+
 def describe(info, folder=".", log=print, now=None, keep_video=True):
     """`live --status URL`: is it live, since when, how big, is there room."""
     st = status(info)

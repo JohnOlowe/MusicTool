@@ -8,6 +8,45 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — exact streams, copied; one progress line; drops resume
+*2026-11-19 · 1002 assertions*
+
+Reported on R0GdEkPZSvM (a finished stream): a way to take exactly the
+chosen stream so nothing is converted; the log filled with lines every
+second instead of one line updating; and after a network drop it showed
+100% and stayed at `Destination:` while the speed kept showing.
+
+- **`get --exact -f 299+140`**: exactly those ids, checked against the video
+  before anything downloads. A missing id is refused (rc 1, the real ids
+  listed), and so is a selector yt-dlp could choose from (`bv+ba`, `299/18`,
+  filters; rc 2). Video + audio are merged by copy into mp4 / webm / mkv by
+  their containers (mkv for a webm pair with the thumbnail on, since yt-dlp
+  fails a webm cover after downloading); audio alone keeps its codec
+  (`--audio-format best`, no `--audio-quality`); no subtitles are added.
+  Verified with packet checksums through real yt-dlp: identical streams.
+- **`live --status` lists every stream with its id**, and the **Live streams
+  tab has Video stream / Audio stream pickers** filled by "Is it live? How
+  big?"; a picked stream records with `--exact` (a picked video gets the
+  audio that keeps it a copy). `--exact` is also on the Download tab.
+- **Progress no longer floods the log.** Redraws without a % (a stream:
+  `SIZE at SPEED (frag i/n)`) were not recognised and each became a line --
+  1481 lines in 8 s. They are progress now, and progress is never logged:
+  the bar takes it (per stream; the slower one shows), a terminal redraws one
+  line. Retry lines: once per 10 s with `(+N more like it)`. A bare `ERROR:`
+  is joined to its message; an error glued to a redraw is cut out.
+- **A dropped connection no longer leaves holes.** yt-dlp fired its 5 piece
+  retries within a second, skipped the piece, printed 100% and merged a file
+  with holes at exit code 0 (64 pieces in one test). Now the retries back off
+  (`--retry-sleep exp=1:30`), an unfetchable piece stops the run
+  (`--abort-on-unavailable-fragments`) and musictool waits and resumes the same
+  pieces; a 403 after progress refreshes the links (up to 3 times). Network vs
+  other failures are told apart by yt-dlp's ERROR lines (`retryable`), not by
+  the last 8 lines, which had misread a merge failure as a network one.
+- Fixed: `swap_audio` without ffmpeg raised NameError (`ffmpeg_hint` was not
+  imported).
+- Tests: section 39 (45 checks); two source checks updated for the per-stream
+  pump.
+
 ## `c2fee9d` — live streams: record from the start, watch it so far, carry on
 *2026-11-19 · 957 assertions*
 

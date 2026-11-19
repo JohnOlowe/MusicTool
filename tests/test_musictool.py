@@ -1529,9 +1529,12 @@ _gsrc = open(os.path.join(HERE, "..", "musictool", "gui.py"),
 check("the progress hook is a queue put, not a cross-thread root.after",
       "progress.set_hook(pq.put)" in _gsrc and "set_hook(lambda" not in _gsrc)
 check("the main-thread pump applies the queued events",
-      "_apply_progress(newest_pct)" in _gsrc and "pq.get_nowait()" in _gsrc)
+      "for ev in newest_pct.values():" in _gsrc and "pq.get_nowait()" in _gsrc)
+# per download AND per stream: video and audio side by side each keep their
+# newest redraw, or the bar would only ever see whichever reported last
 check("the pump keeps item/file events and drops only percentage redraws",
-      'others.append(ev)' in _gsrc and 'newest_pct = ev' in _gsrc)
+      'others.append(ev)' in _gsrc
+      and 'newest_pct[(ev.get("tag"), ev.get("stream"))] = ev' in _gsrc)
 check("completion is signalled through the same queue",
       "pq.put(FINISH)" in _gsrc and "root.after(0, lambda: (" not in _gsrc)
 
@@ -4596,6 +4599,295 @@ finally:
     G.cli_main, G.live.watch_copy, G.open_path = _cli8, _wc8, _op8
     _gp8.vars["cookies_from_browser"].set(_cfb8)
 shutil.rmtree(_L, ignore_errors=True)
+
+
+# ============ 39. exact streams (copied, never converted); quiet progress;
+#                  a dropped connection waits and resumes instead of skipping
+print("\n--- 39. --exact; one progress line; drops resume, not skip ---")
+from musictool import formats as F39  # noqa: E402
+from musictool import progress as P39  # noqa: E402
+from musictool import cli as C39  # noqa: E402
+from musictool import live as LV39  # noqa: E402
+
+# the shape of a finished YouTube stream (R0GdEkPZSvM, 2026-11-18): avc1,
+# vp9 and av01 video, m4a and webm audio, a DRC copy, a progressive 18
+_EX = {"id": "EXV", "title": "Stream", "duration": 13151, "was_live": True,
+       "live_status": "was_live", "formats": [
+    {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+     "abr": 129.5, "filesize": 212800000, "language": "en"},
+    {"format_id": "140-drc", "ext": "m4a", "vcodec": "none",
+     "acodec": "mp4a.40.2", "abr": 129.5, "filesize": 212800000,
+     "language": "en", "format_note": "DRC"},
+    {"format_id": "251", "ext": "webm", "vcodec": "none", "acodec": "opus",
+     "abr": 116.0, "filesize": 191700000, "language": "en"},
+    {"format_id": "299", "ext": "mp4", "vcodec": "avc1.64002a", "acodec": "none",
+     "height": 1080, "width": 1920, "fps": 60, "filesize": 6500000000},
+    {"format_id": "303", "ext": "webm", "vcodec": "vp9", "acodec": "none",
+     "height": 1080, "width": 1920, "fps": 60, "filesize": 4800000000},
+    {"format_id": "315", "ext": "webm", "vcodec": "vp9", "acodec": "none",
+     "height": 2160, "width": 3840, "fps": 60, "filesize": 24500000000},
+    {"format_id": "401", "ext": "mp4", "vcodec": "av01.0.13M.08",
+     "acodec": "none", "height": 2160, "width": 3840, "fps": 60,
+     "filesize": 27400000000},
+    {"format_id": "18", "ext": "mp4", "vcodec": "avc1.42001E",
+     "acodec": "mp4a.40.2", "height": 360, "width": 640, "fps": 30,
+     "filesize": 400000000},
+]}
+_ER = F39.rows_from_info(_EX)
+
+# --- which selectors count as exact
+check("exact ids: 299+140 is two ids, 251 is one",
+      F39.exact_ids("299+140") == ["299", "140"] and F39.exact_ids("251") == ["251"])
+check("exact ids: anything that lets yt-dlp choose is not exact",
+      all(F39.exact_ids(x) is None for x in
+          ("bv+ba", "299/18", "bv*[height<=720]", "best", "", None, "299+")),
+      str([F39.exact_ids(x) for x in ("bv+ba", "299/18", "best")]))
+check("the container takes the streams as they are: mp4+m4a, webm+webm, "
+      "else mkv", [F39.exact_plan(s, _ER)["container"] for s in
+                   ("299+140", "315+251", "401+251", "299+251")]
+      == ["mp4", "webm", "mkv", "mkv"])
+_p = F39.exact_plan("999+140", _ER)
+check("an id the video does not have is refused, and the real ones listed",
+      _p["error"] and "999" in _p["error"] and "299" in _p["error"], _p["error"])
+check("matching audio keeps the pair in one container, no DRC copy",
+      F39.matching_audio(_ER, next(r for r in _ER if r["id"] == "299"))["id"] == "140"
+      and F39.matching_audio(_ER, next(r for r in _ER if r["id"] == "315"))["id"] == "251")
+check("a stream line says what it is and gives the id",
+      F39.describe_stream(next(r for r in _ER if r["id"] == "315")).startswith("2160p60 vp9 webm")
+      and F39.describe_stream(next(r for r in _ER if r["id"] == "315")).endswith("(id 315)"))
+
+
+# --- _apply_exact: what it turns on and off
+def _ex(sel, **kw):
+    o = {"format_selector": sel, "embed_subs": True, "keep_video": False,
+         "audio_format": "m4a", "merge_format": "", "embed_thumbnail": True}
+    o.update(kw)
+    lines = []
+    ok = C39._apply_exact(o, _EX, lines.append)
+    return ok, o, "\n".join(lines)
+
+
+_ok, _o, _t = _ex("299+140")
+check("video + audio: the video is kept, merged into mp4, no subtitles added",
+      _ok and _o["keep_video"] and _o["merge_format"] == "mp4"
+      and not _o["embed_subs"] and "nothing is converted" in _t, str(_o))
+_ok, _o, _t = _ex("315+251")
+check("webm + a thumbnail -> mkv (yt-dlp fails the run on a webm cover)",
+      _o["merge_format"] == "mkv" and "webm cannot hold the thumbnail" in _t, _t)
+_ok, _o, _t = _ex("315+251", embed_thumbnail=False)
+check("...and without a thumbnail it stays webm", _o["merge_format"] == "webm")
+_ok, _o, _t = _ex("299+251", merge_format="mp4")
+check("a --merge-format you gave is kept", _o["merge_format"] == "mp4")
+_ok, _o, _t = _ex("251")
+check("audio alone is taken out as it is: --audio-format best, not m4a",
+      _ok and _o["audio_format"] == "best" and not _o["keep_video"]
+      and "(.opus)" in _t, _t)
+_ok, _o, _t = _ex("140+251")
+check("two audio streams -> --audio-multistreams", _o.get("audio_multistreams"))
+_ok, _o, _t = _ex("299+999")
+check("a missing id: refused (False), with the reason",
+      _ok is False and "!! --exact" in _t, _t)
+_a = download.build_args("http://x/v", {"output_dir": ".", "audio_format": "best",
+                                        "audio_multistreams": True})
+check("--audio-format best has no --audio-quality (nothing is re-encoded)",
+      "--audio-quality" not in _a and _val(_a, "--audio-format") == "best"
+      and "--audio-multistreams" in _a, str(_a))
+
+# --- through `get`: refused before anything is downloaded
+_dl39 = []
+_pr39, _dd39 = download.probe, download.download
+download.probe = lambda url, o, *a, **k: dict(_EX)
+download.download = lambda url, o, **k: (_dl39.append(dict(o)), ([], None))[1]
+
+
+def _get39(*args):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = C39.main(["get", "https://www.youtube.com/watch?v=EXV",
+                       "--no-lyrics", "-o", WORK, "--cookies-from-browser",
+                       "off"] + list(args))
+    return rc, buf.getvalue()
+
+
+try:
+    _rc, _out = _get39("--exact")
+    check("--exact without -f is refused (rc 2)", _rc == 2 and "!!" in _out, _out[-200:])
+    _rc, _out = _get39("--exact", "-f", "bv+ba")
+    check("--exact with a selector yt-dlp would choose from is refused",
+          _rc == 2 and not _dl39, _out[-200:])
+    _rc, _out = _get39("--exact", "-f", "999+140")
+    check("--exact with an id the video lacks: rc 1 and nothing downloaded",
+          _rc == 1 and not _dl39 and "999" in _out, _out[-300:])
+    _rc, _out = _get39("--exact", "-f", "303+251", "--no-thumbnail")
+    check("--exact 303+251 downloads exactly that, kept and merged into webm",
+          _rc == 0 and _dl39 and _dl39[-1]["format_selector"] == "303+251"
+          and _dl39[-1]["keep_video"] and _dl39[-1]["merge_format"] == "webm",
+          str(_dl39[-1:]))
+finally:
+    download.probe, download.download = _pr39, _dd39
+
+check("the GUI builds --exact from the option",
+      "--exact" in U.build_argv("get", {"exact": True, "format_selector": "299+140"},
+                                ["http://x"]))
+
+# --- live --status lists the streams with their ids
+_ls = []
+LV39.list_streams(_EX, log=_ls.append, url="U")
+_lst = "\n".join(_ls)
+check("live --status lists every stream with its id, biggest picture first",
+      "(id 401)" in _lst and "(id 251)" in _lst
+      and _lst.index("2160p60") < _lst.index("1080p60"), _lst)
+check("...and how to take exactly the ones you want",
+      "--exact -f 401+140" in _lst, _lst[-120:])
+
+# --- progress: every redraw becomes an event, never a log line
+_e = P39.parse_ytdlp_line("[download] 1.04MiB at 720.44KiB/s (00:00:01) (frag 59/118)")
+check("a redraw without a % (a stream) is progress, from the pieces",
+      _e["type"] == "pct" and _e["frags"] == (59, 118) and abs(_e["pct"] - 50) < 0.1, str(_e))
+_e = P39.parse_ytdlp_line("[download] 3.00KiB at 0.00B/s (00:00:00) (frag 0/unknown)")
+check("...with no total it is still progress, with no %",
+      _e and _e["type"] == "pct" and _e["pct"] is None, str(_e))
+_e = P39.parse_ytdlp_line("2: [download]  45.0% of ~ 10.00MiB at 1.00MiB/s ETA 00:05")
+check("'2:' (video and audio side by side) is the stream number", _e["stream"] == 2
+      and _e["pct"] == 45.0, str(_e))
+_e = P39.parse_ytdlp_line("[download] Got error: ('Connection aborted.'). Retrying (2/5)...")
+check("a retry is a retry event", _e["type"] == "retry" and _e["k"] == 2
+      and _e["n"] == 5 and not _e["gave_up"], str(_e))
+_g = ("[download]  50.0% of 1.00MiB at 1MiB/s ETA 00:01"
+      "ERROR: fragment 3 not found, unable to continue")
+check("a redraw with an error glued on is the error, not progress",
+      P39.parse_ytdlp_line(_g) is None
+      and P39.unglue(_g) == "ERROR: fragment 3 not found, unable to continue")
+
+_L39 = []
+_on = download._make_on_line(_L39.append)
+for _seg in ["[download] Destination: x.f299.mp4"] + [
+        f"[download] {k}.00KiB at 1.00MiB/s (00:00:0{k % 10}) (frag {k}/120)"
+        for k in range(300)] + [
+        f"[download] Got error: ('Connection aborted.'). Retrying ({k % 5 + 1}/5)..."
+        for k in range(40)] + [
+        "ERROR:", "[download] Got error: ('Connection aborted.'). Giving up after 5 retries",
+        _g]:
+    _on(_seg)
+check("300 redraws + 40 retries -> a handful of log lines, not 340",
+      len(_L39) <= 5, "\n".join(_L39))
+check("the retries are summed up as '(+N more like it)'",
+      any("more like it" in x for x in _L39) or len([x for x in _L39 if "Retrying" in x]) == 1,
+      "\n".join(_L39))
+check("a bare 'ERROR:' is joined to its message",
+      not any(x.strip() == "ERROR:" for x in _L39)
+      and any(x.strip().startswith("ERROR: [download] Got error") for x in _L39),
+      "\n".join(_L39))
+check("the glued error is logged",
+      any(x.strip() == "ERROR: fragment 3 not found, unable to continue" for x in _L39))
+
+# a terminal: the redraws overwrite one line (\r), at most 5 a second
+class _TTY(io.StringIO):
+    pass
+
+
+_tty = _TTY()
+_T39 = []
+_on = download._make_on_line(_T39.append, tty=_tty)
+_old_hook = P39.get_hook()
+P39.set_hook(None)
+try:
+    for k in range(50):
+        _on(f"[download] {k}.00KiB at 1.00MiB/s (00:00:00) (frag {k}/120)")
+    _on("[download] 100% of    1.04MiB in 00:00:01 at 717.09KiB/s")
+finally:
+    P39.set_hook(_old_hook)
+check("in a terminal the progress is one line redrawn in place",
+      _tty.getvalue().count("\r") >= 1 and _tty.getvalue().count("\n") <= 1
+      and _T39 == ["    [download] 100% of    1.04MiB in 00:00:01 at 717.09KiB/s"],
+      repr(_tty.getvalue()[:200]) + str(_T39))
+
+# --- what went wrong, and is it worth waiting for the network
+_et = download._error_text(
+    ["[download] Destination: v.f299.mp4", "ERROR:",
+     "[download] Got error: ('Connection aborted.'). Giving up after 5 retries",
+     "ERROR: fragment 33 not found, unable to continue"] +
+    [f"[download] {k}.0% of 1.00MiB at 1MiB/s ETA 00:01" for k in range(30)])
+check("the error text keeps the ERRORs even when 30 audio redraws follow",
+      "fragment 33 not found" in _et and "Giving up" in _et and "%" not in _et, _et)
+check("a piece given up on after connection errors: wait and resume",
+      download.retryable(_et))
+check("a merge failure after an earlier blip is NOT a network problem",
+      not download.retryable("Got error: Connection aborted. Retrying (1/5)\n"
+                             "ERROR: Postprocessing: Conversion failed!"))
+check("a removed video is not retried", not download.retryable(
+    "ERROR: [youtube] EXV: Video unavailable"))
+_a = download.build_args("http://x/v", {"output_dir": "."})
+check("retries wait longer each time instead of all failing in a second",
+      "http:exp=1:30" in _a and "fragment:exp=1:30" in _a, str(_a))
+check("a piece that cannot be fetched stops the run (to resume) -- it is "
+      "never skipped, leaving a hole", "--abort-on-unavailable-fragments" in _a
+      and "--skip-unavailable-fragments" not in _a)
+
+# --- the progress bar: per stream, done only when every stream is done
+_st = P39.State()
+_st.handle({"type": "file", "name": "x.f299.mp4"})
+_st.handle({"type": "pct", "pct": 80.0, "size": "", "speed": "", "eta": "",
+           "elapsed": "", "stream": 1})
+_st.handle({"type": "pct", "pct": 20.0, "size": "", "speed": "", "eta": "",
+           "elapsed": "", "stream": 2})
+check("two streams side by side: the bar shows the slower one",
+      abs((_st.pct or 0) - 20.0) < 0.01, str(_st.pct))
+
+# --- the Live streams tab: the stream pickers
+tkstub.reset()
+G.run()
+_r9 = tkstub.ROOTS[-1]
+
+
+def _drain9():
+    todo, _r9.pending[:] = list(_r9.pending), []
+    for f in todo:
+        f()
+
+
+_lt9 = [w for w in _r9.walk() if isinstance(w, tkstub.Notebook)][0].tab_for("Live streams")
+_le9 = [w for w in _lt9.walk() if w.kind == "entry"]
+_cb9 = [w for w in _qw(_lt9, "combobox")
+        if any("automatic (best" in str(v) for v in (w.options.get("values") or []))]
+check("the tab has a video and an audio stream picker", len(_cb9) == 2, str(len(_cb9)))
+_URL9 = "https://www.youtube.com/live/EXV"
+_A9, _cli9 = [], G.cli_main
+
+
+def _fake_status(argv):
+    _A9.append(list(argv))
+    if "--status" in argv:
+        LV39.LAST_PROBE[_URL9] = dict(_EX)
+    return 0
+
+
+G.cli_main = _fake_status
+try:
+    _le9[0].options["textvariable"].set(_URL9)
+    _le9[1].options["textvariable"].set(os.path.join(WORK, "live39"))
+    _qbtn(_lt9, "Record from the start").invoke()
+    _drain9()
+    check("before 'Is it live?' it records on automatic, without --exact",
+          "--exact" not in _A9[-1], str(_A9[-1]))
+    _qbtn(_lt9, "Is it live? How big?").invoke()
+    _drain9()
+    _vv = list(_cb9[0].options.get("values"))
+    check("'Is it live? How big?' fills the pickers with the streams",
+          len(_vv) == 1 + 5 and any("(id 315)" in v for v in _vv), str(_vv))
+    _cb9[0].options["textvariable"].set(next(v for v in _vv if "(id 315)" in v))
+    _cb9[0].fire("<<ComboboxSelected>>")
+    check("picking a video sets the audio to the one that keeps it a copy",
+          "(id 251)" in _cb9[1].options["textvariable"].get(),
+          _cb9[1].options["textvariable"].get())
+    _qbtn(_lt9, "Record from the start").invoke()
+    _drain9()
+    _g9 = _A9[-1]
+    check("a chosen video stream -> get --exact with that id and a matching audio",
+          "--exact" in _g9 and str(_val(_g9, "--format-selector")).startswith("315+")
+          and _val(_g9, "--format-selector") == "315+251", str(_g9))
+finally:
+    G.cli_main = _cli9
 
 
 srv.shutdown()

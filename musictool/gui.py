@@ -578,22 +578,24 @@ def run():
                 outbox.configure(state="disabled")
         except queue.Empty:
             pass
-        newest_pct, others, finished = None, [], False
+        newest_pct, others, finished = {}, [], False
         try:
             while True:
                 ev = pq.get_nowait()
                 if ev == FINISH:
                     finished = True
                 elif (ev or {}).get("type") == "pct":
-                    newest_pct = ev      # redraws: only the last one matters
+                    # redraws: only the last one matters -- per download and
+                    # per stream (video and audio side by side report apart)
+                    newest_pct[(ev.get("tag"), ev.get("stream"))] = ev
                 else:
                     others.append(ev)    # item/file/done: none may be dropped,
         except queue.Empty:              # or the bar loses the playlist position
             pass
         for ev in others:
             _apply_progress(ev)
-        if newest_pct is not None:
-            _apply_progress(newest_pct)
+        for ev in newest_pct.values():
+            _apply_progress(ev)
         if finished:
             _apply_progress(FINISH)
 
@@ -2015,6 +2017,85 @@ def run():
     live_state.update(live_url=lurl, live_folder=lfolder, live_out=lout,
                       live_audio=laudio)
 
+    # Which streams: filled by "Is it live? How big?". A chosen stream is
+    # downloaded exactly (--exact) and copied as it is -- nothing converted.
+    L_AUTO_V = "automatic (best video)"
+    L_AUTO_A = "automatic (best audio in your language)"
+    _ls = ttk.Frame(lbody)
+    _ls.pack(fill="x", padx=8, pady=(4, 0))
+    ttk.Label(_ls, text="Video stream:").pack(side="left")
+    lvid = tk.StringVar(value=L_AUTO_V)
+    lvcb = ttk.Combobox(_ls, textvariable=lvid, values=[L_AUTO_V],
+                        state="readonly", width=40)
+    lvcb.pack(side="left", padx=(4, 12))
+    ttk.Label(_ls, text="Audio stream:").pack(side="left")
+    laud = tk.StringVar(value=L_AUTO_A)
+    lacb = ttk.Combobox(_ls, textvariable=laud, values=[L_AUTO_A],
+                        state="readonly", width=40)
+    lacb.pack(side="left", padx=4)
+    lstreams_hint = tk.StringVar(value=(
+        "press \u201cIs it live? How big?\u201d to list the streams. A stream "
+        "you choose is downloaded exactly as it is: copied, nothing "
+        "converted, no other stream instead."))
+    ttk.Label(lbody, textvariable=lstreams_hint, foreground="#888",
+              wraplength=980, justify="left").pack(anchor="w", padx=10)
+    l_streams = {"url": "", "rows": [], "v": {}, "a": {}}
+
+    def l_fill_streams(_rc=None):
+        """After `live --status`: put the streams it read into the pickers."""
+        u = lurl.get().strip()
+        info = live.LAST_PROBE.get(u)
+        if not isinstance(info, dict):
+            return
+        rows = formats.rows_from_info(info)
+        vids = sorted((r for r in rows if r["kind"] in ("video", "both")),
+                      key=lambda r: (-(r["height"] or 0), -(r["fps"] or 0),
+                                     -(r["bytes"] or 0)))
+        lang = str(panes["get"].values().get("audio_lang") or "en")
+        auds = sorted((r for r in rows if r["kind"] == "audio"),
+                      key=lambda r: (not formats._match_lang(r, lang)
+                                     if not formats.is_any_lang(lang) else 0,
+                                     -formats.track_bitrate_num(r)))
+        vmap = {formats.describe_stream(r): r for r in vids}
+        amap = {formats.describe_stream(r): r for r in auds}
+        if l_streams["url"] != u:
+            lvid.set(L_AUTO_V)
+            laud.set(L_AUTO_A)
+        l_streams.update(url=u, rows=rows, v=vmap, a=amap)
+        lvcb["values"] = [L_AUTO_V] + list(vmap)
+        lacb["values"] = [L_AUTO_A] + list(amap)
+        lstreams_hint.set(
+            f"{len(vmap)} video and {len(amap)} audio streams. Pick one (or "
+            f"both) and it is downloaded exactly as it is -- copied, nothing "
+            f"converted; video + audio go into mp4, webm or mkv, whichever "
+            f"holds both unchanged.")
+
+    def l_pick_video(_ev=None):
+        """A video picked and the audio left on automatic: pair it with the
+        audio that keeps the pair in one container (mp4+m4a, webm+webm)."""
+        row = l_streams["v"].get(lvid.get())
+        if row is None or row["kind"] == "both" or laud.get() != L_AUTO_A:
+            return
+        lang = str(panes["get"].values().get("audio_lang") or "en")
+        a = formats.matching_audio(l_streams["rows"], row, lang)
+        if a is not None:
+            laud.set(formats.describe_stream(a))
+
+    lvcb.bind("<<ComboboxSelected>>", l_pick_video)
+
+    def l_selector():
+        """The exact -f for the chosen streams, or "" for automatic."""
+        if l_streams["url"] != lurl.get().strip():
+            return ""
+        v = None if laudio.get() else l_streams["v"].get(lvid.get())
+        a = l_streams["a"].get(laud.get())
+        if v is not None and v["kind"] == "both":
+            return str(v["id"])            # one stream with picture and sound
+        if v is not None and a is None and not laudio.get():
+            a = formats.matching_audio(l_streams["rows"], v)
+        ids = [str(r["id"]) for r in (v, a) if r is not None]
+        return "+".join(ids)
+
     _lb = ttk.Frame(lbody)
     _lb.pack(fill="x", padx=8, pady=6)
     blrec = ttk.Button(_lb, text="Record from the start",
@@ -2108,7 +2189,8 @@ def run():
         u = l_url()
         if u:
             remember(url=u)
-            do_argv(["live", l_dir(False), "--status", u] + l_net_args())
+            do_argv(["live", l_dir(False), "--status", u] + l_net_args(),
+                    after=l_fill_streams)
 
     def l_record():
         u = l_url()
@@ -2119,6 +2201,11 @@ def run():
         vals.update(keep_video=not laudio.get(), no_lyrics=True,
                     no_playlist=True, yes_playlist=False, lyrics_only=False,
                     live_from_now=False, output_dir=d)
+        sel = l_selector()
+        if sel:
+            # exactly the streams chosen above, copied as they are
+            vals.update(format_selector=sel, exact=True, quality="",
+                        max_size="")
         remember(url=u, path=d)
         linfo.set("recording -- \u201cWatch what's there so far\u201d works "
                   "while it runs")
@@ -2269,6 +2356,12 @@ def run():
             file_lbl.set("   ".join(
                 f"{short(v.get('name'))} {v.get('pct', 0.0):4.1f}%"
                 for _k, v in sorted(pstate.slots.items())))
+        elif pstate.note or pstate.got or pstate.frags:
+            # a live stream (no total), a dropped connection, or musictool
+            # waiting to try again -- say that, not a frozen speed
+            file_lbl.set(f"{short(pstate.filename)}   "
+                         + (f"{pstate.pct:5.1f}%   " if pstate.pct and not
+                            pstate.note else "") + pstate.file_text())
         else:
             file_lbl.set(f"{short(pstate.filename)}   {pstate.pct:5.1f}%"
                          f"   {pstate.speed}   ETA {pstate.eta or '—'}")

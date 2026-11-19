@@ -5,11 +5,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from . import cancel, formats, progress
 from .util import (ytdlp_cmd, have_ffmpeg, is_windows, is_net_error, net_sleeps,
-                   detect_browser, js_runtime)
+                   detect_browser, js_runtime, ffmpeg_hint)
 
 INDEX_NAME = ".musictool-index.json"
 
@@ -368,13 +369,27 @@ def build_args(url, o):
         args += ["--download-sections", str(o["download_sections"])]
     args += ["--retries", str(o.get("retries", 5))]
     args += ["--fragment-retries", str(o.get("retries", 5))]
+    # Without these a WiFi drop silently ruins a download made of pieces
+    # (DASH: every live stream, and a stream that has just ended): yt-dlp
+    # used up its 5 retries in milliseconds, then SKIPPED the piece and went
+    # on -- measured, a 20 s drop skipped 64 of 238 pieces, said "100%", and
+    # exited 0 with half the video missing. Now each retry waits (1, 2, 4,
+    # 8, 16 s: about half a minute in all), and a piece that still cannot be
+    # had stops yt-dlp instead, so the network loop in download() waits for
+    # the connection and carries on from that piece.
+    args += ["--retry-sleep", "http:exp=1:30",
+             "--retry-sleep", "fragment:exp=1:30",
+             "--abort-on-unavailable-fragments"]
     # --continue resumes a half-finished .part file after an outage
     # instead of throwing it away and starting the download over.
     args.append("--continue")
 
     if not o.get("keep_video"):
         args += ["-x", "--audio-format", o.get("audio_format", "m4a")]
-        args += ["--audio-quality", str(o.get("audio_quality", 4))]
+        if o.get("audio_format") != "best":
+            # "best" (--exact) copies the audio as it is; a quality would
+            # only matter to a re-encode
+            args += ["--audio-quality", str(o.get("audio_quality", 4))]
     if o.get("embed_metadata", True):
         args.append("--embed-metadata")
     if o.get("embed_thumbnail"):
@@ -401,6 +416,11 @@ def build_args(url, o):
             args += ["-f", _sel]
     if o.get("merge_format"):
         args += ["--merge-output-format", o["merge_format"]]
+    # --exact with two audio (or video) streams: keep them all, as chosen
+    if o.get("audio_multistreams"):
+        args.append("--audio-multistreams")
+    if o.get("video_multistreams"):
+        args.append("--video-multistreams")
     args += runtime_args(o)
     # Keep the artist tag clean, exactly like the original shell script did.
     args += list(("--replace-in-metadata",) + TOPIC_FIX)
@@ -566,31 +586,134 @@ def _run_once(args, log, on_line=None, on_file=None):
         cancel.stop_process(proc)
         return results, cancel.CANCELLED
     if proc.returncode != 0:
-        err = "\n".join(segments[-8:])
-        err = err[-600:] if err else f"yt-dlp exited {proc.returncode}"
+        err = _error_text(segments) or f"yt-dlp exited {proc.returncode}"
         if "not a bot" in err or "Sign in to confirm" in err:
             err += "\n" + BOT_HINT
         return results, err
     return results, None
 
 
-def _make_on_line(log, tag=""):
+RETRY_LOG_EVERY = 10.0      # seconds between logged retry lines
+
+
+def _error_text(segments):
+    """What went wrong in a failed run, for the log and for retryable().
+
+    Every ERROR line of the run (with the line after a bare "ERROR:"), then
+    the last few lines that are not progress redraws. It used to be just the
+    last 8 lines: when the video failed on a dropped connection, yt-dlp went
+    on to fetch the audio, so those 8 lines were audio percentages -- the
+    error was never seen, the network wait never happened, and "!!" printed
+    a column of percentages.
+    """
+    errors = []
+    segments = [progress.unglue(x) for x in segments]
+    for i, seg in enumerate(segments):
+        if seg.lstrip().startswith("ERROR:"):
+            line = seg.strip()
+            if line == "ERROR:" and i + 1 < len(segments):
+                line += " " + segments[i + 1].strip()
+            if line not in errors:
+                errors.append(line)
+    quiet = [x for x in segments
+             if (progress.parse_ytdlp_line(x) or {}).get("type") not in
+             ("pct", "retry") and not x.lstrip().startswith("ERROR:")]
+    text = "\n".join(quiet[-4:] + errors[-4:])
+    return text[-900:]
+
+
+def _make_on_line(log, tag="", tty=None, stats=None):
     """Forward readable lines to the log; send every event to the progress hook.
 
-    The per-percent \r redraws would flood the log, so those go only to the
-    hook (the GUI bar). Item/file/done and unrecognised (error) lines are logged.
+    The progress redraws (several a second, per stream) would flood the log,
+    so those go only to the hook (the GUI bar) -- or, in a terminal with no
+    GUI, are redrawn on one line. Item/file/done, skipped pieces and
+    unrecognised (error) lines are logged. A dropped connection makes yt-dlp
+    print one "Got error ... Retrying" per attempt, per piece, per worker;
+    those are logged at most once every RETRY_LOG_EVERY seconds, with a count
+    of the rest.
 
     `tag` marks every event with the download it came from, so several running
     at once can each have their own line in the UI instead of fighting over one.
+    `stats` (a dict) collects what happened: "progress" once anything arrived.
     """
+    st = {"last_retry": 0.0, "hidden": 0, "drawn": 0, "last_draw": 0.0}
+    stats = stats if stats is not None else {}
+
+    def out(text):
+        if st["drawn"]:
+            # leave the redrawn progress line in place, start a fresh one
+            tty.write("\n")
+            st["drawn"] = 0
+        log(text)
+
     def on_line(seg):
+        seg = progress.unglue(seg)
+        if seg.strip() in ("ERROR:", "WARNING:"):
+            # yt-dlp writes "ERROR: " and then the message after a carriage
+            # return, so it arrives as two pieces: keep them on one line
+            st["prefix"] = seg.strip() + " "
+            return
+        prefix, st["prefix"] = st.get("prefix", ""), ""
+        if prefix and seg.lstrip().startswith(prefix.strip()):
+            prefix = ""
         ev = progress.parse_ytdlp_line(seg)
         if ev is not None and tag:
             ev["tag"] = tag
         progress.report(ev)
-        if ev is None or ev["type"] in ("item", "file", "done"):
-            log("    " + seg)
+        kind = ev["type"] if ev else None
+        if kind == "pct":
+            stats["progress"] = True
+            if tty is not None and progress.get_hook() is None:
+                now = time.time()
+                if now - st["last_draw"] < 0.2:     # 5 redraws a second
+                    return
+                st["last_draw"] = now
+                text = "    " + re.sub(r"\s+", " ", seg.strip())[:110]
+                tty.write("\r" + text.ljust(st["drawn"]))
+                tty.flush()
+                st["drawn"] = max(len(text), 1)
+            return
+        if kind == "retry" and not ev.get("gave_up"):
+            now = time.time()
+            if now - st["last_retry"] < RETRY_LOG_EVERY:
+                st["hidden"] += 1
+                return
+            st["last_retry"] = now
+            more = (f"   (+{st['hidden']} more like it)" if st["hidden"] else "")
+            st["hidden"] = 0
+            out("    " + prefix + ev.get("msg", seg) + more)
+            return
+        out("    " + prefix + seg)
     return on_line
+
+
+def _tty_stream():
+    """stdout when it is a terminal (the progress line is redrawn in place)."""
+    try:
+        return sys.stdout if sys.stdout.isatty() else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def retryable(err):
+    """Is this failed yt-dlp run worth waiting for the network and resuming?
+
+    Decided by yt-dlp's final ERROR, not by any line before it: a run that
+    had a connection blip and *then* failed to merge (a post-processing
+    error) used to be retried for minutes because "connection aborted"
+    appeared higher up. A piece given up on ("unable to continue") after
+    connection errors is a network failure."""
+    text = err or ""
+    i = text.rfind("ERROR:")
+    final = text[i:] if i >= 0 else text
+    low = final.lower()
+    if "postprocessing" in low or "conversion failed" in low:
+        return False
+    if is_net_error(final):
+        return True
+    return ("unable to continue" in low or low.strip() == "error:"
+            or "giving up after" in text.lower()) and is_net_error(text)
 
 
 def download(url, o, log=print, on_file=None, tag=""):
@@ -615,15 +738,29 @@ def download(url, o, log=print, on_file=None, tag=""):
         args.append("--simulate")
     log("  $ " + " ".join(_q(a) for a in args))
     sleeps = iter(net_sleeps(float(o.get("net_max_wait", 240))))
-    on_line = _make_on_line(log, tag)
+    stats = {}
+    on_line = _make_on_line(log, tag, tty=_tty_stream() if log is print else None,
+                            stats=stats)
+    expired = 0
     while True:
+        stats.clear()
         results, err = _run_once(args, log, on_line, on_file)
         if err is None:
             return results, None
         if err == cancel.CANCELLED:
             # Keep what finished: those files already have their lyrics.
             return results, cancel.CANCELLED
-        if o.get("dry_run") or not is_net_error(err):
+        if (not o.get("dry_run") and stats.get("progress") and expired < 3
+                and re.search(r"HTTP Error 403", err)):
+            # YouTube's links last about six hours; a long download on a slow
+            # connection outlives them. Asking again gives fresh links, and
+            # --continue keeps everything already downloaded.
+            expired += 1
+            log("  ! YouTube refused to go on (HTTP 403) after downloading "
+                "for a while -- usually the links ran out; asking for fresh "
+                "ones and carrying on")
+            continue
+        if o.get("dry_run") or not retryable(err):
             return [], err
         if cancel.requested():
             return results, cancel.CANCELLED
@@ -632,6 +769,8 @@ def download(url, o, log=print, on_file=None, tag=""):
             return [], err
         log(f"  ! network problem -- waiting {int(w)}s, then resuming "
             f"(not restarting)")
+        progress.report({"type": "wait", "secs": w, "tag": tag} if tag else
+                        {"type": "wait", "secs": w})
         time.sleep(w)
         if cancel.requested():
             return results, cancel.CANCELLED

@@ -130,6 +130,38 @@ generator, the way the YouTube extractor feeds a live stream):
   indexer, OneDrive): `os.replace`/`os.remove` raise WinError 5 "Access is
   denied". Every rename and delete in `live.py` retries.
 
+### Dropped connections, and copying exact streams
+
+Measured through real yt-dlp 2026.10.26 against a local server that drops
+the connection on cue:
+
+- **Default retries skip pieces silently.** The 5 fragment retries fire
+  with no pause, all within the same second of a drop; the piece is then
+  skipped, the progress reaches `100%`, the merge succeeds and the exit code
+  is 0 -- 64 pieces missing in one run. During a long drop the run instead
+  sat at `Destination:` with the speed still shown. Now: `--retry-sleep
+  http:exp=1:30 --retry-sleep fragment:exp=1:30` (1+2+4+8+16 s, ~30 s) and
+  `--abort-on-unavailable-fragments`; when that still fails, musictool's own
+  network wait resumes the same pieces. A 20 s, 25 s, 40 s and 45 s drop all
+  produced complete files: every video packet identical to the source, the
+  audio identical apart from the last packet's container side data, as in an
+  undisturbed run.
+- **Classify by yt-dlp's ERROR lines, never by the last lines printed.** The
+  old "last 8 lines" read a merge failure as a network error (earlier retry
+  lines were still in the window) and a video network error as nothing (the
+  audio's progress came after it).
+- **`--exact` needs plain ids.** In yt-dlp's grammar `/`, `[...]` and the
+  `b/bv/ba/w...` keywords all let it pick another stream, so they are
+  refused. `-x --audio-format best` keeps the source codec (FFmpegExtractAudio
+  copies; `--audio-quality` is not passed). Merging mp4-family streams into
+  mp4, webm into webm and a mix into mkv is the same choice yt-dlp makes by
+  itself; it is passed explicitly so the log can say where they go.
+- **webm cannot hold a thumbnail.** yt-dlp switches a webm merge to mkv only
+  when `--merge-output-format` is unset; with it set to webm,
+  `EmbedThumbnail` raises after the download ("Supported filetypes for
+  thumbnail embedding are ..."). So `--exact` uses mkv for a webm pair when
+  the thumbnail is on, and turns the thumbnail off for a single webm stream.
+
 ---
 
 ## Lyrics APIs, as seen live (2026-11-18)

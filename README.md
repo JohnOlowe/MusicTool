@@ -31,7 +31,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                957 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1002 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -380,7 +380,7 @@ this is given)
 `--quality 720` (or `1080`, `best`, `smallest`) · `--max-size 250M` (best quality
 that fits under it) · `-f/--format-selector 137+140` (a raw yt-dlp selector, overrides both) ·
 `--audio-lang en` (spoken language to prefer; `any` for yt-dlp's default) ·
-`--merge-format mkv|mp4|webm|mov` · `--subs` · `--sub-langs en,es` ·
+`--merge-format mkv|mp4|webm|mov` · `--exact` (see below) · `--subs` · `--sub-langs en,es` ·
 `--remote-components ejs:github` · `--js-runtimes node` (YouTube's n-challenge
 needs a JS runtime; yt-dlp only enables deno by default) · `--keep-video`
 (without it you get audio only)
@@ -808,6 +808,59 @@ The stop is cooperative, which is what makes it safe:
 Ctrl+C in a terminal asks once ("stopping after the current file..."); a second
 Ctrl+C quits immediately.
 
+### Exactly the streams you chose, copied (`--exact`)
+
+`musictool get URL --exact -f 299+140` downloads exactly those streams and
+**converts nothing**: the ids come from `musictool formats URL` (or from
+`musictool live --status URL`, which lists them with ids), one per stream,
+joined by `+`.
+
+- An id the video does not have is **refused** -- nothing is downloaded and the
+  ids it does have are listed. A selector that lets yt-dlp choose (`bv+ba`,
+  `299/18`, `[height<=720]`, `best`) is refused too: those are what could swap
+  in a different stream.
+- **Video + audio** are put together as they are, in a container that holds
+  both unchanged: `.mp4` for avc1/av01 + m4a, `.webm` for vp9/av01 webm + opus,
+  `.mkv` for a mixed pair (e.g. 299 + 251). `--merge-format` overrides it. webm
+  cannot carry a cover picture (yt-dlp fails the run after downloading), so
+  with the thumbnail on a webm pair goes into `.mkv` -- the same streams;
+  `--no-thumbnail` keeps `.webm`.
+- **Audio alone** (`-f 251`) is taken out with its own codec: Opus stays Opus in
+  `.opus`, AAC stays AAC in `.m4a` -- never re-encoded to `--format`.
+- No subtitle streams are added (mp4 would need them converted).
+- Checked against the video before anything starts. In a playlist (no list
+  per video), only the form is checked, and yt-dlp stops if an id is missing.
+
+Verified by comparing packet checksums of the source streams with the output
+(`ffmpeg -map 0:v -c copy -f framemd5`): identical for 315+251 (webm), 299+251
+(mkv), 299+140 (mp4) and the audio of 251 and 140 (only the container's last
+packet header differs).
+
+In the window: on the Live streams tab, **Is it live? How big?** fills a
+**Video stream** and an **Audio stream** picker; a stream picked there is
+recorded with `--exact`. Picking only the video pairs it with the audio that
+keeps the pair a plain copy. On the Download tab the same switch is under
+More options, in the *quality and format* group beside the selector box.
+
+### Progress, and a dropped connection
+
+The progress redraws (several a second per stream) are no longer written to
+the log: the window's bar and file line take them, and in a terminal they
+redraw one line in place (at most 5 times a second). A stream whose total is
+not known shows the size so far and `piece i/n`. A dropped connection's
+`Got error ... Retrying` lines are logged at most once every 10 s, with
+`(+N more like it)`; a bare `ERROR:` is joined to its message.
+
+After a drop yt-dlp used to fire all 5 piece retries within a second, then
+**skip** the piece, print `100%` and merge a file with holes -- or sit at
+`Destination:` with the speed still ticking. Now retries wait longer each time
+(`--retry-sleep exp=1:30`, about 30 s in all), a piece that still cannot be
+fetched stops the run instead of being skipped
+(`--abort-on-unavailable-fragments`), and musictool waits for the network and
+resumes from the same pieces -- `! network problem -- waiting 2s, then resuming
+(not restarting)`. Whether a failure is a network one is decided by yt-dlp's
+own ERROR lines, not by whatever happened to be printed last.
+
 ## Live streams: from the start, watch it so far, carry on after a stop
 
 `get` notices by itself when a link is a live stream (it reads the video's
@@ -1166,7 +1219,9 @@ The stream's link, the folder, an optional **Copy to watch goes to** folder
 (another drive when this one is full) and an **Audio only** tick, then:
 
 - **Is it live? How big?** — `live --status`: live since when, how big so
-  far, how fast it grows, how much room the folder has.
+  far, how fast it grows, how much room the folder has, and every stream with
+  its id. It fills the **Video stream** / **Audio stream** pickers; left on
+  automatic the best is taken, a picked stream is taken exactly (`--exact`).
 - **Record from the start** — `get` with the picture kept (or audio only),
   no lyrics, this video only, into the folder; the live handling above does
   the rest.
@@ -1318,7 +1373,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 957 assertions, 0 failures**, with or without
+**Verified by running the code — 1002 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

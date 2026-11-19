@@ -36,13 +36,13 @@ button cannot drift away from what the same options do on the command line.
 | `cli.py` | 1356 | argparse for all 14 subcommands, and every `cmd_*` handler |
 | `gui.py` | 2341 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue |
 | `uicmd.py` | 666 | parser → widget specs, `build_argv`, intent modes, pane geometry |
-| `formats.py` | 771 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list |
-| `download.py` | 658 | yt-dlp invocation (`runtime_args` for every call), the videoId index, stream probing, `swap_audio` |
-| `live.py` | 955 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
+| `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
+| `download.py` | 797 | yt-dlp invocation (`runtime_args` for every call), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `live.py` | 985 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `util.py` | 553 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
-| `progress.py` | 260 | parses yt-dlp's progress lines into a `State` |
+| `progress.py` | 391 | parses yt-dlp's progress lines (per stream, retries, skips) into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
 | `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
 | `cancel.py` | 82 | one cooperative stop flag shared by every worker |
@@ -196,6 +196,15 @@ Two facts that shaped this:
 `eta_total()`, `elapsed_text()`. `eta_total()` needs a floor — at t≈0 an
 extrapolation returns `0m 00s`, so it gates on `elapsed >= 5.0` and falls back
 to the per-file ETA until then.
+
+**Redraws never reach the log.** `_make_on_line` sends every event to the
+hook but logs only item/file/done, errors and unknown lines; `pct` events
+are the bar's alone (in a terminal with no hook they redraw one line with
+`\r`, at most 5 a second), retry lines are logged once per 10 s with a
+count. `gui.pump()` keeps the newest `pct` per `(tag, stream)` -- video and
+audio side by side each keep theirs, and `State` shows the slower one.
+yt-dlp writes `ERROR: ` and its message across a `\r`; the two halves are
+joined, and an error glued onto a redraw is cut out of it (`unglue`).
 
 Parallel downloads (`--jobs N`) tag each URL's log lines `[1] `, `[2] ` so the
 panel can keep the slots apart. `--jobs` is capped at 8.

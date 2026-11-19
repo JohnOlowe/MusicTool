@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **957 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1002 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,21 +115,21 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1356   argparse + every cmd_* handler
-│   ├── gui.py         2341   tkinter GUI, 9 tabs
-│   ├── uicmd.py        666   parser -> widget specs, build_argv, intent modes
-│   ├── formats.py      771   quality table, filters, language picking, audio tracks
-│   ├── download.py     658   yt-dlp invocation, videoId index, streams, swap_audio
-│   ├── live.py         955   live streams: plan, scan, join, watch copy, resume
+│   ├── cli.py         1445   argparse + every cmd_* handler
+│   ├── gui.py         2434   tkinter GUI, 9 tabs
+│   ├── uicmd.py        669   parser -> widget specs, build_argv, intent modes
+│   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
+│   ├── download.py     797   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── live.py         985   live streams: plan, scan, join, watch copy, resume
 │   ├── util.py         553   classify, detect_browser, js_runtime, have_ffmpeg
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
-│   ├── progress.py     260   yt-dlp line parsing + batch State
+│   ├── progress.py     391   yt-dlp line parsing (per stream) + batch State
 │   ├── tags.py         143   mutagen tag + .lrc handling
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py        82   cooperative stop
 ├── tests/
-│   ├── test_musictool.py 4604   38 sections (+8b), 957 assertions
+│   ├── test_musictool.py 4896   39 sections (+8b), 1002 assertions
 │   └── tkstub.py          723   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -171,7 +171,13 @@ what is there, `--join` the loose `.part-FragN` pieces in place (crash-safe,
 50 at a time, recorded in a `.livejoin` note), `--watch` a remuxed
 `TITLE (so far).mp4` without touching the pieces, `--resume` the rest. `get`
 itself records a live stream from its start with one worker per stream (see
-`docs/DECISIONS.md`, "Live streams").
+`docs/DECISIONS.md`, "Live streams"). `--status` also lists every stream with
+its id.
+
+`get --exact -f 299+140` takes exactly those stream ids and converts nothing:
+a missing id or a selector yt-dlp could choose from is refused, video+audio
+are merged by copy into mp4/webm/mkv, audio alone keeps its codec
+(`--audio-format best`). See README, "Exactly the streams you chose".
 
 ---
 
@@ -283,7 +289,10 @@ Read `speed=X.XXx`, divide 20 by it.
 - **A real YouTube live stream.** The live handling was driven through the
   real yt-dlp downloader with a local live-style stream (README, "Verified"),
   never against YouTube, and the Windows file locks it waits out were
-  simulated.
+  simulated. The same goes for the network-drop handling and `--exact`: they
+  were run through real yt-dlp against a local server that drops the
+  connection on cue; with the maintainer's cookies only the format list of
+  R0GdEkPZSvM was read from YouTube, nothing was downloaded from it.
 - **Live lyrics providers.** Tests use a local HTTP server replaying the
   documented response shapes.
 - **Cookie extraction** from the maintainer's Chrome/Edge — never tested on
@@ -300,7 +309,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 957 assertions.
+Nothing is half-finished — `main` is green at 1002 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

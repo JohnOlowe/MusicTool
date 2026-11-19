@@ -36,6 +36,23 @@ PCT_RE = re.compile(
 SPEED_RE = re.compile(r"\bat\s+([\d.,]+\s*[KMGTP]?i?B/s)", re.IGNORECASE)
 ELAPSED_RE = re.compile(r"\bin\s+([\d:]+)(?=\s|$)")
 ETA_RE = re.compile(r"\bETA\s+(\d[\d:]*)")
+# A stream that is live (or taken from its start) has no total size, so yt-dlp
+# prints how much it has instead of a percentage -- many times a second:
+#   [download]    5.86MiB at  472.39KiB/s (00:00:12) (frag 119)
+#   [download]    1.00KiB at      0.00B/s (00:00:00) (frag 0/120)
+# These were not recognised, so every one of them went into the log (1481
+# lines in 8 seconds) and the bar never moved.
+GOT_RE = re.compile(r"\[download\]\s+([\d.,]+\s*[KMGTP]?i?B)\s+at\b", re.IGNORECASE)
+FRAG_RE = re.compile(r"\(frag\s+(\d+)(?:/(\d+))?\)")
+# With video and audio downloading side by side yt-dlp numbers the lines:
+#   1: [download]  12.0% of ~ 2.00GiB at ...     2: [download] ...
+STREAM_RE = re.compile(r"^(\d+):\s+(?=\[)")
+# A dropped connection: one line per attempt, per piece, per worker.
+RETRY_RE = re.compile(r"Got error:.*?(?:Retrying(?: fragment (\d+))? \((\d+)/(\d+)\)|"
+                      r"Giving up after (\d+) retries|$)", re.IGNORECASE)
+# ...and between attempts, one of these per worker
+SLEEP_RE = re.compile(r"^Sleeping ([\d.]+) seconds", re.IGNORECASE)
+SKIP_RE = re.compile(r"Skipping fragment (\d+)", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -43,11 +60,53 @@ def strip_ansi(line):
     return ANSI_RE.sub("", line)
 
 
+def unglue(line):
+    """A progress redraw with an error written straight after it (no newline
+    in between, as yt-dlp does when a piece fails mid-redraw) -> just the
+    error. Anything else is returned as it is."""
+    s = line or ""
+    i = s.find("ERROR:")
+    return s[i:] if i > 0 else s
+
+
 def parse_ytdlp_line(line):
-    """Turn one yt-dlp line/segment into an event dict, or None if boring."""
-    s = strip_ansi(line or "").strip()
-    if not s:
+    """Turn one yt-dlp line/segment into an event dict, or None if boring.
+    An ERROR line is never an event: it is for the log."""
+    s = unglue(strip_ansi(line or "")).strip()
+    if not s or s.startswith("ERROR:"):
         return None
+    stream = None
+    m = STREAM_RE.match(s)
+    if m:
+        stream = int(m.group(1))
+        s = s[m.end():]
+    ev = _parse(s)
+    if ev is not None and stream is not None:
+        ev["stream"] = stream
+    return ev
+
+
+def _parse(s):
+    m = SLEEP_RE.search(s)
+    if m:
+        return {"type": "retry", "k": None, "n": None, "sleep": float(m.group(1)),
+                "gave_up": False, "msg": s}
+    m = RETRY_RE.search(s)
+    if m:
+        # a progress redraw and the error can arrive glued on one line
+        s = s[s.find("Got error:"):] if "Got error:" in s else s
+        if s.startswith("Got error:"):
+            s = "[download] " + s
+        if m.group(4):
+            return {"type": "retry", "k": int(m.group(4)), "n": int(m.group(4)),
+                    "gave_up": True, "msg": s}
+        return {"type": "retry", "k": int(m.group(2)) if m.group(2) else None,
+                "n": int(m.group(3)) if m.group(3) else None,
+                "frag": int(m.group(1)) if m.group(1) else None,
+                "gave_up": False, "msg": s}
+    m = SKIP_RE.search(s)
+    if m:
+        return {"type": "skip", "frag": int(m.group(1)), "msg": s}
     m = ITEM_RE.search(s)
     if m:
         return {"type": "item", "i": int(m.group(1)), "n": int(m.group(2))}
@@ -61,12 +120,35 @@ def parse_ytdlp_line(line):
         sp = SPEED_RE.search(s)
         eta = ETA_RE.search(s)
         el = ELAPSED_RE.search(s)
-        return {"type": "pct", "pct": float(m.group(1)),
-                "size": re.sub(r"\s+", "", m.group(2)),
-                "speed": (sp.group(1).strip() if sp else ""),
-                "eta": (eta.group(1) if eta else ""),
-                "elapsed": (el.group(1) if el else "")}
+        ev = {"type": "pct", "pct": float(m.group(1)),
+              "size": re.sub(r"\s+", "", m.group(2)),
+              "speed": (sp.group(1).strip() if sp else ""),
+              "eta": (eta.group(1) if eta else ""),
+              "elapsed": (el.group(1) if el else "")}
+        _frags(s, ev)
+        return ev
+    m = GOT_RE.search(s)
+    if m:
+        # no total: the size so far, and the share of the pieces when yt-dlp
+        # knows how many there are (a stream that has just ended), else no %
+        sp = SPEED_RE.search(s)
+        ev = {"type": "pct", "pct": None, "got": re.sub(r"\s+", "", m.group(1)),
+              "size": "", "speed": (sp.group(1).strip() if sp else ""),
+              "eta": "", "elapsed": ""}
+        el = re.search(r"\((\d[\d:]*)\)", s)
+        if el:
+            ev["elapsed"] = el.group(1)
+        _frags(s, ev)
+        if ev.get("frags") and ev["frags"][1]:
+            ev["pct"] = min(100.0, 100.0 * ev["frags"][0] / ev["frags"][1])
+        return ev
     return None
+
+
+def _frags(s, ev):
+    m = FRAG_RE.search(s)
+    if m:
+        ev["frags"] = (int(m.group(1)), int(m.group(2)) if m.group(2) else None)
 
 
 def iter_segments(fd):
@@ -145,6 +227,10 @@ class State:
         self.pct = 0.0           # current file 0..100
         self.speed = ""
         self.eta = ""            # current-file ETA text
+        self.got = ""            # size so far, when there is no total (live)
+        self.frags = None        # (piece, pieces or None)
+        self.note = ""           # "connection lost -- retrying", "waiting ..."
+        self.streams = {}        # numbered side-by-side streams -> pct
         self.started = time.time()
 
     def handle(self, ev):
@@ -161,7 +247,16 @@ class State:
             if ev.get("tag"):
                 self.slots.setdefault(ev["tag"], {})["name"] = ev["name"]
         elif t == "pct":
-            self.pct = ev["pct"]
+            self.note = ""
+            pct = ev.get("pct")
+            if ev.get("stream") is not None and pct is not None:
+                # video and audio side by side: the bar shows the one behind
+                self.streams[ev["stream"]] = pct
+                pct = min(self.streams.values())
+            if pct is not None:
+                self.pct = pct
+            self.got = ev.get("got") or ""
+            self.frags = ev.get("frags")
             if ev.get("speed"):
                 self.speed = ev["speed"]
             if ev.get("eta"):
@@ -180,7 +275,29 @@ class State:
             self.batch_n = ev["n"]
             if not self.total:
                 self.pct = 0.0
+        elif t == "retry":
+            if ev.get("gave_up"):
+                self.note = "connection lost -- gave up on this try"
+            elif ev.get("sleep"):
+                self.note = (f"connection trouble -- trying again in "
+                             f"{ev['sleep']:g}s")
+            elif ev.get("k"):
+                self.note = f"connection trouble -- retrying ({ev['k']}/{ev['n']})"
+            else:
+                self.note = "connection trouble -- retrying"
+            self.speed = ""
+        elif t == "wait":
+            # musictool's own wait before running yt-dlp again
+            self.note = f"no connection -- trying again in {int(ev['secs'])}s"
+            self.speed = ""
+        elif t == "skip":
+            self.note = f"piece {ev['frag']} was skipped"
         elif t == "done":
+            if ev.get("stream") is not None:
+                self.streams[ev["stream"]] = 100.0
+                if min(self.streams.values()) < 100.0:
+                    return          # the other stream is still going
+            self.streams = {}
             self.done_items = max(self.done_items, self.item)
             self.pct = 100.0
             if ev.get("tag"):
@@ -206,6 +323,20 @@ class State:
         if self.batch_n:
             return max(0, self.batch_n - max(0, self.batch_i - 1))
         return 0
+
+    def file_text(self):
+        """What the current download is doing, in one line."""
+        if self.note:
+            return self.note
+        bits = [f"{self.got} so far"] if self.got else []
+        if self.frags:
+            i, n = self.frags
+            bits.append(f"piece {i}/{n}" if n else f"piece {i}")
+        if self.speed:
+            bits.append(self.speed)
+        if self.eta:
+            bits.append(f"ETA {self.eta}")
+        return "   ".join(bits)
 
     def elapsed(self):
         """Seconds since the run started."""

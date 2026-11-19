@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — live streams: record from the start, watch it so far, carry on
+## `c2fee9d` — live streams: record from the start, watch it so far, carry on
 *2026-11-19 · 957 assertions*
 
 Reported: a live stream recorded with `yt-dlp --live-from-start -N 4`

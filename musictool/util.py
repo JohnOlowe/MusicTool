@@ -111,6 +111,63 @@ def net_sleeps(max_wait=240, base=2, cap=60):
     return sleeps
 
 
+def parse_time(text):
+    """'1:02:03', '62:03', '3723', '1h2m3s', '90m', '1.5h' -> seconds (float).
+    Raises ValueError for anything else."""
+    t = str(text or "").strip().lower().replace(" ", "")
+    if not t:
+        raise ValueError("empty time")
+    if re.fullmatch(r"\d+(\.\d+)?", t):
+        return float(t)
+    if re.fullmatch(r"\d+(:\d{1,2}){1,2}(\.\d+)?", t):
+        parts = [float(x) for x in t.split(":")]
+        if parts[-1] >= 60 or (len(parts) == 3 and parts[1] >= 60):
+            raise ValueError(f"not a time: {text}")
+        while len(parts) < 3:            # 90:00 is fine: 90 minutes
+            parts.insert(0, 0.0)
+        h, m, s = parts
+        return h * 3600 + m * 60 + s
+    m = re.fullmatch(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?"
+                     r"(?:(\d+(?:\.\d+)?)s)?", t)
+    if m and any(m.groups()):
+        h, mi, s = (float(x) if x else 0.0 for x in m.groups())
+        return h * 3600 + mi * 60 + s
+    raise ValueError(f"not a time: {text} (use 1:00:00, 60:00, 3600 or 1h)")
+
+
+def parse_range(text):
+    """'1:00:00-' / '1:00:00-2:30:00' / '-30:00' -> (start, end or None)."""
+    t = str(text or "").strip()
+    if "-" not in t:
+        raise ValueError(f"not a range: {text} (e.g. 1:00:00- or 1:00:00-2:30:00)")
+    a, b = t.split("-", 1)
+    start = parse_time(a) if a.strip() else 0.0
+    end = parse_time(b) if b.strip() and b.strip().lower() not in ("end", "inf") \
+        else None
+    if end is not None and end <= start:
+        raise ValueError(f"the range ends before it starts: {text}")
+    return start, end
+
+
+def clock(sec):
+    """3723.4 -> '1:02:03'."""
+    s = int(round(sec or 0))
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}"
+
+
+def name_time(sec):
+    """3723.4 -> '1h02m03s' -- a time that can go in a Windows file name."""
+    s = int(round(sec or 0))
+    return f"{s // 3600}h{s // 60 % 60:02d}m{s % 60:02d}s"
+
+
+def part_label(start, end=None):
+    """The part of a video in its file name: 'from 1h00m00s' or
+    '1h00m00s-2h30m00s'."""
+    return (f"from {name_time(start)}" if end is None
+            else f"{name_time(start)}-{name_time(end)}")
+
+
 def existing_paths(paths):
     """Split `paths` into (exist, missing) without touching the network."""
     good, missing = [], []

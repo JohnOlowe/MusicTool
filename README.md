@@ -8,7 +8,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 - **Python 3.8+, stdlib only** plus two dependencies: `yt-dlp` and `mutagen`
 - Works offline for scanning; the only network calls are to yt-dlp and lyrics APIs
 
-**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Live streams](#live-streams-from-the-start-watch-it-so-far-carry-on-after-a-stop) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Live streams](#live-streams-from-the-start-watch-it-so-far-carry-on-after-a-stop) · [Only part of a video, and the live chat as subtitles](#only-part-of-a-video-and-the-live-chat-as-subtitles) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
 
 ```
 ./
@@ -24,6 +24,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── formats.py        quality table, filters, language picking
 │   ├── download.py       yt-dlp wrapper + videoId index
 │   ├── live.py           live streams: record from the start, watch, carry on
+│   ├── chat.py           a stream's chat replay -> ass/srt/vtt/txt subtitles
 │   ├── progress.py       yt-dlp progress lines -> the GUI's bars
 │   ├── lyrics.py         scan / fetch / embed pipeline
 │   ├── providers.py      ytmusic, lrclib, netease
@@ -31,7 +32,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         cooperative stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1002 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1061 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -350,6 +351,7 @@ videos. In the GUI it is the **jobs** field under More Options.
 | `check URL...` | is this reachable, or does YouTube want a login? (no cookies used) |
 | `formats URL...` | the qualities on offer (variant splits merged), with sizes, plus the command to take one |
 | `live [FOLDER]` | live streams: `--status URL` (live? how big? room?), what is in a stopped recording, `--join`/`--watch` to watch it so far, `--resume URL` for the rest |
+| `chat URL\|FILE` | a finished stream's chat replay as subtitles beside the video (or the part of it you have), optionally added to it as a track (copied) |
 | `relang PATH...` | put the language you want into files already downloaded (audio only, video kept) |
 | `lyrics PATH...` | fetch/fix lyrics for existing files or folders |
 | `scan PATH...` | offline state report (`--json` for scripting) |
@@ -373,7 +375,8 @@ videos. In the GUI it is the **jobs** field under More Options.
 `--no-playlist` · `--yes-playlist` · `--retries N` (attempts across a network
 drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240) ·
 `--live-from-now` (a stream that is live is recorded from its start unless
-this is given)
+this is given) · `--range 1:00:00-` (only that part of a finished video; see
+[below](#only-part-of-a-video-and-the-live-chat-as-subtitles))
 
 ### Quality options (video downloads)
 
@@ -924,6 +927,93 @@ musictool live "D:\Videos\Stream" --resume URL   # download the rest
 A full disk is recognised (`No space left on device`, `There is not enough
 space on the disk`) and answered with what to do, not a bare error.
 
+## Only part of a video, and the live chat as subtitles
+
+**Only the part you have not watched.** `--range` takes a time range of a
+finished video (a stream that has ended included) and downloads only that:
+
+```bash
+musictool get URL --keep-video --range 1:00:00-          # from 1 hour to the end
+musictool get URL --keep-video --range 1:00:00-2:30:00   # 1 h to 2 h 30
+musictool get URL --keep-video --range -45:00            # the first 45 minutes
+```
+
+Times can be `1:00:00`, `60:00`, `3600`, `1h`, `1h30m` or `90m`. The file
+is called `TITLE [id] (from 1h00m00s).mp4` (or `(1h00m00s-2h30m00s)`), and
+`chat` reads that name to know which part of the chat goes with it. A range
+on a stream that is still live, or past the video's end, is refused before
+anything downloads, and parts get no lyrics.
+
+- The part is fetched by ffmpeg straight from YouTube, not by yt-dlp's own
+  downloader. ffmpeg gives up at the first dropped connection and *still
+  reports success*: in a test a 15 s drop turned a 4-minute part into 6
+  seconds, with `100%` and exit code 0. So musictool tells ffmpeg to
+  reconnect (`--downloader-args "ffmpeg_i:-reconnect 1 ..."`, using only the
+  options your ffmpeg has). With that, the same drop gave a part
+  bit-identical to an undisturbed one. Afterwards the length of the file is
+  compared with what was asked for, and a short file prints the `--range`
+  that fetches the missing end.
+- Progress: ffmpeg gives a position rather than a percentage, so it is turned
+  into `13.3% of the part  4m 00s of 30m 00s  2.42x  ETA 10m 44s`, on one
+  line. ffmpeg's description of its input and output, and the one line it
+  prints per piece of YouTube's HLS streams, are kept out of the log.
+- A part starts at the keyframe before the time you asked for. An MP4 hides
+  those few seconds and the player starts at your time.
+
+**The chat replay as subtitles.** `chat` downloads a finished stream's chat
+replay (text only: about 8 MB for a busy 3½-hour stream) and turns it into a
+subtitle file with the video's name, so the player loads it by itself:
+
+```bash
+musictool chat URL                               # into your download folder
+musictool chat URL -o "D:\Videos" --lines 6 --hold 0
+musictool chat URL --format srt --side right --pad 50
+musictool chat URL --embed                       # also as a track, copied
+musictool chat "D:\Videos\T [id].live_chat.json"  # one you already have
+```
+
+- **How many messages at once: `--lines` (default 5).** A message stays on
+  screen until `--lines` newer messages are below it, then the next one
+  pushes it off the top. `--lines 1` behaves like ordinary subtitles, and 6
+  or more looks like the chat scrolling. **`--hold`** (default 15 s) is the
+  longest one message stays, so a quiet chat does not leave a line up for
+  minutes; `--hold 0` means a message stays until it is pushed off.
+- **Where: `--side right|left|center`, `--place bottom|middle|top`.** With
+  ASS (the default) the chat is a column (`--width`, % of the picture) on
+  that side, with names in bold and coloured by role (owner, moderator,
+  member) and the text on a see-through dark box (`--no-box` for outlined
+  text instead). This works in mpv, VLC, MPC-HC, PotPlayer and anything else
+  that uses libass. SRT uses `{\an3}`-style tags, which most players honour.
+  For one that does not, `--pad 50` pushes every line right with no-break
+  spaces: that gives a centred column on the right half (a subtitle file
+  cannot line up a left edge, because it does not know the font). VTT uses
+  cue positions (browsers, VLC).
+- **`--format ass|srt|vtt|txt`.** `txt` is a readable log, `[1:02:03] name:
+  message`, not a subtitle.
+- **Parts.** A video named `(from 1h00m00s)` gets the chat from 1:00:00 on,
+  starting at 0:00 of the file. Whatever was on screen at that moment stays
+  up as if it had been there all along. `--range` sets the part by hand and
+  `--offset 2.5` moves the chat later.
+- **Nothing is downloaded twice.** A `.live_chat.json` already in the folder
+  is used. The video is found by `[id]` in its name or in musictool's index.
+  A subtitle file musictool did not write is never overwritten (`NAME.chat.srt`
+  is used instead). One it wrote is replaced on the next run, so trying other
+  settings is just running it again.
+- **`--embed`** adds it to the video as a subtitle track named *Live chat*,
+  copied, not re-encoded, with a check for free space first. An `.mkv` is
+  updated in place, and a chat track from an earlier run is replaced rather
+  than doubled. An `.mp4` gets an `.mkv` copy beside it, because MP4 cannot
+  hold an ASS track and its own subtitle type loses the placement. The
+  `.mp4` is kept. The MP4's cover picture is left out of the `.mkv`: it would
+  become a second video track. In the MKV, the few seconds of picture before
+  a part's start become visible, and the chat and the sound both start after
+  them, together. A subtitle next to an `.mkv` like that is timed to the
+  sound as well.
+
+In the window this is all on the Live streams tab: **Only this part**,
+**Download this part** and the **Live chat replay as subtitles** box (see
+[The Live streams tab](#the-live-streams-tab)).
+
 ## Live download progress (why you used to see nothing)
 
 `musictool` previously captured yt-dlp's output and only printed it when the
@@ -1232,7 +1322,16 @@ The stream's link, the folder, an optional **Copy to watch goes to** folder
   reads the pieces into a copy, alongside the recording rather than queued
   behind it.
 - **Download the rest** — `live --resume`.
+- **Download this part** — `get --range` with the time range typed in **Only
+  this part** (e.g. `1:00:00-` for everything after the first hour). It uses
+  the picked streams if there are any.
 - **Open the copy** — plays the newest copy with the system's player.
+- **Live chat replay as subtitles** — Format, Messages at once, Longest on
+  screen, Side, Height, User names, SRT spaces, and *Also add it to the video
+  as a subtitle track*. **Get the chat** runs `chat` for the link into the
+  folder. A part downloaded with *Download this part* gets the chat of that
+  part from its name. With no video of it in the folder, the *Only this
+  part* field is used.
 
 Cookies, proxy and the JavaScript settings come from the Download tab, and
 the tab's fields come back next time.
@@ -1373,7 +1472,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1002 assertions, 0 failures**, with or without
+**Verified by running the code — 1061 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1423,6 +1522,16 @@ subcommand.
   errors. `musictool live --join` on a folder that `-N 4` left behind joined
   all 18 pieces and made an 18 s copy. The argv `get` builds for a live
   stream was parsed by yt-dlp's own option parser.
+- **Real YouTube, with the user's cookies** (2026-11-19, R0GdEkPZSvM, a
+  finished 3h39m stream): `get --range 1:00:00-1:00:30 --keep-video --quality
+  360` fetched exactly 30.02 s (vp9 + AAC from YouTube's HLS streams) as
+  `TGG - … [R0GdEkPZSvM] (1h00m00s-1h00m30s).mp4`. `chat URL --embed` then
+  downloaded the replay (6295 messages, 8.6 MB). It wrote the ASS from
+  1:00:00 and made the `.mkv` with the chat track, and its first cue starts
+  on the same millisecond as the sound. A frame rendered with the track shows
+  the chat as a column on the right of the real picture. Before the fix, the
+  `.mkv` had shown the chat 3.8 s early, because the picture starts at the
+  keyframe before the cut.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that
@@ -1437,9 +1546,10 @@ fake Windows profile tree (two browsers, different cookie timestamps -> picks
 the newer one).
 
 **Not verified:**
-- **Real downloads from YouTube, and the Quality / Audio tracks tabs on real
-  YouTube data.** YouTube refuses this cloud machine's address outright (see
-  above), so no video or audio stream could be fetched or listed. The format
+- **Real downloads from YouTube without cookies, and the Quality / Audio
+  tracks tabs on real YouTube data.** YouTube refuses this cloud machine's
+  address unless a login is sent (see above). With the user's cookies, one
+  short part and one chat replay were fetched (above), and nothing else. The format
   logic is tested against the shapes yt-dlp reports for YouTube, including a
   dubbed video, but a real dubbed video has not been loaded into the tab.
 - **A real YouTube live stream** -- for the same reason. yt-dlp's live

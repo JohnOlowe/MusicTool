@@ -53,6 +53,8 @@ HINTS = {
     "live_from_now": "a live stream is recorded from its start unless this is ticked",
     "exact": "needs one id per stream in the selector box (e.g. 299+140); "
              "refuses rather than take another stream",
+    "part": "a finished video only: 1:00:00- = from 1 hour to the end, "
+            "1:00:00-2:30:00, or -45:00; empty = all of it",
 }
 
 # ---------------------------------------------------------------------------
@@ -195,6 +197,7 @@ MODE_RESET = ("format_selector", "playlist_items", "quality")
 # Human wording for the generated widgets. Anything missing here falls back to
 # the dest with underscores turned into spaces, so a new flag is never nameless.
 LABELS = {
+    "part": "Only this part (start-end)",
     "allow_unsynced": "Accept plain (unsynced) lyrics if no synced found",
     "force": "Redo files that already have synced lyrics",
     "recursive": "Include subfolders",

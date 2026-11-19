@@ -367,6 +367,14 @@ def build_args(url, o):
         args += ["--wait-for-video", str(o["wait_for_video"])]
     if o.get("download_sections"):
         args += ["--download-sections", str(o["download_sections"])]
+        # A part is fetched by ffmpeg, not yt-dlp's own downloader, and ffmpeg
+        # gives up at the first dropped connection -- quietly: measured, a
+        # 15 s drop turned a 4-minute part into 6 seconds, "100%", exit code
+        # 0. With these it reconnects where it stopped (1, 3, 7, 15 s ...);
+        # a longer outage is caught afterwards (cli._download_part).
+        rc = ffmpeg_reconnect_args()
+        if rc:
+            args += ["--downloader-args", "ffmpeg_i:" + rc]
     args += ["--retries", str(o.get("retries", 5))]
     args += ["--fragment-retries", str(o.get("retries", 5))]
     # Without these a WiFi drop silently ruins a download made of pieces
@@ -429,6 +437,30 @@ def build_args(url, o):
     args += ["-P", o.get("output_dir") or "."]
     args.append(url)
     return args
+
+
+_RECONNECT = []
+
+
+def ffmpeg_reconnect_args():
+    """ffmpeg's reconnect options, as one string -- only the ones this ffmpeg
+    knows (an unknown option would stop every part download). Checked once."""
+    if not _RECONNECT:
+        want = ["reconnect", "reconnect_streamed", "reconnect_on_network_error",
+                "reconnect_delay_max"]
+        have = ""
+        try:
+            exe = shutil.which("ffmpeg")
+            if exe:
+                have = subprocess.run([exe, "-hide_banner", "-h", "protocol=http"],
+                                      capture_output=True, text=True, timeout=20,
+                                      errors="replace").stdout or ""
+        except Exception:                                   # noqa: BLE001
+            have = ""
+        opts = [w for w in want if re.search(rf"^\s*-{w}\b", have, re.M)]
+        val = {"reconnect_delay_max": "30"}
+        _RECONNECT.append(" ".join(f"-{w} {val.get(w, '1')}" for w in opts))
+    return _RECONNECT[0]
 
 
 def runtime_args(o):
@@ -622,7 +654,7 @@ def _error_text(segments):
     return text[-900:]
 
 
-def _make_on_line(log, tag="", tty=None, stats=None):
+def _make_on_line(log, tag="", tty=None, stats=None, span=None):
     """Forward readable lines to the log; send every event to the progress hook.
 
     The progress redraws (several a second, per stream) would flood the log,
@@ -636,6 +668,8 @@ def _make_on_line(log, tag="", tty=None, stats=None):
     `tag` marks every event with the download it came from, so several running
     at once can each have their own line in the UI instead of fighting over one.
     `stats` (a dict) collects what happened: "progress" once anything arrived.
+    `span`: the seconds of video being fetched when only a part is taken --
+    ffmpeg reports a position, not a percentage, and this turns it into one.
     """
     st = {"last_retry": 0.0, "hidden": 0, "drawn": 0, "last_draw": 0.0}
     stats = stats if stats is not None else {}
@@ -660,6 +694,14 @@ def _make_on_line(log, tag="", tty=None, stats=None):
         ev = progress.parse_ytdlp_line(seg)
         if ev is not None and tag:
             ev["tag"] = tag
+        if ev is not None and ev.get("pos") is not None and span:
+            ev["pct"] = min(100.0, 100.0 * ev["pos"] / span)
+            m = re.match(r"([\d.]+)x", ev.get("speed") or "")
+            if m and float(m.group(1)) > 0:
+                left = max(0.0, span - ev["pos"]) / float(m.group(1))
+                ev["eta"] = progress.fmt_seconds(left)
+        if ev is not None and ev["type"] == "noise":
+            return                    # ffmpeg describing its input/output
         progress.report(ev)
         kind = ev["type"] if ev else None
         if kind == "pct":
@@ -669,7 +711,16 @@ def _make_on_line(log, tag="", tty=None, stats=None):
                 if now - st["last_draw"] < 0.2:     # 5 redraws a second
                     return
                 st["last_draw"] = now
-                text = "    " + re.sub(r"\s+", " ", seg.strip())[:110]
+                if ev.get("pos") is not None and span:
+                    # ffmpeg's own line is frame=/q=/bitrate= noise to a reader
+                    text = (f"    {ev['pct']:5.1f}% of the part  "
+                            f"{progress.fmt_seconds(ev['pos'])} of "
+                            f"{progress.fmt_seconds(span)}"
+                            + (f"  {ev['got']}" if ev.get("got") else "")
+                            + (f"  {ev['speed']}" if ev.get("speed") else "")
+                            + (f"  ETA {ev['eta']}" if ev.get("eta") else ""))
+                else:
+                    text = "    " + re.sub(r"\s+", " ", seg.strip())[:110]
                 tty.write("\r" + text.ljust(st["drawn"]))
                 tty.flush()
                 st["drawn"] = max(len(text), 1)
@@ -739,8 +790,10 @@ def download(url, o, log=print, on_file=None, tag=""):
     log("  $ " + " ".join(_q(a) for a in args))
     sleeps = iter(net_sleeps(float(o.get("net_max_wait", 240))))
     stats = {}
+    span = o.get("section_span")
+    span = (span[1] - span[0]) if span and span[1] is not None else None
     on_line = _make_on_line(log, tag, tty=_tty_stream() if log is print else None,
-                            stats=stats)
+                            stats=stats, span=span)
     expired = 0
     while True:
         stats.clear()

@@ -162,6 +162,49 @@ the connection on cue:
   thumbnail embedding are ..."). So `--exact` uses mkv for a webm pair when
   the thumbnail is on, and turns the thumbnail off for a single webm stream.
 
+### Parts of a video, and the chat replay
+
+Read in yt-dlp 2026.10.26's source, then measured against a local server
+that drops the connection on cue and against R0GdEkPZSvM with cookies:
+
+- **`--download-sections` hands the download to ffmpeg.** With a section set,
+  yt-dlp picks `FFmpegFD` (any other downloader refuses: "This format cannot
+  be partially downloaded"). It runs `ffmpeg -ss START -t LEN -i URL -c copy`
+  with stderr passed through, so musictool sees ffmpeg's `time=` lines, not
+  yt-dlp's percentages. `duration` becomes end − start.
+- **ffmpeg stops quietly at a dropped connection.** Without reconnect options
+  a 15 s drop made a 4-minute part 6.03 s long, while yt-dlp printed
+  `[download] 100%` and exited 0 (ffmpeg: "Stream ends prematurely"). With
+  `--downloader-args "ffmpeg_i:-reconnect 1 -reconnect_streamed 1
+  -reconnect_on_network_error 1 -reconnect_delay_max 30"` the same drop gave
+  a part bit-identical to an undisturbed one. Only the options this ffmpeg
+  lists are passed (`ffmpeg -h protocol=http`), because an unknown option
+  would fail every part. The file's length is checked afterwards anyway.
+- **YouTube served the part from HLS** (itag 605 etc.,
+  `.../playlist/index.m3u8`). ffmpeg then logs one `[https @ 0x…] Opening
+  '…' for reading` line per piece. Lines from an ffmpeg component that do not
+  say something failed are dropped.
+- **A cut starts at the keyframe before it.** In the MP4 the extra seconds
+  have negative timestamps (−3.8 s on R0GdEkPZSvM at 1:00:00) and players
+  skip them. An MKV cannot store negative times, so the muxer shifts the
+  video. It shifts only packets after the first negative one it meets, so a
+  subtitle muxed beside it landed 3.8 s early in one run and right in
+  another. `embed` therefore shifts both inputs itself (`-itsoffset`), and
+  for a sidecar next to an MKV the chat is timed to the first audio packet
+  (`chat.first_times`).
+- **The chat replay is a "subtitle" called `live_chat`** (ext `json`, one
+  JSON object per line): `--skip-download --write-subs --sub-langs
+  live_chat`. For a finished stream `videoOffsetTimeMsec` is the time in
+  the video. Messages sent before the stream began have 0. While a stream is
+  live the offsets count from when the download started instead, so `chat`
+  is meant for finished streams.
+- **mpv loads a subtitle by itself** when its name is the video's exactly,
+  or the video's plus a language tag (`sub-auto=exact`, the default). That
+  is why the sidecar is `NAME.ass`, not `NAME.live_chat.ass`.
+- **SRT cannot carry a "written by musictool" mark** (no comments), so the
+  files it wrote are listed in `.musictool-chat.json` in the folder. ASS and
+  VTT carry a comment too. Only such files are ever replaced.
+
 ---
 
 ## Lyrics APIs, as seen live (2026-11-18)

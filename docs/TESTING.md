@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1002 assertions across 39 sections (plus 8b), 0 failures** — with or without
+**1061 assertions across 40 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -181,6 +181,25 @@ Proven by execution:
   stream; the Live streams tab's stream pickers produce `--exact -f 315+251`.
   The copy-only claim itself (packet checksums) was checked outside the
   suite against real yt-dlp; see README.
+- chat replay and parts (section 40), on a synthetic replay in yt-dlp's
+  shape (no real user's messages are committed): times (`60:00` is 60
+  minutes; `1:60:00` is refused) and ranges; loading text, emoji (character vs
+  a channel's `:name:`), Super Chat and roles, with placeholders, deleted
+  messages and a broken line left out; `windows` for lines 1 (one at a time),
+  3 (the 4th pushes the 1st off), hold 15 (a quiet chat clears) and hold 0,
+  a part carrying over what was on screen, and offset; the ASS column,
+  alignment and escaping, SRT `{\an3}`/pad/BOM, VTT positions, the TXT log;
+  finding the video by `[id]`, never overwriting someone else's subtitle,
+  replacing our own; `chat FILE.json` timing from the name, `--range`
+  overriding it; `chat URL` downloading only the chat and never twice
+  (fake yt-dlp); `--embed` making an mkv from an mp4 and replacing, not
+  doubling, the track; a cut MP4 (picture below zero) giving an mkv whose
+  chat starts at the cut, and a sidecar next to such an mkv timed to its
+  sound; `get --range` building `*3600-inf` / `*1800-3600` with the ffmpeg
+  reconnect args and the `(from 1h00m00s)` name, refusing past the end and on
+  a live stream; ffmpeg's status line becoming a percentage with time left,
+  and its chatter kept out of the log; a short part being caught; and the
+  Live streams tab's **Download this part** / **Get the chat** argv.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

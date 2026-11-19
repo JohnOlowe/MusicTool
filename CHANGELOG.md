@@ -8,6 +8,61 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — live chat replay as subtitles; only part of a video
+*2026-11-19 · 1061 assertions*
+
+Asked for, on R0GdEkPZSvM (a finished 3h39m stream with one hour already
+watched): the chat replay playing with the video, with several messages on
+screen at once, a settable count, on the right, in a chosen subtitle format,
+and a way to download only the rest of the stream.
+
+- **`musictool chat URL|FILE`** (15th command) downloads only the chat replay
+  (`--skip-download --write-subs --sub-langs live_chat`, never twice) and
+  writes a subtitle next to the matching video (found by `[id]` or the
+  index), with the video's name so players load it by themselves.
+  - `--lines N` (default 5): a message stays until N newer ones are below
+    it. 1 = ordinary subtitles; 6 = a scrolling chat.
+  - `--hold S` (default 15, 0 = until pushed off) is the longest a message
+    stays.
+  - `--side right|left|center` and `--place bottom|middle|top`. In ASS this
+    is a column (`--width`) of names coloured by role on a dark box; SRT
+    uses `{\anN}`, with `--pad` no-break spaces for players that ignore
+    it; VTT uses cue positions.
+  - `--format ass|srt|vtt|txt`, `--no-names`, `--no-box`, `--offset`.
+  - Only files musictool wrote are replaced (SRT ones listed in
+    `.musictool-chat.json`).
+  - `--embed` copies the chat in as a track named *Live chat*: an mkv is
+    updated in place (the old chat track is swapped, not doubled); an mp4
+    gets an mkv copy and is kept. The free space is checked first, and the
+    mp4's cover is left out (it would be a second video track).
+- **`get --range START-END`** takes only that part of a finished video
+  (`1:00:00-`, `1:00:00-2:30:00`, `-45:00`, `1h-2h30m`), saved as
+  `TITLE [id] (from 1h00m00s)`. `chat` reads that name and times the chat
+  from 1:00:00. A range on a live stream, or past the end, is refused before
+  downloading.
+  - ffmpeg fetches a part and used to stop quietly at a dropped connection:
+    a 15 s drop gave 6 s of a 4-minute part, "100%", exit 0. It now gets
+    reconnect options (only the ones it lists), the result is checked for
+    length, and a short file prints the `--range` for the missing end.
+  - ffmpeg's `time=` lines become the progress (`13.3% of the part … ETA`),
+    and its chatter is kept out of the log, including the one line per
+    piece of YouTube's HLS streams.
+- **A cut starts at the keyframe before it.** An MP4 hides those seconds;
+  in an MKV the chat had been 3.8 s early on the real stream. `embed` shifts
+  the video and the chat together, and a sidecar next to an MKV is timed to
+  its sound.
+- **Live streams tab:** an *Only this part* field, *Download this part*, and
+  a *Live chat replay as subtitles* box with format, messages at once,
+  longest on screen, side, height, names, SRT spaces, *add as a track* and
+  *Get the chat*. The fields are remembered. The Download tab gets *Only this
+  part* from the parser.
+- `util.parse_time` / `parse_range` / `part_label` / `clock`.
+- Verified with the maintainer's cookies on real YouTube: a 30 s part came
+  out at exactly 30.02 s, and `chat --embed` put the first cue on the same
+  millisecond as the sound (README, "Verified").
+- Tests: section 40 (59 checks), on a synthetic replay; the Live tab's entry
+  count; `tkstub` has `Spinbox`.
+
 ## `24d5a93` — exact streams, copied; one progress line; drops resume
 *2026-11-19 · 1002 assertions*
 

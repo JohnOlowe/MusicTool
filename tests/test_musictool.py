@@ -4519,8 +4519,9 @@ def _drain8():
 _nb8 = [w for w in _r8.walk() if isinstance(w, tkstub.Notebook)][0]
 _lt = _nb8.tab_for("Live streams")
 _le = [w for w in _lt.walk() if w.kind == "entry"]
+# link, folder, copy folder -- then the part, and the chat's hold and SRT pad
 check("the Live streams tab has the link, the folder and the copy folder",
-      len(_le) == 3, str(len(_le)))
+      len(_le) == 6, str(len(_le)))
 _gp8 = [w for w in _r8.walk() if isinstance(w, G.OptionsPane)
         and w.sub == "get"][0]
 _cfb8 = _gp8.vars["cookies_from_browser"].get()
@@ -4888,6 +4889,432 @@ try:
           and _val(_g9, "--format-selector") == "315+251", str(_g9))
 finally:
     G.cli_main = _cli9
+
+
+# ============ 40. live chat replay -> subtitles; only part of a video
+print("\n--- 40. chat replay as subtitles; get --range ---")
+from musictool import chat as CH  # noqa: E402
+from musictool import util as U40  # noqa: E402
+from musictool import cli as C40  # noqa: E402
+
+# --- times and ranges
+check("times: 1:00:00, 60:00, 90:00, 3600, 1h2m3s, 90m, 1.5h",
+      [U40.parse_time(x) for x in ("1:00:00", "60:00", "90:00", "3600",
+                                   "1h2m3s", "90m", "1.5h")]
+      == [3600, 3600, 5400, 3600, 3723, 5400, 5400])
+_bad40 = []
+for _x in ("1:60:00", "1:00:60", "abc", "", "-5"):
+    try:
+        U40.parse_time(_x)
+        _bad40.append(_x)
+    except ValueError:
+        pass
+check("...minutes or seconds of 60 and up inside h:mm:ss, and junk, refused",
+      not _bad40, str(_bad40))
+check("ranges: S-, S-E, -E, S-end",
+      U40.parse_range("1:00:00-") == (3600, None)
+      and U40.parse_range("1:00:00-2:30:00") == (3600, 9000)
+      and U40.parse_range("-45:00") == (0, 2700)
+      and U40.parse_range("1h-end") == (3600, None))
+_bad40 = []
+for _x in ("2:00:00-1:00:00", "1:00:00", "x-y"):
+    try:
+        U40.parse_range(_x)
+        _bad40.append(_x)
+    except ValueError:
+        pass
+check("...backwards, no dash, junk: refused", not _bad40, str(_bad40))
+check("part names: 'from 1h00m00s', '1h00m00s-2h30m00s'",
+      U40.part_label(3600) == "from 1h00m00s"
+      and U40.part_label(3600, 9000) == "1h00m00s-2h30m00s"
+      and U40.clock(3723) == "1:02:03")
+check("...read back from a file name",
+      CH.part_from_name("A [ID] (from 1h00m00s).mp4") == (3600, None)
+      and CH.part_from_name("A (1h00m00s-2h30m00s).mkv") == (3600, 9000)
+      and CH.part_from_name("A (live).mp4") is None)
+check("video ids from links, ids and replay names",
+      CH.video_id("https://www.youtube.com/live/R0GdEkPZSvM?si=x") == "R0GdEkPZSvM"
+      and CH.video_id("https://youtu.be/R0GdEkPZSvM") == "R0GdEkPZSvM"
+      and CH.video_id("https://www.youtube.com/watch?v=R0GdEkPZSvM&t=5")
+      == "R0GdEkPZSvM" and CH.video_id("R0GdEkPZSvM") == "R0GdEkPZSvM"
+      and CH.video_id("hello") is None
+      and CH.json_id("T [R0GdEkPZSvM].live_chat.json") == "R0GdEkPZSvM")
+
+# --- a chat replay in yt-dlp's shape (synthetic: no real user's messages)
+_CD = os.path.join(WORK, "chat40")
+shutil.rmtree(_CD, ignore_errors=True)
+os.makedirs(_CD)
+
+
+def _item40(ms, kind, body):
+    return json.dumps({"replayChatItemAction": {"actions": [
+        {"addChatItemAction": {"item": {kind: body}}}],
+        "videoOffsetTimeMsec": str(ms)}})
+
+
+def _txt40(ms, who, runs, mid, badges=None):
+    return _item40(ms, "liveChatTextMessageRenderer", {
+        "message": {"runs": runs}, "authorName": {"simpleText": who},
+        "id": mid, "authorBadges": badges or []})
+
+
+_MOD = [{"liveChatAuthorBadgeRenderer": {"icon": {"iconType": "MODERATOR"},
+                                         "tooltip": "Moderator"}}]
+_MEM = [{"liveChatAuthorBadgeRenderer": {"customThumbnail": {"thumbnails": []},
+                                         "tooltip": "Member (1 year)"}}]
+_JL = [
+    _txt40(0, "@early", [{"text": "before it starts"}], "m0"),
+    _txt40(10000, "@ann", [{"text": "hello {there}"}], "m1"),
+    _txt40(12000, "@bob", [{"text": "nice "}, {"emoji": {
+        "emojiId": "\U0001F525", "shortcuts": [":fire:"]}}, {"emoji": {
+        "emojiId": "UCx/abc", "shortcuts": [":chan-wave:"],
+        "isCustomEmoji": True}}], "m2", _MOD),
+    "{not json",
+    _txt40(14000, "@cat", [{"text": "  spaced\n  out  "}], "m3", _MEM),
+    _item40(15000, "liveChatPaidMessageRenderer", {
+        "message": {"runs": [{"text": "thanks"}]}, "authorName":
+        {"simpleText": "@dan"}, "purchaseAmountText": {"simpleText": "$5.00"},
+        "id": "m4"}),
+    _item40(16000, "liveChatPlaceholderItemRenderer", {"id": "m5"}),
+    _txt40(17000, "@eve", [{"text": "deleted later"}], "m6"),
+    json.dumps({"replayChatItemAction": {"actions": [
+        {"markChatItemAsDeletedAction": {"targetItemId": "m6"}}],
+        "videoOffsetTimeMsec": "18000"}}),
+    _txt40(40000, "@fay", [{"text": "much later"}], "m7"),
+]
+_CJ = os.path.join(_CD, "Stream [ABCDEFGHIJK].live_chat.json")
+open(_CJ, "w", encoding="utf-8").write("\n".join(_JL) + "\n")
+_M = CH.load(_CJ)
+check("load: text, emoji, Super Chat; placeholder, deleted and broken lines "
+      "left out",
+      [m.author for m in _M] == ["@early", "@ann", "@bob", "@cat", "@dan", "@fay"],
+      str([(m.t, m.author, m.text) for m in _M]))
+check("...a standard emoji is its character, a channel's own is its :name:",
+      _M[2].text == "nice \U0001F525:chan-wave:", _M[2].text)
+check("...roles from the badges; spaces and line breaks folded; amount kept",
+      _M[2].role == "moderator" and _M[3].role == "member"
+      and _M[3].text == "spaced out" and _M[4].paid == "$5.00", str(_M[2:5]))
+
+# --- how many are on screen (the message sent before the stream began is
+# left out here: it is the subject of the "part" check below)
+_M0, _M = _M, _M[1:]
+_W1 = CH.windows(_M, lines=1, hold=8, start=5)
+check("lines 1 = ordinary subtitles: one message at a time",
+      all(len(s) == 1 for _a, _b, s in _W1)
+      and [s[0].author for _a, _b, s in _W1] == ["@ann", "@bob", "@cat",
+                                                  "@dan", "@fay"], str(_W1))
+_W3 = CH.windows(_M, lines=3, hold=0, start=5)
+_seq = [[m.author for m in s] for _a, _b, s in _W3]
+check("lines 3: each message stays until 3 newer ones are below it",
+      _seq == [["@ann"], ["@ann", "@bob"], ["@ann", "@bob", "@cat"],
+               ["@bob", "@cat", "@dan"], ["@cat", "@dan", "@fay"]], str(_seq))
+check("...times are the video's, minus where your part starts",
+      abs(_W3[0][0] - 5.0) < 1e-6 and abs(_W3[1][0] - 7.0) < 1e-6, str(_W3[:2]))
+_W5 = CH.windows(_M, lines=5, hold=15, start=5)
+_lone = [s for _a, _b, s in _W5 if [m.author for m in s] == ["@fay"]]
+check("hold 15: a quiet chat clears -- the late message shows alone",
+      _lone and all(b - a <= 15 + 1e-6 for a, b, _s in _W5), str(_W5[-2:]))
+_W0 = CH.windows(_M, lines=6, hold=0, start=5)
+check("hold 0: nothing leaves until pushed off",
+      [m.author for m in _W0[-1][2]] == ["@ann", "@bob", "@cat", "@dan", "@fay"],
+      str(_W0[-1]))
+_Wp = CH.windows(_M0, lines=3, hold=8, start=13, end=30)
+check("a part from 0:13: what was on screen then is kept, nothing past its end",
+      [m.author for m in _Wp[0][2]] == ["@ann", "@bob"] and _Wp[0][0] == 0
+      and all(b <= 17 + 1e-6 for _a, b, _s in _Wp), str(_Wp))
+_Wo = CH.windows(_M, lines=1, hold=8, start=5, offset=2)
+check("offset moves the chat later", abs(_Wo[0][0] - 7.0) < 1e-6, str(_Wo[0]))
+
+# --- the formats
+_ass = CH.render(_M, "ass", lines=3, hold=15, start=5, side="right",
+                 place="bottom", title="T")
+_sty = [x for x in _ass.splitlines() if x.startswith("Style: Chat")][0]
+check("ASS: right + bottom = a column on the right (text left-aligned in it, "
+      "like a chat), on a dark box",
+      _sty.split(",")[18] == "1" and int(_sty.split(",")[19]) > 1000
+      and _sty.split(",")[15] == "3" and CH.MARK in _ass, _sty)
+check("...names bold in their colour, braces in messages harmless",
+      "{\\b1\\c&H" in _ass and "hello \uff5bthere\uff5d" in _ass, _ass[-400:])
+_lft = CH.render(_M, "ass", side="left", place="top")
+_sl = [x for x in _lft.splitlines() if x.startswith("Style: Chat")][0]
+check("...left + top = alignment 7", _sl.split(",")[18] == "7", _sl)
+_srt = CH.render(_M, "srt", lines=3, hold=15, start=5, side="right")
+check("SRT: numbered cues, {\\an3} for right/bottom, names in <b>",
+      _srt.startswith("1\n00:00:05,000 --> ") and "{\\an3}" in _srt
+      and "<b>@ann: </b>" in _srt, _srt[:200])
+_pad = CH.render(_M, "srt", lines=1, hold=8, start=5, pad=10, names=False)
+check("SRT pad: every line pushed right with no-break spaces",
+      "}" + "\u00a0" * 10 + "hello (there)" in _pad, repr(_pad[:120]))
+check("...SRT gets ( ) for braces: some players read { } as a style tag",
+      "{there}" not in _srt and "(there)" in _srt)
+_vtt = CH.render(_M, "vtt", lines=3, hold=15, start=5, side="right")
+check("VTT: a header and cue settings that place it right",
+      _vtt.startswith("WEBVTT") and "position:" in _vtt and "align:start" in _vtt
+      and "00:00:05.000 --> " in _vtt, _vtt[:200])
+_txt = CH.render(_M, "txt", start=5)
+check("TXT: one readable line per message, from the part's start",
+      "[0:00:05] @ann: hello {there}" in _txt and "@early" not in _txt,
+      _txt[:300])
+check("--no-names leaves the names out",
+      "@ann" not in CH.render(_M, "srt", names=False))
+
+# --- where it goes
+_V = os.path.join(_CD, "Chan - Stream [ABCDEFGHIJK] (from 0h00m05s).mp4")
+open(_V, "wb").write(b"not really a video")
+open(os.path.join(_CD, "Other [ZZZZZZZZZZZ].mp4"), "wb").write(b"x")
+check("finds the video by [id] in its name, and the replay",
+      CH.find_videos(_CD, "ABCDEFGHIJK") == [_V]
+      and CH.find_json(_CD, "ABCDEFGHIJK") == _CJ)
+open(os.path.join(_CD, "Other [ZZZZZZZZZZZ].srt"), "w").write("1\n")
+check("a subtitle that is not ours is never overwritten: NAME.chat.srt",
+      CH.sub_path(os.path.join(_CD, "Other [ZZZZZZZZZZZ].mp4"), "srt")
+      .endswith("Other [ZZZZZZZZZZZ].chat.srt"))
+
+# --- the CLI end to end, with the replay already in the folder
+_r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--format", "srt",
+                     "--lines", "2", "--hold", "3"], capture_output=True,
+                    text=True, env=ENV)
+_S = _V[:-4] + ".srt"
+_st = open(_S, encoding="utf-8-sig").read() if os.path.exists(_S) else ""
+check("chat FILE.json: a subtitle with the video's name, from the part in "
+      "its name (0:05)",
+      _r.returncode == 0 and _st.startswith("1\n00:00:05,000 --> ")
+      and "@early" not in _st, _r.stdout[-400:] + _r.stderr[-300:])
+check("...SRT saved with a byte-order mark (Windows players)",
+      open(_S, "rb").read(3) == b"\xef\xbb\xbf")
+_r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--format", "srt",
+                     "--lines", "1"], capture_output=True, text=True, env=ENV)
+_st2 = open(_S, encoding="utf-8-sig").read()
+check("...run again with other settings: our own file is replaced",
+      _r.returncode == 0 and _st2 != _st and not os.path.exists(_S[:-4]
+                                                                + ".chat.srt"),
+      _r.stdout[-300:])
+_r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "0:10-0:20",
+                     "--format", "txt"], capture_output=True, text=True, env=ENV)
+_tx = open(_V[:-4] + ".txt", encoding="utf-8").read()
+check("--range overrides the name: 0:10-0:20 only",
+      "[0:00:00] @ann" in _tx and "@fay" not in _tx, _tx[-300:])
+_r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "junk"],
+                    capture_output=True, text=True, env=ENV)
+check("...a range that makes no sense is refused (exit 2)",
+      _r.returncode == 2 and "--range" in _r.stdout, _r.stdout[-200:])
+
+# --- downloading the replay: once, never again
+_FB40 = os.path.join(WORK, "bin40")
+os.makedirs(_FB40, exist_ok=True)
+open(os.path.join(_FB40, "yt-dlp"), "w").write(r'''#!/usr/bin/env python3
+import json, os, shutil, sys
+a = sys.argv[1:]
+open(os.path.join(os.path.dirname(__file__), "argv.txt"), "a").write(json.dumps(a) + "\n")
+url = a[-1]
+if "nochat" in url:
+    print("[info] There are no subtitles for the requested languages")
+    sys.exit(0)
+out = a[a.index("-o") + 1].replace("%(title)s", "Stream").replace(
+    "%(id)s", "ABCDEFGHIJK").replace("%(ext)s", "live_chat.json")
+shutil.copy(os.environ["CHAT40"], out)
+print("ABCDEFGHIJK")
+''')
+os.chmod(os.path.join(_FB40, "yt-dlp"), 0o755)
+_ENV40 = dict(ENV, PATH=_FB40 + os.pathsep + ENV["PATH"], CHAT40=_CJ)
+_D40 = os.path.join(WORK, "chat40dl")
+shutil.rmtree(_D40, ignore_errors=True)
+os.makedirs(_D40)
+open(os.path.join(_D40, "Chan - Stream [ABCDEFGHIJK].mkv"), "wb").write(b"x")
+_r = subprocess.run([sys.executable, ENTRY, "chat",
+                     "https://youtu.be/ABCDEFGHIJK", "-o", _D40,
+                     "--cookies-from-browser", "off"], capture_output=True,
+                    text=True, env=_ENV40)
+_a40 = [json.loads(x) for x in open(os.path.join(_FB40, "argv.txt"))]
+check("chat URL: downloads only the chat (--skip-download, live_chat)",
+      _r.returncode == 0 and "--skip-download" in _a40[-1]
+      and _val(_a40[-1], "--sub-langs") == "live_chat"
+      and os.path.exists(os.path.join(_D40, "Chan - Stream [ABCDEFGHIJK].ass")),
+      _r.stdout[-400:] + _r.stderr[-300:])
+_r = subprocess.run([sys.executable, ENTRY, "chat",
+                     "https://youtu.be/ABCDEFGHIJK", "-o", _D40,
+                     "--cookies-from-browser", "off"], capture_output=True,
+                    text=True, env=_ENV40)
+check("...a second time it uses the file it has -- nothing downloaded again",
+      _r.returncode == 0 and len(open(os.path.join(_FB40, "argv.txt"))
+                                 .readlines()) == 1
+      and "not downloading it again" in _r.stdout, _r.stdout[-300:])
+_r = subprocess.run([sys.executable, ENTRY, "chat", "https://youtu.be/nochat00000",
+                     "-o", _D40, "--cookies-from-browser", "off"],
+                    capture_output=True, text=True, env=_ENV40)
+check("...a video with no chat replay says so (exit 1)",
+      _r.returncode == 1 and "no chat replay" in _r.stdout, _r.stdout[-300:])
+
+# --- added as a track, copied (needs a real ffmpeg)
+_HF40 = bool(shutil.which("ffmpeg", path=ENV["PATH"]))
+_EV = os.path.join(_CD, "Clip [ABCDEFGHIJK].mp4")
+if _HF40:
+    subprocess.run([FF, "-hide_banner", "-loglevel", "error", "-y", "-f",
+                    "lavfi", "-i", "testsrc=size=160x90:rate=10:duration=30",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", _EV],
+                   capture_output=True)
+    if os.path.exists(_EV):
+        _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--video", _EV,
+                             "--embed"], capture_output=True, text=True, env=ENV)
+        _mk = _EV[:-4] + ".mkv"
+        _ss = CH._streams(_mk) if os.path.exists(_mk) else []
+        check("--embed on an .mp4: an .mkv copy with the chat track; the .mp4 "
+              "stays",
+              _r.returncode == 0 and os.path.exists(_EV)
+              and [s[1] for s in _ss] == ["video", "subtitle"]
+              and _ss[1][2] == CH.TRACK_TITLE, _r.stdout[-400:] + str(_ss))
+        _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--video", _mk,
+                             "--embed", "--format", "srt"], capture_output=True,
+                            text=True, env=ENV)
+        _ss = CH._streams(_mk)
+        check("...again on the .mkv: the chat track is replaced, not doubled",
+              _r.returncode == 0 and [s[1] for s in _ss] == ["video", "subtitle"],
+              _r.stdout[-400:] + str(_ss))
+        check("...the subtitle file is not left beside it as well",
+              not os.path.exists(_mk[:-4] + ".srt"))
+    # a part cut from the middle starts at the keyframe before the cut: in an
+    # MP4 the extra seconds sit below zero, in an MKV the sound starts late
+    _SRC = os.path.join(_CD, "src.mp4")
+    subprocess.run([FF, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", "testsrc=size=160x90:rate=10:duration=30", "-f", "lavfi",
+                    "-i", "sine=duration=30", "-c:v", "libx264", "-g", "100",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", _SRC],
+                   capture_output=True)
+    _CUT = os.path.join(_CD, "Cut [ABCDEFGHIJK] (from 0h00m15s).mp4")
+    subprocess.run([FF, "-hide_banner", "-loglevel", "error", "-y", "-ss", "15",
+                    "-i", _SRC, "-c", "copy", _CUT], capture_output=True)
+    _lo, _sn = CH.first_times(_CUT)
+    check("a cut MP4: the picture starts below zero (the keyframe before the cut)",
+          _lo is not None and _lo < -4 and _sn is not None and _sn > _lo + 1,
+          str((_lo, _sn)))
+    _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--video", _CUT,
+                         "--embed", "--hold", "0"], capture_output=True,
+                        text=True, env=ENV)
+    _ck = _CUT[:-4] + ".mkv"
+
+    def _first40(m):
+        out = subprocess.run([FF, "-v", "error", "-i", _ck, "-map", m, "-c",
+                              "copy", "-f", "framemd5", "-"],
+                             capture_output=True, text=True).stdout
+        row = [x for x in out.splitlines() if x and not x.startswith("#")][0]
+        return int(row.split(",")[2])
+    _fa, _fs = (_first40("0:a:0"), _first40("0:s:0")) if os.path.exists(_ck) \
+        else (0, 99999)
+    check("...its .mkv copy: the chat starts at the cut, not seconds early",
+          _r.returncode == 0 and _fa > 1000 and abs(_fs - round(-_lo * 1000)) <= 60,
+          str((_fa, _fs)) + _r.stdout[-300:])
+    _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--video", _ck,
+                         "--format", "srt", "--hold", "0"], capture_output=True,
+                        text=True, env=ENV)
+    _sk = open(_ck[:-4] + ".srt", encoding="utf-8-sig").read() \
+        if os.path.exists(_ck[:-4] + ".srt") else ""
+    check("...a subtitle beside that .mkv is timed to its sound as well",
+          "the chat is timed to the sound" in _r.stdout
+          and _sk.startswith("1\n00:00:0") and not _sk.startswith(
+              "1\n00:00:00,000"), _sk[:80] + _r.stdout[-300:])
+
+# --- get --range: only the part, with a name chat can read
+_r = run38("get", "https://youtu.be/vod-LIVEID", "--keep-video", "--range",
+           "1:00:00-", "-o", _GD)
+_d = (_dl38() or [[]])[-1]
+if _HF40:
+    check("get --range 1:00:00-: --download-sections from 3600 to the end",
+          _val(_d, "--download-sections") == "*3600-inf"
+          and "--live-from-start" not in _d, _r.stdout[-500:] + str(_d))
+    check("...ffmpeg told to reconnect after a drop (it stops quietly otherwise)",
+          str(_val(_d, "--downloader-args")).startswith("ffmpeg_i:-reconnect 1"),
+          str(_val(_d, "--downloader-args")))
+    check("...saved as 'NAME [id] (from 1h00m00s)', how long it is said first",
+          str(_val(_d, "-o")).endswith(" [%(id)s] (from 1h00m00s).%(ext)s")
+          and "1:00:00 of video" in _r.stdout, str(_val(_d, "-o")))
+    _r = run38("get", "https://youtu.be/vod-LIVEID", "--keep-video", "--range",
+               "30:00-1:00:00", "-o", _GD)
+    _d = (_dl38() or [[]])[-1]
+    check("get --range 30:00-1:00:00 -> *1800-3600, '(0h30m00s-1h00m00s)'",
+          _val(_d, "--download-sections") == "*1800-3600"
+          and "(0h30m00s-1h00m00s)" in str(_val(_d, "-o")), str(_d))
+_r = run38("get", "https://youtu.be/vod-LIVEID", "--range", "3:00:00-",
+           "-o", _GD)
+check("get --range past the end is refused before downloading",
+      "only 2:00:00 long" in _r.stdout and not _dl38(), _r.stdout[-300:])
+_r = run38("get", _URL, "--keep-video", "--range", "1:00:00-", "-o", _GD)
+check("get --range on a stream that is still live is refused",
+      "still live" in _r.stdout and not _dl38(), _r.stdout[-300:])
+
+# ffmpeg's status lines (a part is fetched by ffmpeg) -> the progress bar
+_ev = P39.parse_ytdlp_line("frame= 7200 fps= 73 q=-1.0 size=   10897KiB "
+                           "time=00:04:00.00 bitrate= 371.9kbits/s speed=2.42x")
+check("ffmpeg's status line is progress: position, size, speed",
+      _ev and _ev["type"] == "pct" and _ev["pos"] == 240 and
+      _ev["speed"] == "2.42x", str(_ev))
+check("...its screenful about the input and output is not logged",
+      P39.parse_ytdlp_line("  Stream #0:0 -> #0:0 (copy)")["type"] == "noise"
+      and P39.parse_ytdlp_line("Input #0, mov,mp4, from 'x':")["type"] == "noise"
+      and P39.parse_ytdlp_line("[download] Destination: a.mp4")["type"] == "file")
+_evs = []
+P39.set_hook(_evs.append)
+try:
+    download._make_on_line(lambda m: None, span=480.0)(
+        "size=  2048KiB time=00:02:00.00 bitrate= 1kbits/s speed=2.00x")
+finally:
+    P39.set_hook(None)
+check("...turned into a percentage of the part, with a time left",
+      _evs and _evs[-1]["pct"] == 25.0 and _evs[-1]["eta"], str(_evs[-1:]))
+_said = []
+check("a part that came down short is caught (a WiFi drop ffmpeg hid)",
+      not os.path.exists(_EV) or (C40._check_part(_EV, (3600, 3900), _said.append)
+                                  is False and "--range 3625-3900" in _said[0]),
+      str(_said))
+
+# --- the Live streams tab: part and chat
+tkstub.reset()
+G.run()
+_r40 = tkstub.ROOTS[-1]
+_lt40 = [w for w in _r40.walk() if isinstance(w, tkstub.Notebook)][0].tab_for(
+    "Live streams")
+_le40 = [w for w in _lt40.walk() if w.kind == "entry"]
+_A40, _cli40 = [], G.cli_main
+G.cli_main = lambda argv: (_A40.append(list(argv)), 0)[1]
+
+
+def _drain40():
+    todo, _r40.pending[:] = list(_r40.pending), []
+    for f in todo:
+        f()
+
+
+try:
+    _le40[0].options["textvariable"].set("https://youtu.be/ABCDEFGHIJK")
+    _le40[1].options["textvariable"].set(_CD)
+    _le40[3].options["textvariable"].set("1:00:00-")
+    _qbtn(_lt40, "Download this part").invoke()
+    _drain40()
+    check("'Download this part' -> get --range, the video, no lyrics",
+          _A40 and _A40[-1][0] == "get" and _val(_A40[-1], "--range") == "1:00:00-"
+          and "--keep-video" in _A40[-1] and "--no-lyrics" in _A40[-1],
+          str(_A40[-1:]))
+    _qbtn(_lt40, "Get the chat").invoke()
+    _drain40()
+    _c40 = _A40[-1]
+    check("'Get the chat' -> chat URL with the format, lines, hold and side",
+          _c40[:2] == ["chat", "https://youtu.be/ABCDEFGHIJK"]
+          and _val(_c40, "--lines") == "5" and _val(_c40, "--hold") == "15"
+          and _val(_c40, "--side") == "right" and _val(_c40, "--format") == "ass"
+          and _val(_c40, "-o") == _CD, str(_c40))
+    check("...with a video of it in the folder the part comes from its name",
+          "--range" not in _c40, str(_c40))
+    _le40[1].options["textvariable"].set(_D40 + "-none")
+    _qbtn(_lt40, "Get the chat").invoke()
+    _drain40()
+    check("...with none, the part field is used",
+          _val(_A40[-1], "--range") == "1:00:00-", str(_A40[-1]))
+    _n40 = len(_A40)
+    _le40[3].options["textvariable"].set("rubbish")
+    _qbtn(_lt40, "Download this part").invoke()
+    _drain40()
+    check("a part that makes no sense runs nothing", len(_A40) == _n40)
+finally:
+    G.cli_main = _cli40
 
 
 srv.shutdown()

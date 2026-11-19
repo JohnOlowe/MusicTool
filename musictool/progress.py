@@ -51,9 +51,32 @@ STREAM_RE = re.compile(r"^(\d+):\s+(?=\[)")
 RETRY_RE = re.compile(r"Got error:.*?(?:Retrying(?: fragment (\d+))? \((\d+)/(\d+)\)|"
                       r"Giving up after (\d+) retries|$)", re.IGNORECASE)
 # ...and between attempts, one of these per worker
-SLEEP_RE = re.compile(r"^Sleeping ([\d.]+) seconds", re.IGNORECASE)
+SLEEP_RE = re.compile(r"(?:^|\] )Sleeping ([\d.]+) seconds", re.IGNORECASE)
 SKIP_RE = re.compile(r"Skipping fragment (\d+)", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Part of a video (--download-sections) is fetched by ffmpeg, whose own
+# status line comes through instead, twice a second:
+#   frame= 7200 fps= 73 q=-1.0 size=  10897KiB time=00:04:00.00 bitrate=...
+#   size=    2048KiB time=00:01:02.00 bitrate= 270.6kbits/s speed=2.42x
+FF_STAT_RE = re.compile(r"^(?:frame=\s*\d+\s.*?)?L?size=\s*(\S+)\s+time=\s*"
+                        r"(-?\d+):(\d\d):(\d\d(?:\.\d+)?)")
+FF_SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
+# ...its description of the input and output -- a screenful per part
+FF_NOISE_RE = re.compile(
+    r"^(?:Input #\d|Output #\d|Stream mapping:|Press \[q\]|\s+(?:Metadata:|"
+    r"Duration:|Stream #|Chapters?:|Chapter #|Side data:|[\w ]+\s*:\s)|"
+    r"\[out#\d+/\w+ @ [^\]]*\] video:)")
+# ...its chatter, one line per piece fetched ("[https @ 0x55..] Opening
+# 'https://...' for reading", hundreds of them for YouTube's HLS streams) --
+# anything from an ffmpeg component that does not say something went wrong
+FF_CTX_RE = re.compile(r"^\[[\w#/,.:-]+ @ (?:0x)?[0-9a-fA-F]+\]")
+FF_BAD_RE = re.compile(r"error|fail|invalid|reconnect|prematurely|refused|"
+                       r"timed? ?out|denied|forbidden|\b[45]\d\d\b", re.IGNORECASE)
+FF_REPEAT_RE = re.compile(r"^\s*Last message repeated \d+ times?")
+# ...and a dropped connection, with -reconnect (see download.build_args)
+FF_RETRY_RE = re.compile(r"^\[(?:https?|tcp|tls) @ [^\]]*\]\s*(?:Will reconnect at|"
+                         r"Stream ends prematurely|Error reading HTTP response|"
+                         r"Connection to .* failed)", re.IGNORECASE)
 
 
 def strip_ansi(line):
@@ -72,9 +95,14 @@ def unglue(line):
 def parse_ytdlp_line(line):
     """Turn one yt-dlp line/segment into an event dict, or None if boring.
     An ERROR line is never an event: it is for the log."""
-    s = unglue(strip_ansi(line or "")).strip()
+    raw = unglue(strip_ansi(line or ""))
+    s = raw.strip()
     if not s or s.startswith("ERROR:"):
         return None
+    if FF_NOISE_RE.search(raw.rstrip()):         # (indentation matters here)
+        return {"type": "noise"}
+    if FF_REPEAT_RE.search(s) or (FF_CTX_RE.search(s) and not FF_BAD_RE.search(s)):
+        return {"type": "noise"}
     stream = None
     m = STREAM_RE.match(s)
     if m:
@@ -87,6 +115,18 @@ def parse_ytdlp_line(line):
 
 
 def _parse(s):
+    m = FF_STAT_RE.search(s)
+    if m:
+        pos = int(m.group(2)) * 3600 + int(m.group(3)) * 60 + float(m.group(4))
+        sp = FF_SPEED_RE.search(s)
+        size = m.group(1)
+        return {"type": "pct", "pct": None, "got": "" if size in ("N/A", "0KiB")
+                else size.replace("KiB", " KiB").replace("MiB", " MiB"),
+                "size": "", "speed": (sp.group(1) + "x") if sp else "",
+                "eta": "", "elapsed": "", "pos": max(0.0, pos)}
+    if FF_RETRY_RE.search(s):
+        return {"type": "retry", "k": None, "n": None, "frag": None,
+                "gave_up": False, "msg": s}
     m = SLEEP_RE.search(s)
     if m:
         return {"type": "retry", "k": None, "n": None, "sleep": float(m.group(1)),

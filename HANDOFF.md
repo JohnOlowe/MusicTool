@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1002 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1061 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,22 +115,23 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1445   argparse + every cmd_* handler
-│   ├── gui.py         2434   tkinter GUI, 9 tabs
-│   ├── uicmd.py        669   parser -> widget specs, build_argv, intent modes
+│   ├── cli.py         1611   argparse + every cmd_* handler
+│   ├── gui.py         2590   tkinter GUI, 9 tabs
+│   ├── uicmd.py        672   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     797   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── download.py     850   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         985   live streams: plan, scan, join, watch copy, resume
-│   ├── util.py         553   classify, detect_browser, js_runtime, have_ffmpeg
+│   ├── chat.py         870   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
+│   ├── util.py         610   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
-│   ├── progress.py     391   yt-dlp line parsing (per stream) + batch State
+│   ├── progress.py     431   yt-dlp + ffmpeg line parsing (per stream) + batch State
 │   ├── tags.py         143   mutagen tag + .lrc handling
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py        82   cooperative stop
 ├── tests/
-│   ├── test_musictool.py 4896   39 sections (+8b), 1002 assertions
-│   └── tkstub.py          723   headless tkinter stub
+│   ├── test_musictool.py 5323   40 sections (+8b), 1061 assertions
+│   └── tkstub.py          728   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
 │   ├── DECISIONS.md       verified facts about yt-dlp and ffmpeg, and the traps
@@ -145,8 +146,9 @@ MusicTool paths.
 
 ### Commands
 
-`get` · `check` · `formats` · `live` · `lyrics` · `scan` · `duplicates`(`dupes`) ·
-`extract` · `embed` · `providers` · `config` · `relang` · `doctor` · `gui`
+`get` · `check` · `formats` · `live` · `chat` · `lyrics` · `scan` ·
+`duplicates`(`dupes`) · `extract` · `embed` · `providers` · `config` · `relang` ·
+`doctor` · `gui`
 
 Two that are easy to get wrong:
 
@@ -178,6 +180,24 @@ its id.
 a missing id or a selector yt-dlp could choose from is refused, video+audio
 are merged by copy into mp4/webm/mkv, audio alone keeps its codec
 (`--audio-format best`). See README, "Exactly the streams you chose".
+
+`get --range 1:00:00-` takes only that part of a finished video
+(`--download-sections` plus ffmpeg reconnect options, because ffmpeg otherwise
+stops quietly at a drop). The file is named `TITLE [id] (from 1h00m00s)`, and
+its length is checked afterwards.
+
+```
+chat URL|FILE [-o DIR] [--video FILE] [--format ass|srt|vtt|txt] [--lines 5]
+     [--hold 15] [--side right|left|center] [--place bottom|middle|top]
+     [--width 32] [--wrap 40] [--pad N] [--no-names] [--no-box]
+     [--range S-E] [--offset S] [--embed] [--cookies ...]
+```
+A finished stream's chat replay becomes a subtitle beside the matching video
+(found by `[id]` or by the index), timed to the part named in the file. A
+message stays until `--lines` newer ones are below it, or for at most
+`--hold` s. `--embed` copies it in as a track: an mkv is updated in place, an
+mp4 gets an mkv copy. See README, "Only part of a video, and the live chat as
+subtitles".
 
 ---
 
@@ -286,13 +306,16 @@ Read `speed=X.XXx`, divide 20 by it.
   and command wiring but not rendering. Scroll feel, actual clipping and real
   window resizing are unverified.
 - **A real download.** Every download test uses a fake `yt-dlp` on `PATH`.
+  By hand, with the maintainer's cookies, one 30 s part of R0GdEkPZSvM
+  (`get --range`) and its chat replay (`chat --embed`) were fetched from
+  YouTube on 2026-11-19, and both worked. Nothing else was fetched.
 - **A real YouTube live stream.** The live handling was driven through the
   real yt-dlp downloader with a local live-style stream (README, "Verified"),
   never against YouTube, and the Windows file locks it waits out were
   simulated. The same goes for the network-drop handling and `--exact`: they
   were run through real yt-dlp against a local server that drops the
-  connection on cue; with the maintainer's cookies only the format list of
-  R0GdEkPZSvM was read from YouTube, nothing was downloaded from it.
+  connection on cue. The only things downloaded from YouTube are the part and
+  the chat above.
 - **Live lyrics providers.** Tests use a local HTTP server replaying the
   documented response shapes.
 - **Cookie extraction** from the maintainer's Chrome/Edge — never tested on
@@ -309,7 +332,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1002 assertions.
+Nothing is half-finished — `main` is green at 1061 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

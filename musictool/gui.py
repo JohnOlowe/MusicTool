@@ -29,6 +29,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from . import cancel
+from . import chat
 from . import config as configmod
 from . import download
 from . import formats
@@ -36,6 +37,7 @@ from . import live
 from . import progress
 from . import uicmd
 from .cli import build_parser, main as cli_main
+from .util import parse_range
 
 BOX_ON, BOX_OFF = "[x]", "[ ]"        # ASCII: renders in every Tk font
 WHEEL = ("<MouseWheel>", "<Button-4>", "<Button-5>")   # Windows/mac, then X11
@@ -2096,6 +2098,16 @@ def run():
         ids = [str(r["id"]) for r in (v, a) if r is not None]
         return "+".join(ids)
 
+    # Only part of a finished stream: e.g. the hours not watched yet
+    _lp = ttk.Frame(lbody)
+    _lp.pack(fill="x", padx=8, pady=(6, 0))
+    ttk.Label(_lp, text="Only this part:").pack(side="left")
+    lpart = tk.StringVar(value=str(EXTRA.get("live_part") or ""))
+    ttk.Entry(_lp, textvariable=lpart, width=22).pack(side="left", padx=6)
+    ttk.Label(_lp, foreground="#888", text=(
+        "for a finished stream: 1:00:00- = from 1 hour to the end, "
+        "1:00:00-2:30:00, -45:00 = the first 45 minutes")).pack(side="left")
+
     _lb = ttk.Frame(lbody)
     _lb.pack(fill="x", padx=8, pady=6)
     blrec = ttk.Button(_lb, text="Record from the start",
@@ -2111,14 +2123,76 @@ def run():
     blrest = ttk.Button(_lb, text="Download the rest",
                         command=lambda: l_resume())
     blrest.pack(side="left", padx=4)
+    blpart = ttk.Button(_lb, text="Download this part",
+                        command=lambda: l_part())
+    blpart.pack(side="left", padx=4)
     ttk.Button(_lb, text="Open the copy",
                command=lambda: l_open()).pack(side="left", padx=4)
-    run_buttons.extend([blstat, blrec, bllook, blrest])
+    run_buttons.extend([blstat, blrec, bllook, blrest, blpart])
 
     linfo = tk.StringVar(value="Paste the stream's link, then press "
                                "\u201cRecord from the start\u201d.")
     ttk.Label(lbody, textvariable=linfo, foreground="#06a", wraplength=980,
               justify="left").pack(anchor="w", padx=8, pady=(2, 4))
+
+    # The chat replay of a finished stream, as subtitles beside the video
+    chf = ttk.LabelFrame(lbody, text="Live chat replay as subtitles")
+    chf.pack(fill="x", padx=8, pady=(2, 6))
+    _c1 = ttk.Frame(chf)
+    _c1.pack(fill="x", padx=6, pady=(4, 2))
+    cfmt = tk.StringVar(value=str(EXTRA.get("chat_format") or "ass"))
+    clines = tk.StringVar(value=str(EXTRA.get("chat_lines") or "5"))
+    chold = tk.StringVar(value=str(EXTRA.get("chat_hold") if EXTRA.get(
+        "chat_hold") not in (None, "") else "15"))
+    cside = tk.StringVar(value=str(EXTRA.get("chat_side") or "right"))
+    cplace = tk.StringVar(value=str(EXTRA.get("chat_place") or "bottom"))
+    cpad = tk.StringVar(value=str(EXTRA.get("chat_pad") or "0"))
+    cnames = tk.BooleanVar(value=EXTRA.get("chat_names") is not False)
+    cembed = tk.BooleanVar(value=bool(EXTRA.get("chat_embed")))
+    for label, var, kind, vals, w in (
+            ("Format:", cfmt, "combo", chat.FORMATS, 6),
+            ("Messages at once:", clines, "spin", (1, 30), 4),
+            ("Longest on screen (s, 0 = no limit):", chold, "entry", None, 5),
+            ("Side:", cside, "combo", chat.SIDES, 7),
+            ("Height:", cplace, "combo", chat.PLACES, 7)):
+        ttk.Label(_c1, text=label).pack(side="left", padx=(0, 3))
+        if kind == "combo":
+            cb = ttk.Combobox(_c1, textvariable=var, values=list(vals),
+                              state="readonly", width=w)
+            cb.bind("<<ComboboxSelected>>", lambda _e: remember_soon())
+            cb.pack(side="left", padx=(0, 10))
+        elif kind == "spin":
+            ttk.Spinbox(_c1, textvariable=var, from_=vals[0], to=vals[1],
+                        width=w).pack(side="left", padx=(0, 10))
+        else:
+            ttk.Entry(_c1, textvariable=var, width=w).pack(side="left",
+                                                           padx=(0, 10))
+    _c2 = ttk.Frame(chf)
+    _c2.pack(fill="x", padx=6, pady=2)
+    ttk.Checkbutton(_c2, text="User names", variable=cnames,
+                    command=lambda: remember_soon()).pack(side="left")
+    ttk.Checkbutton(_c2, text="Also add it to the video as a subtitle track "
+                              "(copied, nothing re-encoded)", variable=cembed,
+                    command=lambda: remember_soon()).pack(side="left", padx=10)
+    ttk.Label(_c2, text="SRT spaces:").pack(side="left", padx=(6, 3))
+    ttk.Entry(_c2, textvariable=cpad, width=4).pack(side="left")
+    bchat = ttk.Button(_c2, text="Get the chat", command=lambda: l_chat())
+    bchat.pack(side="right")
+    run_buttons.append(bchat)
+    ttk.Label(chf, foreground="#555", wraplength=960, justify="left", text=(
+        "Downloads only the chat (a few MB) and saves it next to the video "
+        "with the same name, so the player shows it like subtitles. A "
+        "message stays until \u201cMessages at once\u201d newer ones are "
+        "below it: 1 is like normal subtitles, 6 looks like the chat "
+        "scrolling. A part made with \u201cDownload this part\u201d gets "
+        "the chat of that part. ASS keeps the side and colours in every "
+        "player; SRT plays everywhere (SRT spaces push it right in players "
+        "that ignore the side, try 40-60); TXT is a readable log. Adding it "
+        "as a track: an .mkv is updated, an .mp4 gets an .mkv copy beside "
+        "it.")).pack(anchor="w", padx=6, pady=(2, 6))
+    live_state.update(live_part=lpart, chat_format=cfmt, chat_lines=clines,
+                      chat_hold=chold, chat_side=cside, chat_place=cplace,
+                      chat_pad=cpad, chat_names=cnames, chat_embed=cembed)
     ttk.Label(lbody, foreground="#555", wraplength=980, justify="left", text=(
         "\u2022 Record from the start: from the stream's first minute, even "
         "if it began hours ago. Video and audio are added to the file as they "
@@ -2131,6 +2205,9 @@ def run():
         "has just ended it carries on with the same pieces -- nothing already "
         "here is fetched again. Once it is a normal video it fetches only "
         "the part you are missing.\n"
+        "\u2022 Download this part: only the time range above, of a stream "
+        "that has finished -- e.g. the hours you have not watched yet. Saved "
+        "as \u201cTITLE [id] (from 1h00m00s)\u201d.\n"
         "\u2022 Cookies, proxy and the JavaScript settings come from the "
         "Download tab (More options).")).pack(anchor="w", padx=8,
                                                pady=(0, 8))
@@ -2245,6 +2322,85 @@ def run():
         if u and d:
             remember(url=u, path=d)
             do_argv(["live", d, "--resume", u] + l_net_args(), after=l_after)
+
+    def l_part_value():
+        """The part field, checked. -> "" (all of it), the text, or None."""
+        t = lpart.get().strip()
+        if not t:
+            return ""
+        try:
+            parse_range(t)
+        except ValueError as e:
+            messagebox.showwarning("musictool", f"Only this part: {e}\n\n"
+                                   "e.g. 1:00:00- (from 1 hour to the end) or "
+                                   "1:00:00-2:30:00")
+            return None
+        return t
+
+    def l_part():
+        u = l_url()
+        if not u:
+            return
+        t = l_part_value()
+        if t is None:
+            return
+        if not t:
+            messagebox.showinfo("musictool", "Type the part you want in "
+                                "\u201cOnly this part\u201d first, e.g. "
+                                "1:00:00- for everything after the first hour.")
+            return
+        d = l_dir(False)
+        vals = dict(panes["get"].values())
+        vals.update(keep_video=not laudio.get(), no_lyrics=True,
+                    no_playlist=True, yes_playlist=False, lyrics_only=False,
+                    output_dir=d, part=t)
+        sel = l_selector()
+        if sel:
+            vals.update(format_selector=sel, exact=True, quality="",
+                        max_size="")
+        remember(url=u, path=d)
+        remember_soon()
+        linfo.set(f"downloading {t} of it")
+        do_argv(uicmd.build_argv("get", vals, positionals=[u],
+                                 parser=build_parser()), after=l_after)
+
+    def l_chat():
+        u = l_url()
+        if not u:
+            return
+        d = l_dir(False)
+        argv = ["chat", u, "-o", d, "--format", cfmt.get() or "ass"]
+        for flag, var, cast in (("--lines", clines, int),
+                                ("--hold", chold, float),
+                                ("--pad", cpad, int)):
+            t = var.get().strip()
+            if not t:
+                continue
+            try:
+                cast(t)
+            except ValueError:
+                messagebox.showwarning("musictool", f"{flag[2:]}: not a "
+                                       f"number: {t}")
+                return
+            argv += [flag, t]
+        argv += ["--side", cside.get() or "right",
+                 "--place", cplace.get() or "bottom"]
+        if not cnames.get():
+            argv.append("--no-names")
+        if cembed.get():
+            argv.append("--embed")
+        # The part comes from the video's name ("(from 1h00m00s)"). Only
+        # with no video of it in the folder is the field used instead.
+        t = l_part_value()
+        if t is None:
+            return
+        vid = chat.video_id(u)
+        if t and not (vid and chat.find_videos(d, vid)):
+            argv += ["--range", t]
+        remember(url=u, path=d)
+        remember_soon()
+        linfo.set("getting the chat replay ...")
+        do_argv(argv + l_net_args(), after=lambda rc: log(f"\n(exit {rc})"))
 
     def l_open():
         p = l_made["path"] if os.path.exists(l_made["path"] or "") else \

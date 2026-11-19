@@ -359,6 +359,10 @@ class Combobox(Entry):
     kind = "combobox"
 
 
+class Spinbox(Entry):
+    kind = "spinbox"
+
+
 class Text(Widget):
     kind = "text"
 
@@ -598,6 +602,7 @@ class _TTK:
     Radiobutton = Radiobutton
     Entry = Entry
     Combobox = Combobox
+    Spinbox = Spinbox
     Notebook = Notebook
     Treeview = Treeview
     Scrollbar = Scrollbar

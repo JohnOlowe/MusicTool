@@ -9,12 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import cancel
 from . import config as configmod
-from . import download, formats, live, lyrics, progress, providers, tags
+from . import chat, download, formats, live, lyrics, progress, providers, tags
 from .uicmd import is_playlist_url
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
-                   is_windows, js_runtime, pot_server_reachable, ytdlp_cmd,
-                   USER_AGENT)
+                   is_windows, js_runtime, parse_range, part_label,
+                   pot_server_reachable, ytdlp_cmd, USER_AGENT)
 
 PROG = "musictool"
 
@@ -60,6 +60,11 @@ def _add_download_flags(p):
                    help="if the URL is in a playlist, take only this video")
     g.add_argument("--yes-playlist", action="store_true",
                    help="take the whole playlist (default when given a playlist URL)")
+    g.add_argument("--range", dest="part", metavar="START-END",
+                   help="only this part of a finished video, e.g. 1:00:00- "
+                        "(from 1 hour to the end), 1:00:00-2:30:00, -45:00 or "
+                        "1h-2h30m. Saved as 'NAME (from 1h00m00s)'; `chat` "
+                        "reads that and matches the chat to it")
     g.add_argument("--live-from-now", dest="live_from_now", action="store_true",
                    help="a stream that is live right now is recorded from the "
                         "start by default; this records from now instead")
@@ -261,6 +266,62 @@ def build_parser():
     lv.add_argument("--js-runtimes", dest="js_runtimes",
                     help="JavaScript runtime for YouTube's challenge, e.g. node")
     lv.add_argument("--remote-components", dest="remote_components",
+                    help="e.g. ejs:github")
+    ch = sub.add_parser(
+        "chat", help="a finished live stream's chat replay as subtitles: "
+                     "downloaded (text only), timed to your video -- or the "
+                     "part of it you have -- and optionally added to it as "
+                     "a subtitle track")
+    ch.add_argument("source", help="the video's link, or a .live_chat.json "
+                                   "you already have")
+    ch.add_argument("-o", "--output-dir", dest="output_dir",
+                    help="the folder with the video (default: your download "
+                         "folder); the chat file is saved there too")
+    ch.add_argument("--video", help="the video file to match, when the folder "
+                                    "has several or its name lacks [ID]")
+    ch.add_argument("--format", dest="sub_format", choices=chat.FORMATS,
+                    default="ass", help="ass (default: placement and colours "
+                    "everywhere), srt (plays everywhere), vtt (browsers), txt "
+                    "(a readable log, not a subtitle)")
+    ch.add_argument("--lines", type=int, default=5,
+                    help="messages on screen at once (default 5). A message "
+                         "stays until this many newer ones are below it. 1 = "
+                         "like normal subtitles, 6+ = scrolling chat")
+    ch.add_argument("--hold", type=float, default=15,
+                    help="longest a message stays, in seconds (default 15; "
+                         "0 = until pushed off, even in a quiet chat)")
+    ch.add_argument("--side", choices=chat.SIDES, default="right")
+    ch.add_argument("--place", choices=chat.PLACES, default="bottom",
+                    help="height on screen (default bottom)")
+    ch.add_argument("--width", type=int, default=32,
+                    help="ass/vtt: the chat column's width, %% of the "
+                         "picture (default 32)")
+    ch.add_argument("--wrap", type=int, default=40,
+                    help="srt/vtt: break lines after about this many letters")
+    ch.add_argument("--pad", type=int, default=0,
+                    help="srt: push the text right with this many spaces, for "
+                         "players that ignore the side setting (try 40-60)")
+    ch.add_argument("--no-names", dest="names", action="store_false",
+                    help="messages only, no user names")
+    ch.add_argument("--no-box", dest="box", action="store_false",
+                    help="ass: outlined text instead of on a dark box")
+    ch.add_argument("--range", dest="part", metavar="START-END",
+                    help="the part of the stream your video holds, e.g. "
+                         "1:00:00- . Normally read from the video's name "
+                         "('NAME (from 1h00m00s)', as `get --range` saves it)")
+    ch.add_argument("--offset", type=float, default=0,
+                    help="seconds to move the chat later (negative: earlier)")
+    ch.add_argument("--embed", action="store_true",
+                    help="also add it to the video as a subtitle track (copied, "
+                         "not re-encoded): an .mkv is updated, an .mp4 gets an "
+                         ".mkv copy beside it")
+    ch.add_argument("--cookies", help="cookies.txt, if YouTube asks")
+    ch.add_argument("--cookies-from-browser", dest="cookies_from_browser",
+                    help="auto | off | firefox | chrome | edge ...")
+    ch.add_argument("--proxy", help="proxy URL")
+    ch.add_argument("--js-runtimes", dest="js_runtimes",
+                    help="JavaScript runtime for YouTube's challenge, e.g. node")
+    ch.add_argument("--remote-components", dest="remote_components",
                     help="e.g. ejs:github")
     sub.add_parser("doctor", help="check that yt-dlp, ffmpeg and tkinter are available")
     sub.add_parser("gui", help="launch the graphical interface")
@@ -612,6 +673,60 @@ def _resolve_quality(url, o, log=print, info=None):
         log(f"  note: {note}")
 
 
+def _plan_part(url, per, info, live_st, part, say):
+    """Set up `get --range`: only START-END of a finished video, fetched by
+    ffmpeg straight from YouTube, saved as 'NAME (from 1h00m00s).ext'.
+    -> False when it cannot be done (said why)."""
+    a, b = part
+    if is_playlist_url(url) or per.get("yes_playlist"):
+        say("!! --range is for one video, not a playlist")
+        return False
+    if live_st in live.LIVE or live_st == "is_upcoming":
+        say("!! --range needs a finished video; this one is still live. "
+            "Record it with `get` (from the start) and `live --watch` it.")
+        return False
+    total = (info or {}).get("duration")
+    if total and a >= total:
+        say(f"!! the video is only {live.hms(total)} long")
+        return False
+    if total and b is not None and b > total:
+        b = None
+    end = b if b is not None else total
+    per["download_sections"] = f"*{a:g}-{b:g}" if b is not None else f"*{a:g}-inf"
+    per["section_span"] = (a, end)
+    per["live_from_start"] = False
+    per["no_lyrics"] = True
+    t = per.get("template") or download.DEFAULT_TEMPLATE
+    if t.endswith(".%(ext)s"):
+        t = t[:-len(".%(ext)s")]
+        if "%(id)" not in t:
+            t += " [%(id)s]"            # so `chat` finds the video by its id
+        per["template"] = t + f" ({part_label(a, b)}).%(ext)s"
+    span = f"{live.hms(a)} to " + (live.hms(b) if b is not None else
+                                   f"the end ({live.hms(total)})" if total
+                                   else "the end")
+    say(f"  only part of it: {span}" + (f", {live.hms(end - a)} of video"
+                                         if end else ""))
+    return True
+
+
+def _check_part(path, span, say):
+    """ffmpeg can stop early and still report success (a long WiFi drop):
+    compare what landed with what was asked for."""
+    if not span or span[1] is None or not os.path.exists(path):
+        return True
+    want = span[1] - span[0]
+    got = live.media_seconds(path)
+    if not got:
+        return True
+    if got + max(5.0, want * 0.01) < want:
+        say(f"!! the file is {live.hms(got)} long, {live.hms(want)} was asked "
+            f"for -- the connection was lost. Download the missing end with "
+            f"--range {span[0] + got - 5:.0f}-{span[1]:.0f}")
+        return False
+    return True
+
+
 def cmd_get(args):
     o = _opts(args)
     os.makedirs(o["output_dir"], exist_ok=True)
@@ -631,6 +746,17 @@ def cmd_get(args):
             return 2
         if formats.exact_ids(o["format_selector"]) is None:
             print("!! " + formats.exact_plan(o["format_selector"], [])["error"])
+            return 2
+    part = None
+    if getattr(args, "part", None):
+        try:
+            part = parse_range(args.part)
+        except ValueError as e:
+            print(f"!! --range: {e}")
+            return 2
+        if not have_ffmpeg():
+            print("!! --range needs ffmpeg (it fetches the part). "
+                  + ffmpeg_hint())
             return 2
     for problem in download.preflight(o):
         print("WARNING: " + problem)
@@ -699,7 +825,13 @@ def cmd_get(args):
             with lock:
                 refused.append(url)
             return
-        if live_st in live.LIVE or live_st in ("is_upcoming", "was_live"):
+        if part and not _plan_part(url, per, info, live_st, part, say):
+            with lock:
+                refused.append(url)
+            return
+        if part:
+            live_urls.add(url)        # a slice of a song has no use for lyrics
+        elif live_st in live.LIVE or live_st in ("is_upcoming", "was_live"):
             live.plan(info, per, log=say)
             if per.get("no_lyrics"):
                 live_urls.add(url)
@@ -722,6 +854,9 @@ def cmd_get(args):
                 live.after_failure(per, err, log=say)
             return
         say(f"    {len(files)} file(s)")
+        if part:
+            for pth, _vid in files:
+                _check_part(pth, per.get("section_span"), say)
 
     if n_jobs == 1:
         for url in urls:
@@ -752,7 +887,7 @@ def cmd_get(args):
     if urls and live_urls >= set(urls):
         # only live recordings: no lyrics to look for -- and no sweep of the
         # whole folder when one stopped early
-        print("\n==> live recording(s): no lyrics to fetch")
+        print("\n==> live recording(s) / part(s) of a video: no lyrics to fetch")
         return 0 if targets else (130 if stopped else 1)
     if stopped and not targets:
         http.save()
@@ -1289,6 +1424,37 @@ def cmd_relang(args):
     return 1 if n["errors"] else 0
 
 
+def cmd_chat(args):
+    """Live chat replay -> subtitles next to (or inside) the video."""
+    o = _opts(args)
+    rng = None
+    if args.part:
+        try:
+            rng = parse_range(args.part)
+        except ValueError as e:
+            print(f"!! --range: {e}")
+            return 2
+    if args.lines < 1:
+        print("!! --lines must be 1 or more")
+        return 2
+    folder = os.path.abspath(os.path.expanduser(o.get("output_dir") or "."))
+    video = os.path.abspath(args.video) if args.video else None
+    if video and not os.path.isfile(video):
+        print(f"!! no such video: {video}")
+        return 2
+    if video and not getattr(args, "output_dir", None):
+        folder = os.path.dirname(video)
+    elif args.source.lower().endswith(".json") and os.path.isfile(args.source) \
+            and not getattr(args, "output_dir", None):
+        folder = ""                    # the replay's own folder
+    style = {"fmt": args.sub_format, "lines": args.lines, "hold": args.hold,
+             "side": args.side, "place": args.place, "width": args.width,
+             "wrap": args.wrap, "pad": args.pad, "names": args.names,
+             "box": args.box, "offset": args.offset, "range": rng,
+             "video": video, "embed": args.embed}
+    return chat.run(args.source, folder, o, style)
+
+
 def cmd_live(args):
     """Live streams: status, look at a folder, join + watch, resume."""
     o = _opts(args)
@@ -1437,7 +1603,7 @@ def main(argv=None):
                "duplicates": cmd_duplicates, "dupes": cmd_duplicates,
                "extract": cmd_extract, "embed": cmd_embed,
                "providers": cmd_providers, "config": cmd_config,
-               "relang": cmd_relang, "live": cmd_live,
+               "relang": cmd_relang, "live": cmd_live, "chat": cmd_chat,
                "doctor": cmd_doctor, "gui": cmd_gui}.get(args.cmd)
     if handler is None:
         print(f"unknown command: {args.cmd}")

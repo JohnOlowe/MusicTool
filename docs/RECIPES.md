@@ -6,7 +6,7 @@ way.
 
 These are hand-run commands, not (yet) `musictool` subcommands. Turning the
 metadata recipe into `musictool meta URL FILE` is a known piece of future work.
-The one exception is the first recipe, which is a `musictool live` command.
+The exceptions are the first three recipes, which are `musictool` commands.
 
 ---
 
@@ -68,6 +68,39 @@ nothing is converted.
 
 In the window: **Live streams** tab, **Is it live? How big?**, then pick the
 **Video stream** (the audio follows) and **Record from the start**.
+
+---
+
+## A finished stream: only the part not watched yet, with its chat
+
+R0GdEkPZSvM again: 3 h 39 min, one hour already watched, limited data and
+disk. Take everything after the first hour, then its chat as subtitles:
+
+```bat
+musictool get https://www.youtube.com/live/R0GdEkPZSvM --keep-video --range 1:00:00- --exact -f 299+140 --cookies "%USERPROFILE%\Downloads\cookies.txt"
+musictool chat https://www.youtube.com/live/R0GdEkPZSvM --lines 6 --hold 0 --cookies "%USERPROFILE%\Downloads\cookies.txt"
+```
+
+1. Downloads 1:00:00 to the end (about 2 h 39 min: roughly 4.7 GB of `299`
+   plus 155 MB of `140`, against 6.7 GB for the whole). It is saved as
+   `TGG - … [R0GdEkPZSvM] (from 1h00m00s).mp4`, then its length is checked.
+   Leave out `--exact -f 299+140` to let `--quality` choose. Use
+   `--range 1:00:00-2:00:00` for just the next hour.
+2. Downloads the chat replay (text only, about 8.6 MB), finds that file by
+   its id, and writes `… (from 1h00m00s).ass` next to it. The chat starts at
+   1:00:00 and runs on the right with 6 messages at a time, each one leaving
+   when pushed off. mpv, VLC and MPC-HC load it by themselves. Add
+   `--embed` to get an `.mkv` with the chat as a track (copied; needs room
+   for a second copy of the video). Use `--format srt` for players without
+   ASS. Running it again with other settings uses the chat file it already
+   has.
+
+Measured on 2026-11-19 with a 30 s part (`--range 1:00:00-1:00:30
+--quality 360`): exactly 30.02 s, and with `--embed` the chat's first cue
+starts on the same millisecond as the sound.
+
+In the window: **Live streams** tab: type `1:00:00-` in **Only this part**,
+press **Download this part**, then **Get the chat**.
 
 ---
 

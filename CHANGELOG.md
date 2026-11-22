@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — Unfinished parts stay playable, and a rerun carries on
+## `5fb8d46` — Unfinished parts stay playable, and a rerun carries on
 *2026-11-22 · 1107 assertions*
 
 Asked for: after `get --range` stopped halfway on the phone (no space, or

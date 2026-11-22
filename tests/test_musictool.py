@@ -5261,11 +5261,8 @@ finally:
     P39.set_hook(None)
 check("...turned into a percentage of the part, with a time left",
       _evs and _evs[-1]["pct"] == 25.0 and _evs[-1]["eta"], str(_evs[-1:]))
-_said = []
-check("a part that came down short is caught (a WiFi drop ffmpeg hid)",
-      not os.path.exists(_EV) or (C40._check_part(_EV, (3600, 3900), _said.append)
-                                  is False and "--range 3625-3900" in _said[0]),
-      str(_said))
+# (a part that came down short is no longer just reported: §43 checks that
+# the rest is fetched into a new file)
 
 # --- the Live streams tab: part and chat
 tkstub.reset()
@@ -5537,6 +5534,333 @@ finally:
         _cx.kill_tree(_gp42["p"])
         _cx.done(_gp42["p"])
     _cx.reset()
+
+
+# ============ 43. a part that does not finish still plays; the rest follows
+print("\n43. unfinished parts play; a rerun carries on into a new file")
+from musictool import parts as PT  # noqa: E402
+from musictool import cli as C43  # noqa: E402
+
+# names
+check("a part's name gives its span: (2h24m55s-2h38m45s).mp4[.part]",
+      PT.parse_label("X [id] (2h24m55s-2h38m45s).mp4.part") == (8695, 9525, ".mp4")
+      and PT.parse_label("X [id] (from 1h00m00s).mkv") == (3600, None, ".mkv")
+      and PT.parse_label("X [id] (0h00m01s-0h00m02s).temp.mp4") is None
+      and PT.parse_label("X [id] (0h00m01s-0h00m02s).f299.mp4") is None)
+_D43 = os.path.join(WORK, "parts43")
+shutil.rmtree(_D43, ignore_errors=True)
+os.makedirs(_D43)
+_n43 = os.path.join(_D43, "Clip [PARTVID0001] (0h01m40s-0h02m00s).mp4.part")
+open(os.path.join(_D43, "Clip [PARTVID0001] (0h01m40s-0h01m45s).mp4"), "w").close()
+check("...renamed to what it holds, without .part, never over a file",
+      os.path.basename(PT.relabel(_n43, 100, 105))
+      == "Clip [PARTVID0001] (0h01m40s-0h01m45s) 2.mp4"
+      and os.path.basename(PT.relabel(_n43, 100, 103.6))
+      == "Clip [PARTVID0001] (0h01m40s-0h01m44s).mp4")
+os.remove(os.path.join(_D43, "Clip [PARTVID0001] (0h01m40s-0h01m45s).mp4"))
+
+# how far the files on disk already go
+_h43 = [(0, 100, "a"), (98, 250, "b"), (300, 400, "c"), (240, 260, "d")]
+check("carry on from where the files end: overlaps join, a gap stops it",
+      PT.continue_point(_h43, 0) == (260, ["a", "b", "d"])
+      and PT.continue_point(_h43, 280) == (280, [])
+      and PT.continue_point(_h43, 300, 350) == (400, ["c"]))
+
+# disk
+check("size of a part estimated from the whole video's sizes",
+      PT.estimate_bytes({"duration": 1000, "formats": [
+          {"format_id": "299", "filesize": 9000},
+          {"format_id": "140", "filesize_approx": 1000}]}, "299+140", 100) == 1000
+      and PT.estimate_bytes({"duration": 1000, "formats": [
+          {"format_id": "299"}]}, "299", 100) is None)
+_m43 = os.path.join(_D43, "mounts")
+with open(_m43, "w") as _f:
+    _f.write("/dev/block/vold/public:179,129 /mnt/media_rw/FD6E-F8EF vfat rw 0 0\n"
+             "/dev/block/vold/public:179,130 /mnt/media_rw/67FE-19FE exfat rw 0 0\n"
+             "/dev/fuse /storage/FD6E-F8EF fuse rw 0 0\n"
+             "/dev/fuse /storage/67FE-19FE fuse rw 0 0\n"
+             f"/dev/sdz9 {_D43} vfat rw 0 0\n")
+_om43, PT.MOUNTS = PT.MOUNTS, _m43
+_ort43 = os.path.realpath
+try:
+    os.path.realpath = lambda x: x
+    _fat = PT.fs_type("/storage/FD6E-F8EF/Movies")
+    _ex = PT.fs_type("/storage/67FE-19FE/Movies")
+    os.path.realpath = _ort43
+    _here = PT.fs_type(_D43)
+finally:
+    os.path.realpath = _ort43
+    PT.MOUNTS = _om43
+check("an Android memory card's real file system is found behind FUSE",
+      _fat == "vfat" and PT.is_fat(_fat) and _ex == "exfat"
+      and not PT.is_fat(_ex) and _here == "vfat", str((_fat, _ex, _here)))
+
+# keyframe: one ffmpeg read of one packet
+if os.name == "posix":
+    _fx43 = os.path.join(_D43, "fakeff")
+    with open(_fx43, "w") as _f:
+        _f.write("#!/bin/sh\necho \"$@\" > \"$0.args\"\n"
+                 "printf '#tb 0: 1/15360\\n0,  133554944,  133555200,  256,"
+                 "   109620, 1420222c\\n'\n")
+    os.chmod(_fx43, 0o755)
+    _inf43 = {"formats": [{"format_id": "299", "vcodec": "avc1",
+                           "protocol": "https", "url": "https://v/x",
+                           "http_headers": {"User-Agent": "UA"}},
+                          {"format_id": "140", "vcodec": "none",
+                           "protocol": "https", "url": "https://v/a"}]}
+    _k43 = PT.keyframe_before(_inf43, "299+140", 8700, _fx43)
+    _ar43 = open(_fx43 + ".args").read()
+    check("the keyframe a part would start on is read from the video",
+          _k43 == 8695.0 and "-ss 8700.000" in _ar43 and "User-Agent: UA" in _ar43
+          and "https://v/x" in _ar43, str(_k43) + _ar43)
+    check("...none for HLS, audio only, or a selector expression",
+          PT.keyframe_before({"formats": [dict(_inf43["formats"][0],
+                                               protocol="m3u8_native")]},
+                             "299", 8700, _fx43) is None
+          and PT.keyframe_before(_inf43, "140", 8700, _fx43) is None
+          and PT.keyframe_before(_inf43, "bv*+ba", 8700, _fx43) is None)
+    check("...and a keyframe too far away is not believed",
+          PT.keyframe_before(_inf43, "299", 9000, _fx43) is None)
+
+_ff43 = shutil.which("ffmpeg")
+
+
+def _mk43(path, secs, frag=True):
+    cmd = [_ff43, "-v", "error", "-y", "-f", "lavfi", "-i",
+           "testsrc=size=160x120:rate=30", "-f", "lavfi", "-i",
+           "sine=r=44100", "-t", str(secs), "-c:v", "libx264", "-preset",
+           "ultrafast", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac"]
+    if frag:
+        cmd += download.FRAGMENTED.split()
+    subprocess.run(cmd + ["-f", "mp4", path], check=True)
+
+
+if _ff43:
+    check("ranges are written as fragmented MP4 (whatever lands plays)",
+          "ffmpeg_o:" + download.FRAGMENTED in " ".join(download.build_args(
+              "u", {"download_sections": "*10-20", "output_dir": _D43})))
+    _src = os.path.join(_D43, "src.mp4")
+    _mk43(_src, 6)
+    _sz = os.path.getsize(_src)
+    shutil.copy(_src, _n43)
+    with open(_n43, "r+b") as _f:
+        _f.truncate(int(_sz * 0.7))              # killed mid-write
+    open(_n43[:-9] + ".webp", "w").close()       # the cover it never embedded
+    _said = []
+    _sv = PT.salvage(_n43, _said.append)
+    check("a killed part is cut to its last whole piece and kept, playable",
+          _sv and _sv[1] == 100 and 2 <= _sv[2] - 100 <= 5
+          and os.path.exists(_sv[0]) and not os.path.exists(_n43)
+          and PT.seconds(_sv[0]) and PT.trim(_sv[0]) == 0,
+          str(_sv) + str(_said))
+    check("...named after what it holds, its unembedded cover removed",
+          _sv and os.path.basename(_sv[0]).startswith(
+              "Clip [PARTVID0001] (0h01m40s-0h01m4")
+          and not os.path.exists(_n43[:-9] + ".webp")
+          and "kept what came down" in _said[0], str(_said))
+    _r = subprocess.run([_ff43, "-v", "error", "-i", _sv[0], "-map", "0", "-c",
+                         "copy", "-f", "null", "-"], capture_output=True,
+                        text=True) if _sv else None
+    check("...and reads through without an error",
+          _r is not None and _r.returncode == 0 and not _r.stderr.strip(),
+          _r and _r.stderr[-300:])
+    for _x in os.listdir(_D43):
+        if "PARTVID" in _x:
+            os.remove(os.path.join(_D43, _x))
+    # an ordinary MP4 (the old way): its index never got written
+    _mk43(_n43 + ".tmp", 6, frag=False)
+    os.replace(_n43 + ".tmp", _n43)
+    with open(_n43, "r+b") as _f:
+        _f.truncate(int(os.path.getsize(_n43) * 0.5))
+    _said = []
+    check("an old-style part with no index is left alone, and said so",
+          PT.salvage(_n43, _said.append) is None and os.path.exists(_n43)
+          and "older MusicTool" in " ".join(_said), str(_said))
+    os.remove(_n43)
+    # it failed at once: just a header
+    shutil.copy(_src, _n43)
+    with open(_n43, "r+b") as _f:
+        _f.truncate(1200)
+    check("a part that got nothing (the disk was already full) is removed",
+          PT.salvage(_n43, lambda m: None) is None and not os.path.exists(_n43))
+
+    # --- the loop: download.download faked, the files real
+    _BASE43 = "Clip [PARTVID0001]"
+
+    def _per43(a, b):
+        per = {"output_dir": _D43, "format_selector": "299+140",
+               "net_max_wait": 0,
+               "_part": {"a": a, "b": b, "end": b, "base": _BASE43,
+                         "vid": "PARTVID0001"}}
+        C43._set_part(per, a, b, b)
+        return per
+
+    _plan43, _calls43, _probes43 = [], [], []
+    _odl43, _opr43, _okf43 = download.download, download.probe, PT.keyframe_before
+
+    on_file43 = [None]
+
+    def _fdl43(url, o, log=print, on_file=None, tag=""):
+        on_file43[0] = on_file
+        _calls43.append(dict(o))
+        step = _plan43.pop(0)
+        path = os.path.join(_D43, o["template"].replace("%(ext)s", "mp4"))
+        return step(path)
+
+    def _wrote43(secs, err=None, cut=None, done=True):
+        def step(path):
+            _mk43(path + ".part", secs)
+            if cut:
+                with open(path + ".part", "r+b") as f:
+                    f.truncate(int(os.path.getsize(path + ".part") * cut))
+            if done:
+                os.replace(path + ".part", path)
+                if on_file43[0]:
+                    on_file43[0](path, "PARTVID0001")
+                return [(path, "PARTVID0001")], None
+            return [], err
+        return step
+
+    def _run43(a, b):
+        _said = []
+        _got = []
+        per = _per43(a, b)
+        files, err = C43._download_part("u", per, {"id": "PARTVID0001"},
+                                        _said.append, "",
+                                        lambda p, v: _got.append(p))
+        return files, err, _said, _got
+
+    def _clean43():
+        for _x in os.listdir(_D43):
+            if "PARTVID" in _x:
+                os.remove(os.path.join(_D43, _x))
+
+    download.download = _fdl43
+    download.probe = lambda u, o: (_probes43.append(u), {"id": "PARTVID0001"})[1]
+    PT.keyframe_before = lambda info, sel, t, exe, timeout=60: t - 1.0
+    try:
+        _clean43()
+        _plan43[:] = [_wrote43(4)]
+        _f, _e, _s, _g = _run43(100, 103)
+        check("a part starts on the keyframe before it: named from there, "
+              "ffmpeg asked for just after it",
+              _e is None and _calls43[-1]["download_sections"] == "*99.15-103"
+              and os.path.basename(_f[0][0])
+              == "Clip [PARTVID0001] (0h01m39s-0h01m43s).mp4"
+              and "starts at the keyframe" in " ".join(_s),
+              str(_calls43[-1].get("download_sections")) + str(_f) + str(_s))
+        _p43 = _per43(14430, 41620)
+        C43._set_part(_p43, 14434, 41620, 41620, label_start=14430,
+                      seek=14430.15)
+        check("...the start is written in full: *14430.15, not :g's 14430.1 "
+              "(that is before the nudge) nor 1e+05",
+              _p43["download_sections"] == "*14430.15-41620"
+              and "(4h00m30s-11h33m40s)" in _p43["template"],
+              str(_p43["download_sections"]) + _p43["template"])
+        _calls43.clear()
+        _f, _e, _s, _g = _run43(100, 103)
+        check("...run again: already here, nothing is downloaded",
+              _e is None and not _calls43 and _f == []
+              and "already here, nothing to download" in " ".join(_s), str(_s))
+
+        _clean43()
+        _plan43[:] = [_wrote43(62, err="ERROR: av_interleaved_write_frame(): "
+                               "No space left on device", cut=0.5, done=False)]
+        _f, _e, _s, _g = _run43(100, 160)
+        _kept = [p for p, _v in _f]
+        check("disk full: what came down is kept, playable, and reported",
+              _e and _e.startswith("the disk is full") and len(_kept) == 1
+              and _g == _kept and os.path.exists(_kept[0])
+              and PT.seconds(_kept[0]) and not [
+                  x for x in os.listdir(_D43) if x.endswith(".part")],
+              str((_e, _f, _s)))
+        _calls43.clear()
+        _plan43[:] = [_wrote43(62)]
+        _f, _e, _s, _g = _run43(100, 160)
+        _st = float(_calls43[0]["download_sections"][1:].split("-")[0]) \
+            if _calls43 else -1
+        _have = PT.coverage(_D43, "PARTVID0001")
+        check("...the rerun carries on from where that file ends, in a new "
+              "file, a little overlap, no gap",
+              _e is None and len(_calls43) == 1 and len(_have) == 2
+              and _have[0][1] - 3.5 <= _st <= _have[0][1]
+              and _have[1][0] < _have[0][1]
+              and PT.continue_point(_have, 99, 160)[0] >= 159,
+              str((_st, _have, _s)))
+
+        _clean43()
+        _plan43[:] = [_wrote43(62, err="ERROR: ffmpeg: Error writing trailer: "
+                               "File too large", cut=0.5, done=False),
+                      _wrote43(62)]
+        _f, _e, _s, _g = _run43(100, 160)
+        check("FAT32 4 GB limit: that file is closed and the rest goes into "
+              "a new one, by itself",
+              _e is None and len(_f) == 2 and len(_g) == 2
+              and "FAT32" in " ".join(_s), str((_e, _f, _s)))
+
+        _clean43()
+        _ofl43, _oft43 = PT.FAT_LIMIT, PT.fs_type
+        PT.FAT_LIMIT, PT.fs_type = 256 * 1024 ** 2 + 1000, lambda p: "FAT32"
+        try:
+            _plan43[:] = [_wrote43(62, err="ERROR: Error writing trailer: There "
+                                   "is not enough space on the disk.", cut=0.5,
+                                   done=False), _wrote43(62)]
+            _f, _e, _s, _g = _run43(100, 160)
+        finally:
+            PT.FAT_LIMIT, PT.fs_type = _ofl43, _oft43
+        check("...Windows calls the same 4 GB limit 'not enough space': "
+              "on a FAT32 drive it is not taken for a full disk",
+              _e is None and len(_f) == 2 and "FAT32" in " ".join(_s),
+              str((_e, _s)))
+
+        _clean43()
+        _probes43.clear()
+        _plan43[:] = [lambda path: ([], "ERROR: unable to download video data: "
+                                        "HTTP Error 403: Forbidden"),
+                      _wrote43(4)]
+        _f, _e, _s, _g = _run43(100, 103)
+        check("403 (the links ran out): fresh ones, and it goes on",
+              _e is None and len(_f) == 1 and len(_probes43) == 1
+              and "(403)" in " ".join(_s), str((_e, _s)))
+
+        _clean43()
+        _plan43[:] = [_wrote43(20), _wrote43(62)]
+        _f, _e, _s, _g = _run43(100, 160)
+        check("a part that ended early without an error (a drop ffmpeg hid) "
+              "is renamed to what it holds and the rest is fetched",
+              _e is None and len(_f) == 2 and "without saying why" in " ".join(_s)
+              and os.path.basename(_f[0][0]).endswith("(0h01m39s-0h01m59s).mp4"),
+              str((_f, _s)))
+
+        _clean43()
+
+        def _pp43(path):
+            _mk43(path, 4)
+            open(path[:-4] + ".temp.mp4", "w").write("half")
+            open(path[:-4] + ".webp", "w").close()
+            return [], "ERROR: Postprocessing: Conversion failed!"
+        _plan43[:] = [_pp43]
+        _f, _e, _s, _g = _run43(100, 103)
+        check("adding title and cover failed (no room for a 2nd copy): the "
+              "whole part is kept as it is, the half copy removed",
+              _e is None and len(_f) == 1 and _g == [_f[0][0]]
+              and not [x for x in os.listdir(_D43) if ".temp." in x
+                       or x.endswith(".webp")]
+              and "adding the title and cover failed" in " ".join(_s),
+              str((_e, _f, _s, os.listdir(_D43))))
+
+        _clean43()
+        _plan43[:] = [lambda path: ([], "ERROR: something else entirely")]
+        _f, _e, _s, _g = _run43(100, 103)
+        check("any other error is passed on, not retried",
+              _e == "ERROR: something else entirely" and not _plan43, str(_e))
+    finally:
+        download.download, download.probe = _odl43, _opr43
+        PT.keyframe_before = _okf43
+        _plan43.clear()
+    shutil.rmtree(_D43, ignore_errors=True)
+else:
+    print("  (no ffmpeg: the media checks of 43 are skipped)")
 
 
 srv.shutdown()

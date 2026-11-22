@@ -24,6 +24,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── formats.py        quality table, filters, language picking
 │   ├── download.py       yt-dlp wrapper + videoId index
 │   ├── live.py           live streams: record from the start, watch, carry on
+│   ├── parts.py          get --range: keyframe start, keep what came down, carry on
 │   ├── chat.py           a stream's chat replay -> ass/srt/vtt/txt subtitles
 │   ├── progress.py       yt-dlp progress lines -> the GUI's bars
 │   ├── lyrics.py         scan / fetch / embed pipeline
@@ -32,7 +33,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1083 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1107 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -829,8 +830,9 @@ had ended 0.0 s after Force stop, nothing was left running, and nothing more was
 written.
 
 What is left behind: unfinished downloads stay as `.part` / `.fNNN` files, and
-running the same command again carries on from them. A part (`--range`) is
-fetched by `ffmpeg -y`, which cannot resume, so it starts that part over. An
+running the same command again carries on from them. What a part (`--range`)
+had fetched is kept as a playable file, and running the same command again
+fetches only the rest, into a new file (see "If a part does not finish"). An
 ffmpeg killed mid-merge leaves the two separate streams, and the next run merges
 them again.
 
@@ -965,8 +967,10 @@ musictool get URL --keep-video --range -45:00            # the first 45 minutes
 ```
 
 Times can be `1:00:00`, `60:00`, `3600`, `1h`, `1h30m` or `90m`. The file
-is called `TITLE [id] (from 1h00m00s).mp4` (or `(1h00m00s-2h30m00s)`), and
-`chat` reads that name to know which part of the chat goes with it. A range
+is called `TITLE [id] (from 0h59m55s).mp4` (or `(0h59m55s-2h30m00s)`): the
+part starts on the keyframe at or before the time you asked for, a few seconds
+early, and the name says where the file really starts. `chat` reads that name
+to know which part of the chat goes with it. A range
 on a stream that is still live, or past the video's end, is refused before
 anything downloads, and parts get no lyrics.
 
@@ -977,8 +981,8 @@ anything downloads, and parts get no lyrics.
   reconnect (`--downloader-args "ffmpeg_i:-reconnect 1 ..."`, using only the
   options your ffmpeg has). With that, the same drop gave a part
   bit-identical to an undisturbed one. Afterwards the length of the file is
-  compared with what was asked for, and a short file prints the `--range`
-  that fetches the missing end.
+  compared with what was asked for. If it is short, the file is renamed to
+  what it holds and the rest is fetched into a new file.
 - **Speed: use ffmpeg 8.1 or newer.** YouTube slows one long, open-ended
   request to about 2x real time, so with an older ffmpeg 1:30:30 of a 1080p
   stream takes about 45 minutes, and for the first minutes the percentage
@@ -992,8 +996,50 @@ anything downloads, and parts get no lyrics.
   into `13.3% of the part  4m 00s of 30m 00s  2.42x  ETA 10m 44s`, on one
   line. ffmpeg's description of its input and output, and the one line it
   prints per piece of YouTube's HLS streams, are kept out of the log.
-- A part starts at the keyframe before the time you asked for. An MP4 hides
-  those few seconds and the player starts at your time.
+- **It starts on a keyframe.** A copied part has to start on a keyframe, and
+  ffmpeg used to take the one before your time and hide the extra seconds in
+  the MP4's index. That trick does not survive a file that is written to be
+  playable while it grows (below): the sound's first packet was stretched over
+  the hidden 5 s. So musictool first asks the video where that keyframe is
+  (ffmpeg reads one packet, about half a second) and starts the part there.
+  It asks ffmpeg for 0.15 s after it, because with B-frames ffmpeg seeks 3/23 s
+  before the time it is given and landed on the keyframe before. In a test the
+  part's first packet was the keyframe itself, and the sound started 0.17 s in
+  instead of being stretched.
+
+### If a part does not finish
+
+A part is written as a **fragmented MP4**: a piece every keyframe (every 2-5 s
+on YouTube), each one playable as soon as it is written. When the download
+stops for any reason, whatever came down plays. When it finishes, adding the
+title and cover turns it into an ordinary MP4.
+
+- **Killed** (Termux closed, the phone off, Force stop, a crash): the next run
+  of the same command finds the `.part`, cuts it back to its last whole piece,
+  and renames it to what it holds: `TITLE [id] (2h24m55s-2h38m45s).mp4`. Then
+  it fetches only the rest, starting 2 s before the end of that file (a little
+  overlap, never a gap), into a new file. It never writes over the old file.
+  In a test, a 15-minute part killed at 13:50 was kept as a 13:50 file with no
+  decode errors (picture and sound both end at 830.0 s). The rerun fetched
+  only the remaining 1:20, and a third run said `already here, nothing to
+  download`.
+- **The disk fills up:** it stops with `!! the disk is full. What came down
+  plays; free some space and run the same command again -- it carries on from
+  where the files end.` Before it starts, it compares the part's estimated
+  size with the free space and says roughly where it will stop. If the part
+  came down whole but there is no room to add the title and cover (that needs
+  a second copy), the file is kept as it is (it plays) and the half-made
+  `.temp.mp4` is removed. All of this was tested on a 250 MB disk.
+- **A FAT32 memory card** holds no file of 4 GB or more. When a part reaches
+  that, the file is closed (it plays) and the rest goes into a new file, by
+  itself. musictool warns before it starts when the card is FAT32 and the part
+  is bigger than 4 GB. On Android it looks behind `/storage/XXXX-XXXX` for the
+  card's real file system.
+- **Dropped connection, or 403 because YouTube's links ran out** (they last
+  about 6 hours): it gets fresh links and carries on from where the file ends.
+- A `.part` from an older musictool (an ordinary MP4, whose index is written
+  only at the end) cannot be played or repaired by this. It is left as it is
+  and the part is fetched again.
 
 **The chat replay as subtitles.** `chat` downloads a finished stream's chat
 replay (text only: about 8 MB for a busy 3½-hour stream) and turns it into a
@@ -1508,7 +1554,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1083 assertions, 0 failures**, with or without
+**Verified by running the code — 1107 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1568,6 +1614,17 @@ subcommand.
   the chat as a column on the right of the real picture. Before the fix, the
   `.mkv` had shown the chat 3.8 s early, because the picture starts at the
   keyframe before the cut.
+- **Real YouTube, unfinished parts** (2026-11-22, c88810jEKMw, 1080p60
+  `299+140`, `--exact`). A part started at 2:25:00 begins on the keyframe at
+  2:24:55, and its first video packet is that keyframe. A 15-minute part was
+  killed with `kill -9` at 446 MB; the rerun kept 13:50 of it, playable, and
+  fetched only 2:38:43 on, into a new file. On a 250 MB disk, the part
+  stopped at 8:10 with the disk-full message and a playable file, and a rerun
+  on the still-full disk left nothing behind. With room for the rest but not
+  for a second copy, the rest was kept untagged, and the next run said
+  `already here`. With a 60 MB file-size limit standing in for FAT32's 4 GB,
+  a 5-minute part came down as three playable files that overlap by a few
+  seconds.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that

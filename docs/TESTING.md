@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1083 assertions across 42 sections (plus 8b), 0 failures** — with or without
+**1107 assertions across 43 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -198,8 +198,7 @@ Proven by execution:
   sound; `get --range` building `*3600-inf` / `*1800-3600` with the ffmpeg
   reconnect args and the `(from 1h00m00s)` name, refusing past the end and on
   a live stream; ffmpeg's status line becoming a percentage with time left,
-  and its chatter kept out of the log; a short part being caught; and the
-  Live streams tab's **Download this part** / **Get the chat** argv.
+  and its chatter kept out of the log; and the Live streams tab's **Download this part** / **Get the chat** argv.
 - parts in pieces (section 41): an ffmpeg that lists `-request_size` gets
   `-multiple_requests 1 -request_size 10485760 -short_seek_size 10485760`
   after the reconnect options; an older one gets only the reconnect options,
@@ -214,6 +213,23 @@ Proven by execution:
   returns as soon as Stop is pressed; Ctrl+C once is a normal stop and twice is
   Force stop; the GUI's Force stop button is never greyed out, arms nothing when
   idle, and mid-run ends what the job started and logs it.
+- unfinished parts (section 43): names parsed and relabelled without ever
+  taking an existing file's name; `continue_point` over overlaps and gaps;
+  the size estimate; an Android card's file system found behind FUSE (a
+  sample `/proc/mounts`); `keyframe_before` reading ffmpeg's one-packet answer
+  (a fake ffmpeg), and refusing HLS, audio only, expressions and a far-off
+  answer; `get --range` asking for fragmented MP4. With real ffmpeg-made
+  files: a `.part` cut mid-write is trimmed to whole pieces, renamed to what
+  it holds, its cover removed, and reads through with no error; an old-style
+  `.part` is left alone and said so; an empty shell is removed. Then
+  `_download_part` with `download.download` faked but the files real: the
+  keyframe name and `*99.15-103`; the start written in full (`*14430.15`);
+  a rerun fetching nothing; disk full keeping a playable file and the rerun
+  carrying on with overlap, no gap; FAT32's "File too large", and Windows'
+  "not enough space" on a FAT32 drive, both going on into a new file; 403
+  fetching fresh links; a short file without an error renamed and continued;
+  a failed title/cover step keeping the whole file and removing the half
+  copy; any other error passed on.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

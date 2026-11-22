@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import cancel
 from . import config as configmod
-from . import chat, download, formats, live, lyrics, progress, providers, tags
+from . import (chat, download, formats, live, lyrics, parts, progress,
+               providers, tags)
 from .uicmd import is_playlist_url
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
@@ -692,16 +693,18 @@ def _plan_part(url, per, info, live_st, part, say):
     if total and b is not None and b > total:
         b = None
     end = b if b is not None else total
-    per["download_sections"] = f"*{a:g}-{b:g}" if b is not None else f"*{a:g}-inf"
-    per["section_span"] = (a, end)
     per["live_from_start"] = False
     per["no_lyrics"] = True
+    per["no_rerun"] = True              # see _download_part
     t = per.get("template") or download.DEFAULT_TEMPLATE
+    base = None
     if t.endswith(".%(ext)s"):
-        t = t[:-len(".%(ext)s")]
-        if "%(id)" not in t:
-            t += " [%(id)s]"            # so `chat` finds the video by its id
-        per["template"] = t + f" ({part_label(a, b)}).%(ext)s"
+        base = t[:-len(".%(ext)s")]
+        if "%(id)" not in base:
+            base += " [%(id)s]"          # so `chat` finds the video by its id
+    per["_part"] = {"a": a, "b": b, "end": end, "base": base,
+                    "vid": (info or {}).get("id")}
+    _set_part(per, a, b, end)
     span = f"{live.hms(a)} to " + (live.hms(b) if b is not None else
                                    f"the end ({live.hms(total)})" if total
                                    else "the end")
@@ -717,21 +720,193 @@ def _plan_part(url, per, info, live_st, part, say):
     return True
 
 
-def _check_part(path, span, say):
-    """ffmpeg can stop early and still report success (a long WiFi drop):
-    compare what landed with what was asked for."""
-    if not span or span[1] is None or not os.path.exists(path):
-        return True
-    want = span[1] - span[0]
-    got = live.media_seconds(path)
-    if not got:
-        return True
-    if got + max(5.0, want * 0.01) < want:
-        say(f"!! the file is {live.hms(got)} long, {live.hms(want)} was asked "
-            f"for -- the connection was lost. Download the missing end with "
-            f"--range {span[0] + got - 5:.0f}-{span[1]:.0f}")
-        return False
-    return True
+def _num(x):
+    """12.5 -> '12.5', 14430.15 -> '14430.15' (not :g, which keeps 6 digits
+    and gave '14430.1' -- before the keyframe nudge -- or '1e+05')."""
+    return f"{float(x):.3f}".rstrip("0").rstrip(".")
+
+
+def _set_part(per, start, b, end, label_start=None, seek=None):
+    """Point the download at START-END: what ffmpeg is asked for (`seek`,
+    just after the keyframe) and what the file is called (`label_start`,
+    the keyframe itself)."""
+    ls = start if label_start is None else label_start
+    sk = start if seek is None else seek
+    per["download_sections"] = (f"*{_num(sk)}-{_num(b)}" if b is not None
+                                else f"*{_num(sk)}-inf")
+    per["section_span"] = (ls, end)
+    base = per["_part"]["base"]
+    if base:
+        per["template"] = base + f" ({part_label(ls, b)}).%(ext)s"
+
+
+def _part_space(per, info, a, end, say):
+    """Before a part: will what is left of it (A to END) fit on the disk,
+    and in one file?"""
+    folder = per.get("output_dir") or "."
+    est = parts.estimate_bytes(info, per.get("format_selector"),
+                               (end - a) if end else None)
+    if not est:
+        return
+    free = parts.free_bytes(folder)
+    gb = 1024 ** 3
+    if free is not None and est > free:
+        upto = a + (end - a) * free / est
+        say(f"  !! about {est / gb:.1f} GB is needed and {free / gb:.1f} GB "
+            f"is free: it will stop around {live.hms(upto)}. What came down "
+            f"by then stays a playable file; free some space and run the same "
+            f"command again to carry on from there.")
+    typ = parts.fs_type(folder)
+    if parts.is_fat(typ) and est > parts.FAT_LIMIT:
+        say(f"  note: this card is FAT32 ({typ}), which holds no file of 4 GB "
+            f"or more, and the part is about {est / gb:.1f} GB. When a file "
+            f"reaches 4 GB it is closed (it plays) and the rest goes into a "
+            f"new file, by itself.")
+
+
+def _size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _download_part(url, per, info, say, tag, on_file):
+    """Fetch a part so that whatever comes down plays, and carry on from
+    where the files end -- after a drop, the 4 GB limit of a FAT32 card, or
+    on a later run -- instead of starting the part over. -> (files, error)."""
+    P = per["_part"]
+    a, b, end, vid = P["a"], P["b"], P["end"], P["vid"]
+    folder = per.get("output_dir") or "."
+    files = []
+    if vid:
+        # a run that was killed (Termux closed, power, Force stop) left a
+        # .part: keep it, or the new run's ffmpeg -y would overwrite it
+        parts.drop_temps(folder, vid)
+        for p in parts.leftovers(folder, vid):
+            kept = parts.salvage(p, say)
+            if kept and on_file:
+                on_file(kept[0], vid)        # into the folder's index
+    sleeps = iter(download.net_sleeps(float(per.get("net_max_wait", 240))))
+    expired = big = stuck = rounds = 0
+    last = None
+    while True:
+        rounds += 1
+        if rounds > 1:
+            # the links in `info` run out after some hours, and the keyframe
+            # look-up uses them: fresh ones for every new piece
+            fresh = download.probe(url, per)
+            if isinstance(fresh, dict) and not fresh.get("error"):
+                info = fresh
+        pos, used = (parts.continue_point(parts.coverage(folder, vid), a, end)
+                     if vid else (a, []))
+        if end and pos >= end - 1:
+            say("  already here, nothing to download: "
+                + ", ".join(os.path.basename(p) for p in used))
+            return files, None
+        if last is not None and pos <= last + 1:
+            stuck += 1
+            if stuck >= 3:
+                return files, "the part is not getting any further"
+        last = pos
+        if rounds == 1:
+            _part_space(per, info, pos, end, say)
+        start = a
+        if pos > a + 1:
+            start = max(a, pos - 2)      # a little overlap, never a gap
+            say(f"  already here: {live.hms(a)} to {live.hms(pos)} ("
+                + ", ".join(os.path.basename(p) for p in used)
+                + f") -- fetching {live.hms(start)} on, into a new file")
+        key = parts.keyframe_before(info, per.get("format_selector"), start,
+                                    live.ffmpeg_exe())
+        if key is not None and start - key > 0.05:
+            say(f"  starts at the keyframe at {live.hms(key)} "
+                f"({start - key:.1f} s early), so the picture and sound line "
+                f"up from the first frame")
+        if key is not None:
+            _set_part(per, start, b, end, label_start=key,
+                      seek=round(key + parts.KEY_NUDGE, 3))
+        else:
+            _set_part(per, start, b, end)
+        got, err = download.download(url, per, log=say, tag=tag,
+                                     on_file=on_file)
+        files.extend(got)
+        ls = per["section_span"][0]
+        if err and "Postprocessing" in err and vid:
+            # the part came down whole; only adding the title and cover
+            # failed -- that writes a second copy, and a nearly full card
+            # has no room for it. The file plays as it is.
+            parts.drop_temps(folder, vid)
+            done = parts.finished(folder, vid, ls)
+            if done:
+                parts.drop_cover(done)
+                say(f"  kept {os.path.basename(done)} as it is: adding the "
+                    f"title and cover failed (with too little free space -- "
+                    f"it needs room for a second copy). It plays.")
+                if not any(p == done for p, _v in got):
+                    got = got + [(done, vid)]
+                    files.append((done, vid))
+                    if on_file:
+                        on_file(done, vid)
+                err = None
+        if err is None:
+            done = got[-1][0] if got else None
+            secs = parts.seconds(done) if done and os.path.exists(done) else None
+            if not end or not secs or secs + max(5.0, (end - ls) * 0.01) \
+                    >= end - ls:
+                return files, None
+            new = parts.relabel(done, ls, ls + secs)
+            try:
+                os.replace(done, new)
+            except OSError:
+                new = done
+            files[:] = [(new if p == done else p, v) for p, v in files]
+            if on_file and new != done:
+                on_file(new, vid)
+            say(f"!! it stopped at {live.hms(ls + secs)} without saying why "
+                f"(a long drop): kept as {os.path.basename(new)}, carrying on")
+            continue                     # ffmpeg already waited out the drop
+        kept_now = []
+        if err is not None:
+            for p in parts.leftovers(folder, vid) if vid else []:
+                kept = parts.salvage(p, say)
+                if kept:
+                    kept_now.append(kept[0])
+                    files.append((kept[0], vid))
+                    if on_file:
+                        on_file(kept[0], vid)
+        if err == cancel.CANCELLED:
+            return files, err
+        # FAT32 holds no file of 4 GB; Windows says "not enough space" then
+        at_4g = any(_size(p) > parts.FAT_LIMIT - 256 * 1024 ** 2
+                    for p in kept_now) and parts.is_fat(parts.fs_type(folder))
+        if ("File too large" in err or at_4g) and big < 50:
+            big += 1
+            say("  the card takes no file of 4 GB or more (FAT32): that file "
+                "is closed and plays; the rest goes into a new file")
+            continue
+        if ("No space left" in err or "Disk quota" in err
+                or "not enough space" in err.lower()):
+            return files, ("the disk is full. What came down plays; free "
+                           "some space and run the same command again -- it "
+                           "carries on from where the files end.")
+        if "HTTP Error 403" in err or "403 Forbidden" in err:
+            if expired < 3:
+                expired += 1
+                say("  ! YouTube refused to go on (403) -- usually the links "
+                    "ran out; asking for fresh ones and carrying on")
+                continue
+            return files, err
+        if download.retryable(err):
+            w = next(sleeps, None)
+            if w is None:
+                return files, err
+            say(f"  ! network problem -- waiting {int(w)}s, then carrying on "
+                f"from where the file ends")
+            if not cancel.sleep(w):
+                return files, cancel.CANCELLED
+            continue
+        return files, err
 
 
 def cmd_get(args):
@@ -845,9 +1020,13 @@ def cmd_get(args):
         # yt-dlp only ever sees one URL, so it cannot tell the UI how many are
         # queued behind it. musictool can.
         progress.report({"type": "batch", "i": idx, "n": len(urls)})
-        files, err = download.download(
-            url, per, log=say, tag="" if n_jobs == 1 else str(idx),
-            on_file=lambda pth, vid, u=url: on_file(pth, vid, u))
+        _tag = "" if n_jobs == 1 else str(idx)
+        _onf = (lambda pth, vid, u=url: on_file(pth, vid, u))
+        if part:
+            files, err = _download_part(url, per, info, say, _tag, _onf)
+        else:
+            files, err = download.download(url, per, log=say, tag=_tag,
+                                           on_file=_onf)
         with lock:
             # extend(), not +=: inside a nested function that would rebind the
             # enclosing local and raise, and it is atomic enough under the lock.
@@ -861,9 +1040,6 @@ def cmd_get(args):
                 live.after_failure(per, err, log=say)
             return
         say(f"    {len(files)} file(s)")
-        if part:
-            for pth, _vid in files:
-                _check_part(pth, per.get("section_span"), say)
 
     if n_jobs == 1:
         for url in urls:
@@ -884,10 +1060,9 @@ def cmd_get(args):
         else:
             print(f"\n==> {cancel.CANCELLED}")
         if part:
-            # FFmpegFD runs `ffmpeg -y`: a part is never resumed
-            print("    a part (--range) is fetched by ffmpeg, which cannot "
-                  "resume: running it again fetches the part from its start "
-                  "(or give --range the time where it stopped)")
+            print("    what came down of the part plays as it is; running the "
+                  "same command again carries on from where it ends, in a "
+                  "new file")
         else:
             print("    a half-finished file keeps its .part, so the next run "
                   "resumes it instead of starting over")

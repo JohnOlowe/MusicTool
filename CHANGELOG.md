@@ -8,6 +8,53 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — Unfinished parts stay playable, and a rerun carries on
+*2026-11-22 · 1107 assertions*
+
+Asked for: after `get --range` stopped halfway on the phone (no space, or
+anything else), the files it left should still play.
+
+- **Why they did not play.** A part is copied by ffmpeg into an ordinary MP4,
+  whose index (`moov`) is written only at the very end. Killed, out of space,
+  or a crash: `moov atom not found`, nothing plays, and the next run's
+  `ffmpeg -y` wrote over it.
+- **Parts are now fragmented MP4** (`-movflags +frag_keyframe+empty_moov+
+  default_base_moof`, as `ffmpeg_o` downloader args): a piece per keyframe,
+  each playable once written. A 64 MB `.part` killed mid-write played 1:55;
+  the old way gave nothing. When it finishes, the title/cover step turns it
+  into an ordinary MP4 as before.
+- **It starts on the keyframe** (`parts.keyframe_before`). The ordinary MP4
+  hid the seconds before your time in its edit list; the fragmented one
+  played them, with the first audio packet stretched over 5 s. ffmpeg reads
+  one packet to find the keyframe (about 0.5 s, after YouTube's
+  `available_at` wait), and the part is asked for from 0.15 s after it:
+  starting exactly on it made ffmpeg (B-frames: it seeks 3/23 s early) take
+  the keyframe before. The name says where the file really starts:
+  `(2h24m55s-...)` for a `--range 2:25:00-...`.
+- **Keep what came down, then carry on** (`cli._download_part`, replacing
+  `_check_part`, which only printed a `--range` for the missing end). A
+  `.part` left behind is cut to its last whole piece and renamed to what it
+  holds; the rest is fetched from 2 s before its end into a new file. The
+  same loop handles a short file ffmpeg called finished, a full disk (stops,
+  says to free space and rerun), FAT32's 4 GB (`File too large`, or Windows'
+  "not enough space" on a FAT drive: new file, goes on), 403 (fresh links),
+  a network error (waits), and a title/cover step that fails for lack of room
+  for a second copy (the whole part is kept untagged, the `.temp.mp4` goes).
+  A rerun of a finished part says `already here, nothing to download`.
+- **Before it starts:** the part's estimated size against the free space
+  (and roughly where it will stop), and a warning when a FAT32 card gets a
+  part over 4 GB. On Android the card's real file system is read from
+  `/mnt/media_rw/XXXX-XXXX` behind the `/storage/XXXX-XXXX` FUSE mount.
+- Found on the way: `:g` wrote a start of 14430.15 as `14430.1` (before the
+  nudge), and would have written `1e+05` past 27 h. The section bounds are
+  now written in full.
+- Tested for real on YouTube (README, "Verified"): `kill -9` mid-part, a
+  250 MB disk filling up, and a 60 MB file-size limit standing in for FAT32.
+  `.part` files from before this change have no index and cannot be fixed by
+  it; they are left alone and the part is fetched again.
+
+---
+
 ## `9da2195` — Force stop; Stop no longer leaves ffmpeg downloading
 *2026-11-19 · 1083 assertions*
 

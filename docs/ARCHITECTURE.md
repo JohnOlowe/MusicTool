@@ -13,6 +13,7 @@ musictool.py ──▶ cli.py ──▶ download.py ──▶ (yt-dlp subprocess
                    │            └──▶ progress.py ──▶ gui.py (via a hook)
                    │
                    ├──▶ live.py ──▶ download.py, (ffmpeg for the watch copy)
+                   ├──▶ parts.py ──▶ (ffmpeg: one packet for the keyframe)
                    ├──▶ chat.py ──▶ (yt-dlp for the replay, ffmpeg to embed)
                    ├──▶ formats.py ──▶ (yt-dlp -J output)
                    ├──▶ lyrics.py ──▶ providers.py ──▶ tags.py ──▶ mutagen
@@ -34,13 +35,14 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1624 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_check_part` for `get --range` |
+| `cli.py` | 1799 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` for `get --range` |
 | `gui.py` | 2621 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 672 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
-| `download.py` | 880 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `download.py` | 893 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `chat.py` | 874 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `to_ass`/`to_srt`/`to_vtt`/`to_txt`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
+| `parts.py` | 438 | `get --range` pieces: `keyframe_before` (where a part really starts), `trim`/`salvage` (a fragmented `.part` cut to its last whole piece and renamed to what it holds), `coverage`/`continue_point` (how far the files already go), `drop_temps`, `estimate_bytes`/`free_bytes`/`fs_type`/`is_fat` (the Android card behind FUSE) |
 | `util.py` | 614 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
@@ -93,6 +95,16 @@ Functions worth knowing by name because they are load-bearing:
   and a `.livejoin` note, then delete the pieces. Every rename/remove goes
   through `retry()` (Windows locks). `watch_copy` remuxes the `.part` plus the
   contiguous pieces into `TITLE (so far).mp4` without changing them.
+- `cli._download_part(url, per, info, say, tag, on_file)` — the loop behind
+  `get --range`. Each round: keep any `.part` left behind (`parts.salvage`),
+  see how far the files go (`coverage` + `continue_point`), start 2 s before
+  that on the keyframe (`keyframe_before`; the name from the keyframe, ffmpeg
+  asked for `KEY_NUDGE` = 0.15 s after it), and download with
+  `download.FRAGMENTED` output and `no_rerun` (download's own retry would
+  start the part over). Then decide: done; short (rename, go on); full disk
+  (stop, say so); FAT32's 4 GB (go on, new file); 403 (fresh links, go on);
+  a network error (wait, go on); "Postprocessing" with the file whole (keep it
+  untagged). Three rounds without getting further ends it.
 - `download.streams(path)` — reads stream info by parsing
   `ffmpeg -hide_banner -i` stderr, because `ffprobe` is frequently absent
   (imageio-ffmpeg never ships it; stripped Windows and Termux installs often

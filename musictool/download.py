@@ -375,6 +375,12 @@ def build_args(url, o):
         rc = ffmpeg_reconnect_args()
         if rc:
             args += ["--downloader-args", "ffmpeg_i:" + rc]
+        # An ordinary MP4 is unplayable until ffmpeg writes its index at the
+        # very end: a part that stopped early (no space, a drop, Force stop)
+        # was gigabytes of nothing. Fragmented, everything up to the last
+        # whole piece (one keyframe, 2-5 s) plays -- see parts.py. Other
+        # containers ignore the option (checked: matroska).
+        args += ["--downloader-args", "ffmpeg_o:" + FRAGMENTED]
     args += ["--retries", str(o.get("retries", 5))]
     args += ["--fragment-retries", str(o.get("retries", 5))]
     # Without these a WiFi drop silently ruins a download made of pieces
@@ -440,6 +446,8 @@ def build_args(url, o):
 
 
 _RECONNECT = []
+
+FRAGMENTED = "-movflags +frag_keyframe+empty_moov+default_base_moof"
 
 # YouTube slows ONE open-ended request to about 2x real time -- measured on a
 # 1080p stream: 1:00 of video in 30 s. Asked for in 10 MB requests the same
@@ -833,6 +841,11 @@ def download(url, o, log=print, on_file=None, tag=""):
         if err == cancel.CANCELLED:
             # Keep what finished: those files already have their lyrics.
             return results, cancel.CANCELLED
+        if o.get("no_rerun"):
+            # a part: running ffmpeg again would start it over (-y) and
+            # overwrite what came down -- cli._download_part carries on from
+            # where the file ends instead
+            return results, err
         if (not o.get("dry_run") and stats.get("progress") and expired < 3
                 and re.search(r"HTTP Error 403", err)):
             # YouTube's links last about six hours; a long download on a slow

@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1083 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1107 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,12 +115,13 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1624   argparse + every cmd_* handler
+│   ├── cli.py         1799   argparse + every cmd_* handler
 │   ├── gui.py         2621   tkinter GUI, 9 tabs
 │   ├── uicmd.py        672   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     880   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── download.py     893   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
+│   ├── parts.py        438   get --range: keyframe, salvage a .part, coverage, disk/FAT32
 │   ├── chat.py         874   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
 │   ├── util.py         614   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
@@ -130,7 +131,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 5545   42 sections (+8b), 1083 assertions
+│   ├── test_musictool.py 5869   43 sections (+8b), 1107 assertions
 │   └── tkstub.py          728   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -312,13 +313,17 @@ Read `speed=X.XXx`, divide 20 by it.
 - **A real download.** Every download test uses a fake `yt-dlp` on `PATH`.
   By hand, with the maintainer's cookies, one 30 s part of R0GdEkPZSvM
   (`get --range`) and its chat replay (`chat --embed`) were fetched from
-  YouTube on 2026-11-19, and both worked. Nothing else was fetched.
+  YouTube on 2026-11-19, and both worked. On 2026-11-22, parts of c88810jEKMw
+  (1080p60) were fetched to check unfinished parts: killed, a full disk, a
+  file-size limit standing in for FAT32 (README, "Verified"). A real FAT32
+  card and a real Termux run were not tried; the Android card detection was
+  checked against a sample `/proc/mounts`.
 - **A real YouTube live stream.** The live handling was driven through the
   real yt-dlp downloader with a local live-style stream (README, "Verified"),
   never against YouTube, and the Windows file locks it waits out were
   simulated. The same goes for the network-drop handling and `--exact`: they
   were run through real yt-dlp against a local server that drops the
-  connection on cue. The only things downloaded from YouTube are the part and
+  connection on cue. The only things downloaded from YouTube are the parts and
   the chat above.
 - **Live lyrics providers.** Tests use a local HTTP server replaying the
   documented response shapes.
@@ -336,7 +341,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1083 assertions.
+Nothing is half-finished — `main` is green at 1107 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

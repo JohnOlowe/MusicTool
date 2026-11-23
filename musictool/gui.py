@@ -2180,6 +2180,10 @@ def run():
     cpad = tk.StringVar(value=str(EXTRA.get("chat_pad") or "0"))
     cnames = tk.BooleanVar(value=EXTRA.get("chat_names") is not False)
     cembed = tk.BooleanVar(value=bool(EXTRA.get("chat_embed")))
+    ccol = tk.StringVar(value=str(EXTRA.get("chat_colours") or "name"))
+    cbox = tk.BooleanVar(value=bool(EXTRA.get("chat_box")))
+    cgap = tk.StringVar(value=str(EXTRA.get("chat_gap") if EXTRA.get(
+        "chat_gap") not in (None, "") else "0.4"))
     for label, var, kind, vals, w in (
             ("Format:", cfmt, "combo", chat.FORMATS, 6),
             ("Messages at once:", clines, "spin", (1, 30), 4),
@@ -2207,23 +2211,47 @@ def run():
                     command=lambda: remember_soon()).pack(side="left", padx=10)
     ttk.Label(_c2, text="SRT spaces:").pack(side="left", padx=(6, 3))
     ttk.Entry(_c2, textvariable=cpad, width=4).pack(side="left")
-    bchat = ttk.Button(_c2, text="Get the chat", command=lambda: l_chat())
+    _c3 = ttk.Frame(chf)
+    _c3.pack(fill="x", padx=6, pady=2)
+    ttk.Label(_c3, text="Colours:").pack(side="left", padx=(0, 3))
+    _cc = ttk.Combobox(_c3, textvariable=ccol, values=list(chat.COLOUR_MODES),
+                       state="readonly", width=6)
+    _cc.bind("<<ComboboxSelected>>", lambda _e: remember_soon())
+    _cc.pack(side="left", padx=(0, 10))
+    ttk.Label(_c3, text="Space between messages (lines):").pack(
+        side="left", padx=(0, 3))
+    ttk.Entry(_c3, textvariable=cgap, width=4).pack(side="left", padx=(0, 10))
+    ttk.Checkbutton(_c3, text="Dark box behind the text", variable=cbox,
+                    command=lambda: remember_soon()).pack(side="left")
+    bchat = ttk.Button(_c3, text="Get the chat", command=lambda: l_chat())
     bchat.pack(side="right")
     run_buttons.append(bchat)
+    bconv = ttk.Button(_c3, text="Remake a chat file\u2026",
+                       command=lambda: l_chat_file())
+    bconv.pack(side="right", padx=(0, 6))
+    run_buttons.append(bconv)
     ttk.Label(chf, foreground="#555", wraplength=960, justify="left", text=(
         "Downloads only the chat (a few MB) and saves it next to the video "
         "with the same name, so the player shows it like subtitles. A "
         "message stays until \u201cMessages at once\u201d newer ones are "
         "below it: 1 is like normal subtitles, 6 looks like the chat "
         "scrolling. A part made with \u201cDownload this part\u201d gets "
-        "the chat of that part. ASS keeps the side and colours in every "
-        "player; SRT plays everywhere (SRT spaces push it right in players "
-        "that ignore the side, try 40-60); TXT is a readable log. Adding it "
+        "the chat of that part. Colours: name = everyone in a colour of "
+        "their own (the owner, moderators, members and Super Chats in "
+        "YouTube's), role = only those, off = white; the text is outlined, "
+        "with no box unless you tick it. ASS keeps the side, colours and "
+        "spacing in every player; SRT plays everywhere (SRT spaces push it "
+        "right in players that ignore the side, try 40-60; it can only "
+        "space whole lines, 1 or more); TXT is a readable log. Adding it "
         "as a track: an .mkv is updated, an .mp4 gets an .mkv copy beside "
-        "it.")).pack(anchor="w", padx=6, pady=(2, 6))
+        "it. \u201cRemake a chat file\u201d reads a chat musictool made "
+        "before (.ass .srt .vtt .txt, or a video with the chat track) and "
+        "makes it again with these settings -- e.g. as another format.")
+              ).pack(anchor="w", padx=6, pady=(2, 6))
     live_state.update(live_part=lpart, chat_format=cfmt, chat_lines=clines,
                       chat_hold=chold, chat_side=cside, chat_place=cplace,
-                      chat_pad=cpad, chat_names=cnames, chat_embed=cembed)
+                      chat_pad=cpad, chat_names=cnames, chat_embed=cembed,
+                      chat_colours=ccol, chat_box=cbox, chat_gap=cgap)
     ttk.Label(lbody, foreground="#555", wraplength=980, justify="left", text=(
         "\u2022 Record from the start: from the stream's first minute, even "
         "if it began hours ago. Video and audio are added to the file as they "
@@ -2395,15 +2423,14 @@ def run():
         do_argv(uicmd.build_argv("get", vals, positionals=[u],
                                  parser=build_parser()), after=l_after)
 
-    def l_chat():
-        u = l_url()
-        if not u:
-            return
-        d = l_dir(False)
-        argv = ["chat", u, "-o", d, "--format", cfmt.get() or "ass"]
+    def l_chat_style():
+        """The chat box's settings as `chat` options, or None (a bad number
+        was typed; already said)."""
+        argv = ["--format", cfmt.get() or "ass"]
         for flag, var, cast in (("--lines", clines, int),
                                 ("--hold", chold, float),
-                                ("--pad", cpad, int)):
+                                ("--pad", cpad, int),
+                                ("--gap", cgap, float)):
             t = var.get().strip()
             if not t:
                 continue
@@ -2412,14 +2439,40 @@ def run():
             except ValueError:
                 messagebox.showwarning("musictool", f"{flag[2:]}: not a "
                                        f"number: {t}")
-                return
+                return None
             argv += [flag, t]
         argv += ["--side", cside.get() or "right",
-                 "--place", cplace.get() or "bottom"]
-        if not cnames.get():
-            argv.append("--no-names")
+                 "--place", cplace.get() or "bottom",
+                 "--colours", ccol.get() or "name",
+                 "--box" if cbox.get() else "--no-box",
+                 "--names" if cnames.get() else "--no-names"]
         if cembed.get():
             argv.append("--embed")
+        return argv
+
+    def l_chat_file():
+        f = filedialog.askopenfilename(
+            title="A chat file musictool made",
+            filetypes=[("Chat files", "*.ass *.srt *.vtt *.txt *.json *.mkv "
+                                      "*.mp4"), ("All files", "*.*")])
+        if not f:
+            return
+        look = l_chat_style()
+        if look is None:
+            return
+        remember_soon()
+        linfo.set(f"remaking {os.path.basename(f)} ...")
+        do_argv(["chat", f] + look, after=lambda rc: log(f"\n(exit {rc})"))
+
+    def l_chat():
+        u = l_url()
+        if not u:
+            return
+        d = l_dir(False)
+        look = l_chat_style()
+        if look is None:
+            return
+        argv = ["chat", u, "-o", d] + look
         # The part comes from the video's name ("(from 1h00m00s)"). Only
         # with no video of it in the folder is the field used instead.
         t = l_part_value()

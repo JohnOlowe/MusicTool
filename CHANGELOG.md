@@ -8,6 +8,43 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — chat: remake a chat file; colours; no box; space between messages
+*2026-11-23 · 1153 assertions*
+
+Asked for: a way to edit a chat that is already downloaded, which reads
+musictool's own chat files (ass/srt/vtt/txt), for example to turn one into
+another format. Also: colour fully in the chat subtitles, no background, and
+a little space between messages.
+
+- **`chat FILE.ass|.srt|.vtt|.txt`** (or a video with the *Live chat* track)
+  remakes that file with whatever you change, keeps the rest as the file had
+  it, and downloads nothing. ASS, VTT and the text log now carry every
+  message and the settings: an ASS `[MusicTool Chat]` section (players skip
+  it, and it survives being muxed into an .mkv), a VTT comment, the log's `#`
+  lines. They read back exactly, in the stream's time (`parse_own`). SRT has
+  no room for that, so it is rebuilt from its cues (a message at the first
+  cue showing it, roles from the colours), and so are files from older
+  versions. The CLI options now default to "not given", so a file's own
+  settings win over the defaults; a foreign subtitle is read but never
+  overwritten. In the GUI: **Remake a chat file…**.
+- **Colour.** Names bold and coloured, and the message in a lighter tint of
+  the same colour. The owner, moderators and members in YouTube's colours,
+  a Super Chat in the colour YouTube gave it (`bodyBackgroundColor`, read
+  from the replay), everyone else a fixed colour from their name.
+  `--colours role|off`. SRT gets `<font color>` on the message too, and VTT
+  a STYLE block with a class per colour (it had none).
+- **No box.** The default is outlined text with a soft shadow; `--box` puts
+  the see-through dark box back (`--no-box` still works). VTT takes the cue
+  background away in its STYLE block.
+- **`--gap`** (default 0.4 of a line): in ASS, a small blank line between
+  messages. SRT/VTT can only space whole lines, so there it is `--gap 1`+.
+- The text log's times have milliseconds (`[0:01:02.345]`), so it converts
+  back without moving anything.
+- Drawn with ffmpeg's libass on R0GdEkPZSvM's real replay (README,
+  "Verified"). Section 45.
+
+---
+
 ## `3651ca9` — `--just-download`; `--exact --subs` keeps the chat
 *2026-11-23 · 1119 assertions*
 

@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1119 assertions across 44 sections (plus 8b), 0 failures** — with or without
+**1153 assertions across 45 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -237,6 +237,16 @@ Proven by execution:
   subtitles beside the video (and says so) instead of dropping them; `chat`
   reads the id from a part's chat name; a part in two pieces fetches the chat
   with the first only, and a rerun with the chat there does not fetch it.
+- chat files remade (section 45): the colours (YouTube's for the owner,
+  moderators, members and Super Chats, a fixed one per name for the rest,
+  `role` and `off`); ASS with no box, coloured text and a 0.4-line gap;
+  ASS, VTT and the text log read back exactly (times, names, roles, amounts,
+  Super Chat colours, braces, `-->`, a Unicode line separator) with the
+  settings they were made with; SRT and files from older versions rebuilt
+  from their cues; the CLI remaking ASS -> SRT -> VTT, a hand-edited text
+  log back into ASS, in place, and a foreign subtitle left alone; with real
+  ffmpeg, `--embed` from an ASS and the chat track read back out of the
+  `.mkv`; and the GUI's *Remake a chat file…* button.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

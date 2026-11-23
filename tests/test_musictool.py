@@ -4520,9 +4520,10 @@ def _drain8():
 _nb8 = [w for w in _r8.walk() if isinstance(w, tkstub.Notebook)][0]
 _lt = _nb8.tab_for("Live streams")
 _le = [w for w in _lt.walk() if w.kind == "entry"]
-# link, folder, copy folder -- then the part, and the chat's hold and SRT pad
+# link, folder, copy folder -- then the part, and the chat's hold, SRT pad
+# and spacing
 check("the Live streams tab has the link, the folder and the copy folder",
-      len(_le) == 6, str(len(_le)))
+      len(_le) == 7, str(len(_le)))
 _gp8 = [w for w in _r8.walk() if isinstance(w, G.OptionsPane)
         and w.sub == "get"][0]
 _cfb8 = _gp8.vars["cookies_from_browser"].get()
@@ -5031,9 +5032,13 @@ _ass = CH.render(_M, "ass", lines=3, hold=15, start=5, side="right",
                  place="bottom", title="T")
 _sty = [x for x in _ass.splitlines() if x.startswith("Style: Chat")][0]
 check("ASS: right + bottom = a column on the right (text left-aligned in it, "
-      "like a chat), on a dark box",
+      "like a chat), outlined with no box",
       _sty.split(",")[18] == "1" and int(_sty.split(",")[19]) > 1000
-      and _sty.split(",")[15] == "3" and CH.MARK in _ass, _sty)
+      and _sty.split(",")[15] == "1" and CH.MARK in _ass, _sty)
+_bx = CH.render(_M, "ass", lines=3, hold=15, start=5, box=True)
+check("...box=True: on a see-through dark box (BorderStyle 3)",
+      [x for x in _bx.splitlines() if x.startswith("Style: Chat")][0]
+      .split(",")[15] == "3")
 check("...names bold in their colour, braces in messages harmless",
       "{\\b1\\c&H" in _ass and "hello \uff5bthere\uff5d" in _ass, _ass[-400:])
 _lft = CH.render(_M, "ass", side="left", place="top")
@@ -5045,7 +5050,8 @@ check("SRT: numbered cues, {\\an3} for right/bottom, names in <b>",
       and "<b>@ann: </b>" in _srt, _srt[:200])
 _pad = CH.render(_M, "srt", lines=1, hold=8, start=5, pad=10, names=False)
 check("SRT pad: every line pushed right with no-break spaces",
-      "}" + "\u00a0" * 10 + "hello (there)" in _pad, repr(_pad[:120]))
+      "}" + "\u00a0" * 10 + '<font color="#' in _pad
+      and "hello (there)</font>" in _pad, repr(_pad[:120]))
 check("...SRT gets ( ) for braces: some players read { } as a style tag",
       "{there}" not in _srt and "(there)" in _srt)
 _vtt = CH.render(_M, "vtt", lines=3, hold=15, start=5, side="right")
@@ -5054,7 +5060,7 @@ check("VTT: a header and cue settings that place it right",
       and "00:00:05.000 --> " in _vtt, _vtt[:200])
 _txt = CH.render(_M, "txt", start=5)
 check("TXT: one readable line per message, from the part's start",
-      "[0:00:05] @ann: hello {there}" in _txt and "@early" not in _txt,
+      "[0:00:05.000] @ann: hello {there}" in _txt and "@early" not in _txt,
       _txt[:300])
 check("--no-names leaves the names out",
       "@ann" not in CH.render(_M, "srt", names=False))
@@ -5094,7 +5100,7 @@ _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "0:10-0:20",
                      "--format", "txt"], capture_output=True, text=True, env=ENV)
 _tx = open(_V[:-4] + ".txt", encoding="utf-8").read()
 check("--range overrides the name: 0:10-0:20 only",
-      "[0:00:00] @ann" in _tx and "@fay" not in _tx, _tx[-300:])
+      "[0:00:00.000] @ann" in _tx and "@fay" not in _tx, _tx[-300:])
 _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "junk"],
                     capture_output=True, text=True, env=ENV)
 check("...a range that makes no sense is refused (exit 2)",
@@ -5964,6 +5970,254 @@ if _ff43:
     finally:
         download.download, download.probe, PT.keyframe_before = _o44
     shutil.rmtree(_D44, ignore_errors=True)
+
+
+# ============ 45. chat files: read back, remade; colours, no box, spacing
+print("\n45. chat files musictool made are read back and remade; colours, "
+      "no box, spacing")
+from musictool import chat as CH45  # noqa: E402
+_D45 = os.path.join(WORK, "chat45")
+shutil.rmtree(_D45, ignore_errors=True)
+os.makedirs(_D45)
+_M45 = [CH45.Message(100.25, "@owner", "welcome {all}", "owner"),
+        CH45.Message(101.5, "@mod", "be nice \\N no {\\b1}tags", "moderator"),
+        CH45.Message(103.0, "@mem", "a --> b <b>x</b> & y", "member"),
+        CH45.Message(104.125, "@rich", "take my money", "", "$5.00", "",
+                     "1DE9B6"),
+        CH45.Message(105.0, "@joe", "line\u2028sep emoji \U0001F525", ""),
+        CH45.Message(106.0, "@ann", "plain words that go on for a while so "
+                     "the line is wrapped in srt", ""),
+        CH45.Message(140.0, "@late", "after the part", "")]
+
+
+def _k45(m):
+    return (round(m.t, 3), m.author, m.text, m.role, m.paid, m.colour)
+
+
+# --- colours
+_cn = {m.author: CH45.colour_of(m) for m in _M45}
+check("colours: owner/moderator/member in YouTube's, a Super Chat in its own",
+      _cn["@owner"][0] == "FFD600" and _cn["@mod"][0] == "5E84F1"
+      and _cn["@mem"][0] == "2BA640" and _cn["@rich"][0] == "1DE9B6", str(_cn))
+check("...everyone else a colour of their own, the same every time; the "
+      "message a lighter tint of it",
+      _cn["@joe"][0] in CH45.PALETTE and _cn["@joe"] == CH45.colour_of(_M45[4])
+      and _cn["@joe"][1] != CH45.TEXT
+      and int(_cn["@joe"][1][:2], 16) >= int(_cn["@joe"][0][:2], 16), str(_cn))
+check("...role: others grey with white text; off: all white",
+      CH45.colour_of(_M45[4], "role") == ("B0B0B0", "FFFFFF")
+      and CH45.colour_of(_M45[0], "off") == ("FFFFFF", "FFFFFF"))
+
+# --- ASS: no box by default, colour on the text, a small space between
+_a45 = CH45.render(_M45, "ass", lines=3, hold=15, start=100, end=130)
+_st45 = [x for x in _a45.splitlines() if x.startswith("Style: Chat")][0]
+_dl45 = [x for x in _a45.splitlines() if x.startswith("Dialogue:")]
+check("ASS: no box (BorderStyle 1), an outline and a shadow",
+      _st45.split(",")[15] == "1" and int(_st45.split(",")[16]) >= 2
+      and int(_st45.split(",")[17]) >= 1, _st45)
+check("...each message's text in its colour, not plain white",
+      "{\\b0\\c" + CH45._bgr(_cn["@owner"][1]) + "}welcome" in _a45, _dl45[0])
+check("...a blank line 0.4 of a line high between two messages",
+      "\\N{\\fs18}\\h\\N{\\fs45}" in _a45, _dl45[2])
+check("...gap 0: messages right under each other",
+      "\\h" not in CH45.render(_M45, "ass", start=100, end=130, gap=0))
+check("...the messages and settings are kept in a section players skip",
+      CH45.DATA in _a45 and _a45.index(CH45.DATA) < _a45.index("[Events]"))
+
+# --- read back losslessly: ASS, WebVTT, the text log
+for _f45 in ("ass", "vtt", "txt"):
+    _t45 = CH45.render(_M45, _f45, lines=3, hold=12, start=100, end=130,
+                       offset=1.5, sound=0.25, video_id="ABCDEFGHIJK",
+                       side="left", place="top", colours="role")
+    _g45, _m45 = CH45.parse_own(_t45, _f45)
+    _want = [_k45(m) for m in _M45 if m.t < 130]
+    if _f45 == "txt":       # the log has no Super Chat colour for others
+        _want = [_k45(m) for m in _M45 if m.t < 130]
+    check(f"{_f45}: every message read back exactly, in the video's time",
+          [_k45(m) for m in _g45] == _want,
+          str([_k45(m) for m in _g45][:3]))
+    check(f"...{_f45}: with the settings it was made with",
+          _m45.get("start") == 100 and _m45.get("end") == 130
+          and _m45.get("offset") == 1.5 and _m45.get("sound") == 0.25
+          and _m45.get("lines") == 3 and _m45.get("side") == "left"
+          and _m45.get("colours") == "role" and _m45.get("id") == "ABCDEFGHIJK"
+          and not _m45.get("clip"), str(_m45))
+_v45 = CH45.render(_M45, "vtt", start=100, end=130)
+_vn45 = _v45[_v45.index(CH45.DATA_NOTE):]
+check("vtt: colours in a STYLE block, the cue background taken away",
+      "::cue(.c" + _cn["@owner"][0] + ")" in _v45
+      and "background-color: transparent" in _v45
+      and "background-color" not in CH45.render(_M45, "vtt", start=100,
+                                                end=130, box=True))
+check("...a message with --> in it cannot end the comment early",
+      "-->" not in _vn45 and "\n\n" not in _vn45.rstrip("\n"), _vn45[:300])
+check("...nor can a Unicode line separator split a message",
+      all(ln.startswith(("Settings: ", "Message: ", "NOTE"))
+          for ln in _vn45.rstrip("\n").split("\n")))
+
+# --- SRT keeps no data: rebuilt from what is on screen when
+_s45 = CH45.render(_M45, "srt", lines=3, hold=12, start=100, end=130)
+_g45, _m45 = CH45.parse_own(_s45, "srt")
+check("srt: the colours are in it (names and text)",
+      '<font color="#FFD600"><b>@owner: </b></font>' in _s45
+      and '<font color="#' + _cn["@owner"][1] + '">' in _s45, _s45[:300])
+check("srt: rebuilt from the cues -- every message once, at its time in "
+      "the clip, roles back from the colours",
+      [(round(m.t, 3), m.author, m.role, m.paid) for m in _g45]
+      == [(round(m.t - 100, 3), m.author, m.role, m.paid)
+          for m in _M45 if m.t < 130]
+      and _g45[5].text == _M45[5].text and _m45.get("clip")
+      and _m45.get("lines") == 3,
+      str([(m.t, m.author, m.role, m.text) for m in _g45]))
+_s45g = CH45.render(_M45, "srt", lines=3, start=100, end=130, gap=1)
+check("srt gap 1: an empty-looking line between messages, still read back",
+      "\n\u00a0\n" in _s45g
+      and len(CH45.parse_own(_s45g, "srt")[0]) == 6)
+
+# --- files from before this version (no data in them)
+_old45 = ("[Script Info]\n; musictool chat -- live chat replay as subtitles\n"
+          "\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, "
+          "MarginR, MarginV, Effect, Text\n"
+          "Dialogue: 0,0:00:01.00,0:00:03.00,Chat,,0,0,0,,{\\b1\\c&HF1845E&}"
+          "@mod: {\\b0\\c&HFFFFFF&}hi \uff5bx\uff5d\n"
+          "Dialogue: 0,0:00:03.00,0:00:05.00,Chat,,0,0,0,,{\\b1\\c&HF1845E&}"
+          "@mod: {\\b0\\c&HFFFFFF&}hi \uff5bx\uff5d\\N{\\b1\\c&H28CAFF&}"
+          "[$2.00] @p: {\\b0\\c&HFFFFFF&}yo\n"
+          "Dialogue: 0,0:00:05.00,0:00:06.00,Chat,,0,0,0,,{\\b1\\c&H28CAFF&}"
+          "[$2.00] @p: {\\b0\\c&HFFFFFF&}yo\n")
+_g45, _m45 = CH45.parse_own(_old45, "ass")
+check("an older ASS (no data): messages rebuilt, braces, role and amount back",
+      [(m.t, m.author, m.text, m.role, m.paid) for m in _g45]
+      == [(1.0, "@mod", "hi {x}", "moderator", ""), (3.0, "@p", "yo", "", "$2.00")]
+      and _m45 == {"clip": True, "lines": 2},
+      str([(m.t, m.author, m.text, m.role, m.paid) for m in _g45]))
+_g45, _m45 = CH45.parse_own("# musictool chat: live chat replay\n"
+                            "[0:00:05] @ann: hi: there\n[1:00:00] [$5.00] "
+                            "@b: ok\n", "txt")
+check("an older text log: times, names, amounts",
+      [(m.t, m.author, m.text, m.paid) for m in _g45]
+      == [(5.0, "@ann", "hi: there", ""), (3600.0, "@b", "ok", "$5.00")]
+      and _m45.get("clip"), str([(m.t, m.author, m.text) for m in _g45]))
+
+# --- the CLI: remake a file, in another format or with other settings
+_J45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].live_chat.json")
+_rows45 = []
+for _i, (_t, _a, _x) in enumerate([(1000, "@ann", "one"), (2000, "@bob", "two"),
+                                   (3000, "@cat", "three"),
+                                   (4000, "@dan", "four")]):
+    _rows45.append(json.dumps({"replayChatItemAction": {
+        "videoOffsetTimeMsec": str(_t), "actions": [{"addChatItemAction": {
+            "item": {"liveChatTextMessageRenderer": {
+                "id": f"id{_i}", "authorName": {"simpleText": _a},
+                "message": {"runs": [{"text": _x}]}}}}}]}}))
+open(_J45, "w").write("\n".join(_rows45) + "\n")
+
+
+def _cli45(*a):
+    return subprocess.run([sys.executable, ENTRY, "chat"] + list(a),
+                          capture_output=True, text=True, env=ENV)
+
+
+_r = _cli45(_J45, "--lines", "2", "--hold", "0", "--side", "left")
+_A45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].ass")
+check("chat FILE.json: an ASS with the messages inside",
+      _r.returncode == 0 and os.path.exists(_A45)
+      and CH45.DATA in open(_A45, encoding="utf-8").read(), _r.stdout[-300:])
+_r = _cli45(_A45, "--format", "srt")
+_S45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].srt")
+_st = open(_S45, encoding="utf-8-sig").read() if os.path.exists(_S45) else ""
+check("chat FILE.ass --format srt: the same chat as SRT beside it, with the "
+      "file's own settings (2 at once, left)",
+      _r.returncode == 0 and "{\\an1}" in _st and "@ann" in _st
+      and max(len(c.split("<b>")) - 1 for c in _st.split("\n\n")) == 2,
+      _r.stdout[-300:] + _st[:300])
+_r = _cli45(_S45, "--format", "vtt", "--lines", "1")
+_V45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].vtt")
+check("chat FILE.srt --format vtt: rebuilt from the SRT, your --lines used",
+      _r.returncode == 0 and os.path.exists(_V45)
+      and [m.author for m in CH45.read_own(_V45)[0]]
+      == ["@ann", "@bob", "@cat", "@dan"]
+      and CH45.read_own(_V45)[1].get("lines") == 1, _r.stdout[-300:])
+_r = _cli45(_A45, "--format", "txt")
+_T45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].txt")
+_tl = open(_T45, encoding="utf-8").read().splitlines()
+open(_T45, "w", encoding="utf-8").write(
+    "\n".join(x for x in _tl if "@bob" not in x) + "\n")      # edited by hand
+_r = _cli45(_T45, "--format", "ass", "--box", "--gap", "0")
+_ga = CH45.read_own(_A45)
+check("a text log edited by hand (a line deleted) back into ASS: that "
+      "message gone, the times kept, --box and --gap as given",
+      _r.returncode == 0 and [(m.t, m.author) for m in _ga[0]]
+      == [(1.0, "@ann"), (3.0, "@cat"), (4.0, "@dan")]
+      and _ga[1].get("box") is True and _ga[1].get("gap") == 0
+      and _ga[1].get("side") == "left", _r.stdout[-300:] + str(_ga[1]))
+_r = _cli45(_A45)
+check("chat FILE.ass alone: remade in place, in its own format",
+      _r.returncode == 0 and CH45.read_own(_A45)[1].get("box") is True
+      and "wrote Talk [ABCDEFGHIJK].ass" in _r.stdout, _r.stdout[-300:])
+open(os.path.join(_D45, "Foreign.srt"), "w").write(
+    "1\n00:00:01,000 --> 00:00:02,000\nsomeone's subtitle\n")
+_r = _cli45(os.path.join(_D45, "Foreign.srt"), "--format", "srt")
+check("a subtitle musictool did not make is read, but never overwritten",
+      _r.returncode == 0 and os.path.exists(os.path.join(_D45, "Foreign.chat.srt"))
+      and "someone's subtitle" in open(os.path.join(_D45, "Foreign.srt")).read()
+      and "does not say musictool made it" in _r.stdout, _r.stdout[-300:])
+
+# --- with the video beside it: the track in the video can be remade too
+if _ff43:
+    _vid45 = os.path.join(_D45, "Talk [ABCDEFGHIJK].mp4")
+    _mk43(_vid45, 6, frag=False)
+    _r = _cli45(_A45, "--embed", "--format", "ass", "--box")
+    _mkv45 = _vid45[:-4] + ".mkv"
+    check("chat FILE.ass --embed: the video beside it gets the chat track",
+          _r.returncode == 0 and os.path.exists(_mkv45)
+          and CH45.TRACK_TITLE in [s[2] for s in CH45._streams(_mkv45)],
+          _r.stdout[-400:])
+    _r = _cli45(_mkv45, "--format", "srt")
+    _s2 = os.path.join(_D45, "Talk [ABCDEFGHIJK].srt")
+    check("chat VIDEO.mkv --format srt: the chat track read out of the video",
+          _r.returncode == 0 and os.path.exists(_s2)
+          and [m.author for m in CH45.read_own(_s2)[0]]
+          == ["@ann", "@cat", "@dan"], _r.stdout[-400:])
+    _r = _cli45(os.path.join(_D45, "src45.mkv") if False else _vid45)
+    check("...a video without a chat track says so",
+          _r.returncode == 1 and "has no" in _r.stdout, _r.stdout[-300:])
+
+# --- the GUI: the new settings, and "Remake a chat file..."
+tkstub.reset()
+G.run()
+_r45 = tkstub.ROOTS[-1]
+_lt45 = [w for w in _r45.walk() if isinstance(w, tkstub.Notebook)][0].tab_for(
+    "Live streams")
+_A45g, _cli45g = [], G.cli_main
+G.cli_main = lambda argv: (_A45g.append(list(argv)), 0)[1]
+
+
+def _drain45():
+    todo, _r45.pending[:] = list(_r45.pending), []
+    for f in todo:
+        f()
+
+
+try:
+    tkstub.DIALOG["open"] = _A45
+    _qbtn(_lt45, "Remake a chat file\u2026").invoke()
+    _drain45()
+    _c45 = _A45g[-1] if _A45g else []
+    check("'Remake a chat file...' -> chat FILE with the box's settings",
+          _c45[:2] == ["chat", _A45] and _val(_c45, "--format") == "ass"
+          and _val(_c45, "--colours") == "name" and _val(_c45, "--gap") == "0.4"
+          and "--no-box" in _c45 and "--names" in _c45 and "-o" not in _c45,
+          str(_c45))
+    tkstub.DIALOG["open"] = ""
+    _n45 = len(_A45g)
+    _qbtn(_lt45, "Remake a chat file\u2026").invoke()
+    _drain45()
+    check("...cancelled: nothing runs", len(_A45g) == _n45)
+finally:
+    G.cli_main = _cli45g
+    tkstub.DIALOG.pop("open", None)
+shutil.rmtree(_D45, ignore_errors=True)
 
 
 srv.shutdown()

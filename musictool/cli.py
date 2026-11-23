@@ -278,45 +278,67 @@ def build_parser():
                      "downloaded (text only), timed to your video -- or the "
                      "part of it you have -- and optionally added to it as "
                      "a subtitle track")
-    ch.add_argument("source", help="the video's link, or a .live_chat.json "
-                                   "you already have")
+    ch.add_argument("source", help="the video's link, a .live_chat.json you "
+                                   "already have -- or a chat file this made "
+                                   "(.ass/.srt/.vtt/.txt, or a video with the "
+                                   "chat track), to make it again in another "
+                                   "format or with other settings; what you "
+                                   "leave out stays as that file had it")
     ch.add_argument("-o", "--output-dir", dest="output_dir",
                     help="the folder with the video (default: your download "
                          "folder); the chat file is saved there too")
     ch.add_argument("--video", help="the video file to match, when the folder "
                                     "has several or its name lacks [ID]")
     ch.add_argument("--format", dest="sub_format", choices=chat.FORMATS,
-                    default="ass", help="ass (default: placement and colours "
+                    help="ass (default: placement, colours and spacing "
                     "everywhere), srt (plays everywhere), vtt (browsers), txt "
                     "(a readable log, not a subtitle)")
-    ch.add_argument("--lines", type=int, default=5,
+    ch.add_argument("--lines", type=int,
                     help="messages on screen at once (default 5). A message "
                          "stays until this many newer ones are below it. 1 = "
                          "like normal subtitles, 6+ = scrolling chat")
-    ch.add_argument("--hold", type=float, default=15,
+    ch.add_argument("--hold", type=float,
                     help="longest a message stays, in seconds (default 15; "
                          "0 = until pushed off, even in a quiet chat)")
-    ch.add_argument("--side", choices=chat.SIDES, default="right")
-    ch.add_argument("--place", choices=chat.PLACES, default="bottom",
+    ch.add_argument("--side", choices=chat.SIDES, help="default right")
+    ch.add_argument("--place", choices=chat.PLACES,
                     help="height on screen (default bottom)")
-    ch.add_argument("--width", type=int, default=32,
+    ch.add_argument("--width", type=int,
                     help="ass/vtt: the chat column's width, %% of the "
                          "picture (default 32)")
-    ch.add_argument("--wrap", type=int, default=40,
-                    help="srt/vtt: break lines after about this many letters")
-    ch.add_argument("--pad", type=int, default=0,
+    ch.add_argument("--wrap", type=int,
+                    help="srt/vtt: break lines after about this many letters "
+                         "(default 40)")
+    ch.add_argument("--pad", type=int,
                     help="srt: push the text right with this many spaces, for "
                          "players that ignore the side setting (try 40-60)")
-    ch.add_argument("--no-names", dest="names", action="store_false",
-                    help="messages only, no user names")
-    ch.add_argument("--no-box", dest="box", action="store_false",
-                    help="ass: outlined text instead of on a dark box")
+    ch.add_argument("--no-names", dest="names", action="store_const",
+                    const=False, help="messages only, no user names")
+    ch.add_argument("--names", dest="names", action="store_const", const=True,
+                    help="names back on (for a file made with --no-names "
+                         "from the .live_chat.json)")
+    ch.add_argument("--colours", "--colors", dest="colours",
+                    choices=chat.COLOUR_MODES,
+                    help="name (default): everyone's name and message in a "
+                         "colour of their own -- the owner, moderators, "
+                         "members and Super Chats in YouTube's; role: only "
+                         "those; off: white")
+    ch.add_argument("--box", dest="box", action="store_const", const=True,
+                    help="ass/vtt: on a see-through dark box (default: no "
+                         "box, outlined text with a shadow)")
+    ch.add_argument("--no-box", dest="box", action="store_const", const=False,
+                    help=argparse.SUPPRESS)
+    ch.add_argument("--gap", type=float,
+                    help="space between messages, in lines (default 0.4; 0 = "
+                         "none). srt/vtt can only space whole lines: 1+")
     ch.add_argument("--range", dest="part", metavar="START-END",
                     help="the part of the stream your video holds, e.g. "
                          "1:00:00- . Normally read from the video's name "
                          "('NAME (from 1h00m00s)', as `get --range` saves it)")
-    ch.add_argument("--offset", type=float, default=0,
-                    help="seconds to move the chat later (negative: earlier)")
+    ch.add_argument("--offset", type=float,
+                    help="seconds to move the chat later (negative: earlier); "
+                         "on a chat file made before, this replaces the "
+                         "offset it was made with")
     ch.add_argument("--embed", action="store_true",
                     help="also add it to the video as a subtitle track (copied, "
                          "not re-encoded): an .mkv is updated, an .mp4 gets an "
@@ -1655,7 +1677,7 @@ def cmd_chat(args):
         except ValueError as e:
             print(f"!! --range: {e}")
             return 2
-    if args.lines < 1:
+    if args.lines is not None and args.lines < 1:
         print("!! --lines must be 1 or more")
         return 2
     folder = os.path.abspath(os.path.expanduser(o.get("output_dir") or "."))
@@ -1665,13 +1687,14 @@ def cmd_chat(args):
         return 2
     if video and not getattr(args, "output_dir", None):
         folder = os.path.dirname(video)
-    elif args.source.lower().endswith(".json") and os.path.isfile(args.source) \
+    elif chat.source_kind(args.source) != "link" \
             and not getattr(args, "output_dir", None):
-        folder = ""                    # the replay's own folder
+        folder = ""                    # the file's own folder
     style = {"fmt": args.sub_format, "lines": args.lines, "hold": args.hold,
              "side": args.side, "place": args.place, "width": args.width,
              "wrap": args.wrap, "pad": args.pad, "names": args.names,
-             "box": args.box, "offset": args.offset, "range": rng,
+             "box": args.box, "gap": args.gap, "colours": args.colours,
+             "offset": args.offset, "range": rng,
              "video": video, "embed": args.embed}
     return chat.run(args.source, folder, o, style)
 

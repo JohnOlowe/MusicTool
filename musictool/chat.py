@@ -16,11 +16,19 @@ a plain text log -- with several messages on screen at once:
 Nothing about the video is touched: the subtitle file sits next to it with
 the same name (players load it by themselves), or `embed` copies the video
 into an .mkv with the chat as a subtitle track -- copied, not re-encoded.
+
+Names and messages are in colour (colour_of), outlined with no box, with a
+little space between messages. ASS, WebVTT and the text log also carry every
+message and the settings, so `parse_own` reads such a file back exactly and
+`run` can remake it -- another format, other settings -- without the JSON;
+an SRT (or a file from before) is rebuilt from what it shows when.
 """
 
+import html
 import json
 import os
 import re
+import zlib
 
 from . import cancel
 
@@ -30,24 +38,47 @@ SIDES = ("right", "left", "center")
 PLACES = ("bottom", "middle", "top")
 MARK = "musictool chat"          # how a subtitle file we wrote is recognised
 
-# Author colours (ASS is &HBBGGRR&, the others #RRGGBB)
+# Author colours (ASS is &HBBGGRR&, the others #RRGGBB): YouTube's own for
+# the channel owner, moderators and members; a Super Chat takes the colour
+# YouTube gave it (its tier), "paid" is only the fallback
 COLOURS = {"owner": "FFD600", "moderator": "5E84F1", "member": "2BA640",
            "verified": "AAAAAA", "paid": "FFCA28", "": "B0B0B0"}
+# everyone else, with --colours name: a colour of their own, the same one
+# every time (from the name). Light enough to read over a dark picture with an
+# outline, and away from the owner's yellow, the moderators' blue and the
+# members' green so those still stand out.
+PALETTE = ("FF7A7A", "FF9E40", "C792EA", "F78FB3", "4DD0E1", "80CBC4",
+           "FFB3A7", "D7A86E", "B39DDB", "FF80AB", "9FE2BF", "E6A8D7")
+COLOUR_MODES = ("name", "role", "off")
+TEXT = "FFFFFF"
+ROLE_OF = {v: k for k, v in COLOURS.items() if k not in ("", "paid")}
+OWN_EXTS = (".ass", ".ssa", ".srt", ".vtt", ".txt")
+DATA = "[MusicTool Chat]"         # the ASS section with every message, as JSON
+
+# what `chat` does when nothing says otherwise; a file musictool made keeps
+# its own settings (see read_own), and what you type wins over both
+DEFAULT_STYLE = {"fmt": "ass", "lines": 5, "hold": 15.0, "side": "right",
+                 "place": "bottom", "width": 32, "wrap": 40, "pad": 0,
+                 "names": True, "box": False, "gap": 0.4, "colours": "name",
+                 "offset": 0.0, "font_size": 0}
+LOOK = ("side", "place", "width", "wrap", "pad", "names", "font_size", "box",
+        "gap", "colours")
 
 
 # --------------------------------------------------------------------------
 # reading the replay
 
 class Message:
-    __slots__ = ("t", "author", "text", "role", "paid", "id")
+    __slots__ = ("t", "author", "text", "role", "paid", "id", "colour")
 
-    def __init__(self, t, author, text, role="", paid="", id=""):
+    def __init__(self, t, author, text, role="", paid="", id="", colour=""):
         self.t = t                    # seconds into the video
         self.author = author
         self.text = text
         self.role = role              # owner / moderator / member / verified / ""
         self.paid = paid              # "$5.00" for a Super Chat / Sticker
         self.id = id
+        self.colour = colour          # RRGGBB YouTube gave a Super Chat
 
     def __repr__(self):
         return f"Message({self.t:.1f}, {self.author!r}, {self.text!r})"
@@ -100,6 +131,14 @@ def _role(item):
     return ""
 
 
+def _argb(v):
+    """YouTube's colours are ARGB numbers: 4280150454 -> '1DE9B6'."""
+    try:
+        return f"{int(v) & 0xFFFFFF:06X}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _message(kind, item, t, emoji):
     """One chat item -> a Message, or None for things that are not chat
     (placeholders, "welcome to live chat" notices, tickers)."""
@@ -110,10 +149,13 @@ def _message(kind, item, t, emoji):
         return Message(t, author, text, _role(item), "", mid) if text else None
     if kind == "liveChatPaidMessageRenderer":           # Super Chat
         return Message(t, author, _runs(item.get("message"), emoji), _role(item),
-                       _runs(item.get("purchaseAmountText")) or "$", mid)
+                       _runs(item.get("purchaseAmountText")) or "$", mid,
+                       _argb(item.get("bodyBackgroundColor")))
     if kind == "liveChatPaidStickerRenderer":           # Super Sticker
         return Message(t, author, "(sticker)", _role(item),
-                       _runs(item.get("purchaseAmountText")) or "$", mid)
+                       _runs(item.get("purchaseAmountText")) or "$", mid,
+                       _argb(item.get("backgroundColor")
+                             or item.get("moneyChipBackgroundColor")))
     if kind == "liveChatMembershipItemRenderer":        # joined / milestone
         head = (_runs(item.get("headerPrimaryText"), emoji)
                 or _runs(item.get("headerSubtext"), emoji) or "new member")
@@ -246,6 +288,36 @@ def _label(m, names=True):
     return who
 
 
+def _mix(rgb, frac):
+    """`rgb` moved `frac` of the way to white: a lighter tint of it."""
+    c = [int(rgb[i:i + 2], 16) for i in (0, 2, 4)]
+    return "".join(f"{int(round(v + (255 - v) * frac)):02X}" for v in c)
+
+
+def colour_of(m, mode="name"):
+    """-> (name colour, message colour), RRGGBB.
+
+    name: the owner, moderators and members in YouTube's colours, a Super
+          Chat in the colour YouTube gave it, everyone else a colour of
+          their own (the same each time, from the name); the message in a
+          light tint of it, so you can tell whose line is whose.
+    role: only the owner, moderators, members and Super Chats coloured;
+          everyone else grey names, white text.
+    off:  no colour, white text (names still bold)."""
+    if mode == "off":
+        return TEXT, TEXT
+    if m.paid:
+        c = m.colour or COLOURS["paid"]
+        return c, _mix(c, 0.35)
+    if m.role in COLOURS and m.role:
+        c = COLOURS[m.role]
+        return c, (_mix(c, 0.6) if mode == "name" else TEXT)
+    if mode == "role":
+        return COLOURS[""], TEXT
+    c = PALETTE[zlib.crc32(m.author.encode("utf-8")) % len(PALETTE)]
+    return c, _mix(c, 0.6)
+
+
 def _ts_ass(s):
     cs = int(round(s * 100))
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
@@ -274,11 +346,68 @@ def _ass_align(side, place):
     return row + 1 if side == "center" else row
 
 
+# --------------------------------------------------------------------------
+# the messages themselves, kept inside the file so it can be read back
+# (another format, other settings) without the .live_chat.json
+
+DATA_NOTE = "NOTE musictool chat data"     # the same, in a WebVTT comment
+
+
+def _json_line(d):
+    # one line, whatever is in the message: JSON escapes the control
+    # characters; these three are line breaks to some readers too, and ">"
+    # keeps "-->" (which ends a WebVTT comment) out of it
+    s = json.dumps(d, ensure_ascii=False, separators=(",", ":"))
+    for ch in ("\u2028", "\u2029", "\x85", ">"):
+        s = s.replace(ch, f"\\u{ord(ch):04x}")
+    return s
+
+
+def _pack(m):
+    d = {"t": round(m.t, 3), "a": m.author, "x": m.text}
+    if m.role:
+        d["r"] = m.role
+    if m.paid:
+        d["p"] = m.paid
+    if m.colour:
+        d["c"] = m.colour
+    return _json_line(d)
+
+
+def _unpack(s):
+    d = json.loads(s)
+    role = d.get("r") or ""
+    colour = str(d.get("c") or "").upper()
+    return Message(float(d["t"]), str(d.get("a") or ""), str(d.get("x") or ""),
+                   role if role in COLOURS else "", str(d.get("p") or ""), "",
+                   colour if re.fullmatch(r"[0-9A-F]{6}", colour) else "")
+
+
+def _kept(msgs, lines, hold, start, end):
+    """The messages a file for [start, end) needs: those in it, and the few
+    still on screen when it starts."""
+    hold = float(hold or 0)
+    before = [m for m in msgs if m.t < start and (hold <= 0 or m.t + hold > start)]
+    return before[-max(1, int(lines)):] + [
+        m for m in msgs if m.t >= start and (end is None or m.t < end)]
+
+
+def _data(msgs, settings):
+    return ([f"Settings: {_json_line(settings)}"]
+            + [f"Message: {_pack(m)}" for m in msgs])
+
+
+# --------------------------------------------------------------------------
+# writing
+
 def to_ass(cues, side="right", place="bottom", width=32, font_size=0,
-           names=True, title="", res=(1920, 1080), box=True, **_):
+           names=True, title="", res=(1920, 1080), box=False, gap=0.4,
+           colours="name", data=(), **_):
     """ASS: a column `width`% of the screen wide on the chosen side; the
-    player wraps long messages inside it. Names in their role's colour, on a
-    see-through dark box (`box`) so they read over a bright picture."""
+    player wraps long messages inside it. Names and messages in colour (see
+    colour_of), outlined with a soft shadow so they read on any picture --
+    or on a see-through dark box (`box`). `gap`: space between messages, in
+    lines (0.4 = a little)."""
     W, H = res
     fs = int(font_size) or int(H / 24)
     col = int(W * max(10, min(100, width)) / 100)
@@ -290,6 +419,7 @@ def to_ass(cues, side="right", place="bottom", width=32, font_size=0,
     else:
         ml = mr = (W - col) // 2
     mv = int(H * 0.04)
+    al = _ass_align(side, place)
     head = [
         "[Script Info]",
         f"; {MARK} -- live chat replay as subtitles",
@@ -306,39 +436,53 @@ def to_ass(cues, side="right", place="bottom", width=32, font_size=0,
         "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
         "MarginL, MarginR, MarginV, Encoding",
         # BorderStyle 3 = a box behind each line, in OutlineColour; alpha 0x60
-        # leaves the picture faintly visible through it
+        # leaves the picture faintly visible through it. BorderStyle 1 = no
+        # box: a black outline and a half-see-through shadow
         (f"Style: Chat,Arial,{fs},&H00FFFFFF,&H00FFFFFF,&H60000000,&H60000000,"
-         f"0,0,0,0,100,100,0,0,3,{max(2, fs // 10)},0,{_ass_align(side, place)},"
-         f"{ml},{mr},{mv},1") if box else
-        (f"Style: Chat,Arial,{fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
-         f"0,0,0,0,100,100,0,0,1,{max(2, fs // 16)},1,{_ass_align(side, place)},"
-         f"{ml},{mr},{mv},1"),
+         f"0,0,0,0,100,100,0,0,3,{max(2, fs // 10)},0,{al},{ml},{mr},{mv},1")
+        if box else
+        (f"Style: Chat,Arial,{fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,"
+         f"0,0,0,0,100,100,0,0,1,{max(2, round(fs / 14))},"
+         f"{max(1, round(fs / 30))},{al},{ml},{mr},{mv},1"),
         "",
+    ]
+    if data:
+        # players skip sections they do not know; this is what
+        # `musictool chat FILE.ass` reads back (edit or delete Message lines
+        # here, not the Dialogue lines below)
+        head += [DATA] + list(data) + [""]
+    head += [
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text",
     ]
+    g = int(round(fs * float(gap or 0)))
+    # a blank line `g` pixels high between two messages
+    sep = f"\\N{{\\fs{g}}}\\h\\N{{\\fs{fs}}}" if g >= 1 else "\\N"
     body = []
     for a, b, shown in cues:
         parts = []
         for m in shown:
             who = _label(m, names)
-            c = COLOURS["paid" if m.paid else m.role]
-            parts.append((f"{{\\b1\\c{_bgr(c)}}}{_ass_text(who)}{{\\b0\\c&HFFFFFF&}}"
-                          if who else "") + _ass_text(m.text))
+            cn, ct = colour_of(m, colours)
+            parts.append((f"{{\\b1\\c{_bgr(cn)}}}{_ass_text(who)}{{\\b0\\c{_bgr(ct)}}}"
+                          if who else f"{{\\c{_bgr(ct)}}}") + _ass_text(m.text))
         body.append(f"Dialogue: 0,{_ts_ass(a)},{_ts_ass(b)},Chat,,0,0,0,,"
-                    + "\\N".join(parts))
+                    + sep.join(parts))
     return "\n".join(head + body) + "\n"
 
 
-def _plain_lines(shown, wrap, names, esc):
+def _plain_lines(shown, wrap, names, esc, gap=False):
     """[(message or None, name part, rest)] per screen line: the name part
-    is only on a message's first line."""
+    is only on a message's first line. With `gap`, a ("gap", "", "") line
+    between messages."""
     out = []
-    for m in shown:
+    for k, m in enumerate(shown):
+        if gap and k:
+            out.append(("gap", "", ""))
         who = _label(m, names)
-        for i, ln in enumerate(_wrap(who + m.text, wrap)):
-            if i == 0 and who:
+        for i, ln in enumerate(_wrap(who + m.text.replace("\n", " "), wrap)):
+            if i == 0:
                 out.append((m, esc(who), esc(ln[len(who):])))
             else:
                 out.append((None, "", esc(ln)))
@@ -357,11 +501,16 @@ def _pad(lines_, pad):
     return ["\u00a0" * pad + t for t in lines_]
 
 
+GAP_ROW = "\u00a0"        # SRT/WebVTT: a line that looks empty (a real empty
+                          # line would end the cue)
+
+
 def to_srt(cues, side="right", place="bottom", wrap=40, names=True, pad=0,
-           colour=True, **_):
+           colours="name", gap=0.4, **_):
     """SRT: {\\anN} puts it on the chosen side (VLC, mpv, MPC-HC, PotPlayer
-    and most players honour it); names bold, in colour. `pad` adds the
-    no-break-space fallback."""
+    and most players honour it); names bold, names and messages in colour.
+    SRT cannot make a small space: `gap` 1 or more puts an empty-looking
+    line between messages. `pad` adds the no-break-space fallback."""
     an = {("left", "bottom"): 1, ("center", "bottom"): 2, ("right", "bottom"): 3,
           ("left", "middle"): 4, ("center", "middle"): 5, ("right", "middle"): 6,
           ("left", "top"): 7, ("center", "top"): 8, ("right", "top"): 9}[(side, place)]
@@ -372,26 +521,30 @@ def to_srt(cues, side="right", place="bottom", wrap=40, names=True, pad=0,
                 .replace("}", ")")
     out = []
     for n, (a, b, shown) in enumerate(cues, start=1):
-        rows = []
-        raw = _plain_lines(shown, wrap, names, esc)
-        texts = _pad([w + t for _, w, t in raw], pad)
-        for (m, who, rest), full in zip(raw, texts):
-            if m is not None and who and not pad:
-                c = COLOURS["paid" if m.paid else m.role]
-                w = (f'<font color="#{c}"><b>{who}</b></font>' if colour
-                     else f"<b>{who}</b>")
-                rows.append(w + rest)
-            else:
-                rows.append(full)
+        rows, cur = [], None
+        for m, who, rest in _plain_lines(shown, wrap, names, esc,
+                                         float(gap or 0) >= 1):
+            if m == "gap":
+                rows.append(GAP_ROW)
+                continue
+            if m is not None:
+                cur = m
+            cn, ct = colour_of(cur, colours) if cur is not None else (TEXT, TEXT)
+            row = (f'<font color="#{cn}"><b>{who}</b></font>' if who else "")
+            if rest:
+                row += (f'<font color="#{ct}">{rest}</font>' if ct != TEXT
+                        else rest)
+            rows.append(row)
         out.append(f"{n}\n{_ts_srt(a)} --> {_ts_srt(b)}\n{tag}"
-                   + "\n".join(rows) + "\n")
+                   + "\n".join(_pad(rows, pad)) + "\n")
     return "\n".join(out)
 
 
 def to_vtt(cues, side="right", place="bottom", width=32, wrap=40, names=True,
-           pad=0, **_):
-    """WebVTT with cue settings for the side and height. Browsers and VLC
-    honour them; some players show every cue centred at the bottom."""
+           pad=0, colours="name", gap=0.4, box=False, data=(), **_):
+    """WebVTT with cue settings for the side and height, and a STYLE block
+    for the colours. Browsers and VLC honour them; some players show every
+    cue centred at the bottom, in white."""
     width = max(10, min(100, int(width)))
     if side == "right":
         pos = f"position:{100 - width - 2}% align:start size:{width}%"
@@ -403,39 +556,314 @@ def to_vtt(cues, side="right", place="bottom", width=32, wrap=40, names=True,
 
     def esc(s):
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    out = ["WEBVTT", "", f"NOTE {MARK}", ""]
+    used, body = set(), []
     for a, b, shown in cues:
-        raw = _plain_lines(shown, wrap, names, esc)
-        if pad:
-            rows = _pad([w + t for _, w, t in raw], pad)
-        else:
-            rows = [(f"<b>{w}</b>{t}" if w else t) for _, w, t in raw]
-        out.append(f"{_ts_srt(a, '.')} --> {_ts_srt(b, '.')} {pos}{line}".rstrip())
-        out.append("\n".join(rows))
-        out.append("")
+        rows, cur = [], None
+        for m, who, rest in _plain_lines(shown, wrap, names, esc,
+                                         float(gap or 0) >= 1):
+            if m == "gap":
+                rows.append(GAP_ROW)
+                continue
+            if m is not None:
+                cur = m
+            cn, ct = colour_of(cur, colours) if cur is not None else (TEXT, TEXT)
+            row = ""
+            if who:
+                used.add(cn)
+                row = f"<c.c{cn}><b>{who}</b></c>"
+            if rest:
+                if ct != TEXT:
+                    used.add(ct)
+                    row += f"<c.c{ct}>{rest}</c>"
+                else:
+                    row += rest
+            rows.append(row)
+        body.append(f"{_ts_srt(a, '.')} --> {_ts_srt(b, '.')} {pos}{line}".rstrip())
+        body.append("\n".join(_pad(rows, pad)))
+        body.append("")
+    out = ["WEBVTT", "", f"NOTE {MARK}", ""]
+    style = ([] if box else
+             ["::cue { background-color: transparent; text-shadow: 0 0 3px #000,"
+              " 0 0 3px #000, 1px 1px 3px #000; }"])
+    style += [f"::cue(.c{c}) {{ color: #{c}; }}" for c in sorted(used)]
+    if style:
+        out += ["STYLE"] + style + [""]
+    out += body
+    if data:
+        out += [DATA_NOTE] + list(data) + [""]
     return "\n".join(out)
 
 
-def to_txt(msgs, start=0.0, end=None, offset=0.0, names=True, **_):
-    """A readable log: [h:mm:ss] name: message, in the clip's time."""
+def _clock_ms(t):
+    ms = int(round(t * 1000))
+    s = ms // 1000
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}.{ms % 1000:03d}"
+
+
+def to_txt(msgs, start=0.0, end=None, offset=0.0, names=True, settings=None,
+           **_):
+    """A readable log: [h:mm:ss.mmm] name: message, in the clip's time. The
+    header keeps what the lines cannot show (settings, who is a moderator
+    ...), so the log can be turned back into subtitles -- edit or delete
+    lines first if you like."""
     out = [f"# {MARK}: live chat replay"]
-    for m in msgs:
-        if m.t < start or (end is not None and m.t >= end):
-            continue
+    sel = [m for m in msgs if m.t >= start and (end is None or m.t < end)]
+    if settings is not None:
+        out.append(f"# settings: {_json_line(settings)}")
+        extra = {}
+        for m in sel:
+            if m.role and names:
+                extra.setdefault("roles", {})[m.author] = m.role
+            if m.colour:
+                extra.setdefault("colours", {})[_clock_ms(
+                    max(0.0, m.t - start + offset))] = m.colour
+        for k, v in extra.items():
+            out.append(f"# {k}: {_json_line(v)}")
+    for m in sel:
         t = max(0.0, m.t - start + offset)
-        s = int(t)
-        out.append(f"[{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}] "
-                   + _label(m, names) + m.text)
+        out.append(f"[{_clock_ms(t)}] " + _label(m, names)
+                   + m.text.replace("\n", " "))
     return "\n".join(out) + "\n"
 
 
 def render(msgs, fmt="ass", lines=5, hold=15.0, start=0.0, end=None,
-           offset=0.0, **style):
-    """The subtitle file's text in `fmt`, ready to write (UTF-8)."""
+           offset=0.0, sound=0.0, video_id="", **style):
+    """The subtitle file's text in `fmt`, ready to write (UTF-8). `offset`
+    is your shift, `sound` the file's own (see first_times); both move the
+    chat later. ASS, WebVTT and the text log carry the messages and these
+    settings, for read_own."""
+    look = {k: v for k, v in style.items() if k in LOOK}
+    settings = {"v": 1, "id": video_id or "", "lines": int(lines),
+                "hold": float(hold or 0), "start": start, "end": end,
+                "offset": float(offset or 0), "sound": float(sound or 0), **look}
+    total = float(offset or 0) + float(sound or 0)
     if fmt == "txt":
-        return to_txt(msgs, start, end, offset, **style)
-    cues = windows(msgs, lines, hold, start, end, offset)
-    return {"ass": to_ass, "srt": to_srt, "vtt": to_vtt}[fmt](cues, **style)
+        return to_txt(msgs, start, end, total, settings=settings, **style)
+    data = (_data(_kept(msgs, lines, hold, start, end), settings)
+            if fmt in ("ass", "vtt") else ())
+    cues = windows(msgs, lines, hold, start, end, total)
+    return {"ass": to_ass, "srt": to_srt, "vtt": to_vtt}[fmt](
+        cues, data=data, **style)
+
+
+# --------------------------------------------------------------------------
+# reading a subtitle file musictool made back into messages
+
+def _parse_label(who):
+    """'[$5.00] name: ' -> (paid, author)."""
+    paid = ""
+    m = re.match(r"\[([^\]]*)\]\s*", who)
+    if m and (re.search(r"\d", m.group(1)) or m.group(1) == "$"):
+        paid, who = m.group(1), who[m.end():]
+    return paid, who.rstrip().rstrip(":").rstrip()
+
+
+def _from_colour(rgb, paid):
+    rgb = (rgb or "").upper()
+    if paid:
+        return "", ("" if rgb in ("", COLOURS["paid"]) else rgb)
+    return ROLE_OF.get(rgb, ""), ""
+
+
+def _ass_cues(text):
+    out = []
+    for ln in text.split("\n"):
+        if not ln.startswith("Dialogue:"):
+            continue
+        f = ln[len("Dialogue:"):].split(",", 9)
+        if len(f) < 10:
+            continue
+        try:
+            a, b = (parse_clock(x) for x in f[1:3])
+        except ValueError:
+            continue
+        shown = []
+        for part in f[9].split("\\N"):
+            part = re.sub(r"\{\\fs\d+\}", "", part)    # the spacing's size
+            plain = re.sub(r"\{[^}]*\}", "", part).replace("\\h", "").strip()
+            if not plain:
+                continue                     # the space between two messages
+            m = re.match(r"\{[^}]*\\b1[^}]*?(?:\\c&H([0-9A-Fa-f]{6})&)?[^}]*\}"
+                         r"(.*?)\{[^}]*\\b0[^}]*\}(.*)$", part)
+            if m:
+                bgr, who, rest = m.group(1) or "", m.group(2), m.group(3)
+            else:
+                bgr, who, rest = "", "", part
+            rgb = bgr[4:6] + bgr[2:4] + bgr[0:2] if bgr else ""
+
+            def un(s):
+                s = re.sub(r"\{[^}]*\}", "", s).replace("\\h", " ")
+                return (s.replace("\\\u2060", "\\").replace("\uff5b", "{")
+                        .replace("\uff5d", "}"))
+            paid, author = _parse_label(un(who))
+            role, colour = _from_colour(rgb, paid)
+            shown.append(Message(0.0, author, un(rest).strip(), role, paid, "",
+                                 colour))
+        out.append((a, b, shown))
+    return out
+
+
+def _rows_cues(text, vtt):
+    """SRT / WebVTT cues -> [(t0, t1, [Message])], from the markup we write:
+    a new message at a bold name or after a spacing line."""
+    out = []
+    for block in re.split(r"\n\s*\n", text):
+        rows = block.split("\n")
+        k = next((i for i, r in enumerate(rows) if "-->" in r), None)
+        if k is None:
+            continue
+        ta, _, tb = rows[k].partition("-->")
+        try:
+            a, b = parse_clock(ta.strip()), parse_clock(tb.strip().split(" ")[0])
+        except ValueError:
+            continue
+        shown, cur, fresh = [], None, True
+        for r in rows[k + 1:]:
+            r = re.sub(r"^\{\\an\d\}", "", r)
+            m = re.match(r"^[\u00a0 ]*(?:<c\.c([0-9A-Fa-f]{6})>|"
+                         r"<font color=\"#([0-9A-Fa-f]{6})\">)?<b>(.*?)</b>"
+                         r"(?:</c>|</font>)?(.*)$", r)
+
+            def un(s):
+                s = re.sub(r"<[^>]*>", "", s)
+                s = html.unescape(s) if vtt else (s.replace("\u2039", "<")
+                                                  .replace("\u203a", ">"))
+                return s.strip("\u00a0 ")
+            if not un(r):
+                fresh = True                 # the space between two messages
+                continue
+            if m:
+                paid, author = _parse_label(un(m.group(3)))
+                role, colour = _from_colour(m.group(1) or m.group(2), paid)
+                cur = Message(0.0, author, un(m.group(4)), role, paid, "", colour)
+                shown.append(cur)
+            elif cur is None or fresh:
+                cur = Message(0.0, "", un(r))
+                shown.append(cur)
+            else:
+                cur.text = f"{cur.text} {un(r)}".strip()
+            fresh = False
+        out.append((a, b, shown))
+    return out
+
+
+def _rebuild(cues):
+    """Messages from cues that each show the last few: a message is new in a
+    cue unless the cue just before (and touching it) ended with it."""
+    out, prev, prev_end = [], [], None
+    for a, b, shown in cues:
+        keys = [(m.author, m.text, m.paid) for m in shown]
+        last = prev if prev_end is not None and a <= prev_end + 0.002 else []
+        j = min(len(last), len(keys))
+        while j and last[-j:] != keys[:j]:
+            j -= 1
+        for m in shown[j:]:
+            m.t = a
+            out.append(m)
+        prev, prev_end = keys, b
+    return out
+
+
+def parse_clock(s):
+    """'1:02:03.45' / '01:02:03,450' / '02:03.450' -> seconds."""
+    p = s.strip().replace(",", ".").split(":")
+    if not 2 <= len(p) <= 3 or not all(p):
+        raise ValueError(s)
+    v = 0.0
+    for x in p:
+        v = v * 60 + float(x)
+    return v
+
+
+def _read_data(text):
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.strip() in (DATA, DATA_NOTE):
+            vtt = ln.strip() == DATA_NOTE
+            break
+    else:
+        return None, None
+    meta, msgs = {}, []
+    for ln in lines[i + 1:]:
+        if ln.startswith("[") or (vtt and not ln.strip()):
+            break
+        key, _, val = ln.partition(": ")
+        try:
+            if key == "Settings":
+                meta = json.loads(val)
+            elif key == "Message":
+                msgs.append(_unpack(val))
+        except (ValueError, KeyError, TypeError):
+            continue
+    msgs.sort(key=lambda m: m.t)
+    return msgs, (meta if isinstance(meta, dict) else {})
+
+
+def _read_txt(text):
+    meta, extra, msgs = {}, {}, []
+    for ln in text.split("\n"):
+        if ln.startswith("#"):
+            key, _, val = ln[1:].strip().partition(": ")
+            if key in ("settings", "roles", "colours"):
+                try:
+                    (extra.__setitem__(key, json.loads(val)) if key != "settings"
+                     else meta.update(json.loads(val)))
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            continue
+        m = re.match(r"\[(\d+:\d\d:\d\d(?:\.\d+)?)\] ?(.*)$", ln)
+        if not m:
+            continue
+        t, rest = parse_clock(m.group(1)), m.group(2)
+        paid, author, body = "", "", rest
+        pm = re.match(r"\[([^\]]*)\] ", rest)
+        if pm and (re.search(r"\d", pm.group(1)) or pm.group(1) == "$"):
+            paid, body = pm.group(1), rest[pm.end():]
+        if meta.get("names", True) and ": " in body:
+            author, _, body = body.partition(": ")
+        role = (extra.get("roles") or {}).get(author, "")
+        colour = str((extra.get("colours") or {}).get(m.group(1), ""))
+        msgs.append(Message(t, author, body, role if role in COLOURS else "",
+                            paid, "", colour if paid else ""))
+    if meta:
+        # back to the video's time: the log is in the clip's
+        shift = float(meta.get("start") or 0) - float(meta.get("offset") or 0) \
+            - float(meta.get("sound") or 0)
+        for m in msgs:
+            m.t = round(m.t + shift, 3)
+    else:
+        meta = {"clip": True}
+    msgs.sort(key=lambda m: m.t)
+    return msgs, meta
+
+
+def parse_own(text, ext=""):
+    """(messages, settings) from the text of a chat subtitle musictool
+    wrote. Files from this version carry every message and the settings;
+    older ones (and SRT) are rebuilt from what is on screen when -- then the
+    settings say {"clip": True}: the times are the clip's, already shifted,
+    and only `lines` is known."""
+    text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    ext = ext.lower().lstrip(".")
+    if ext == "txt" or text.startswith(f"# {MARK}"):
+        return _read_txt(text)
+    msgs, meta = _read_data(text)
+    if msgs is not None:
+        return msgs, meta
+    if "[Events]" in text or ext in ("ass", "ssa"):
+        cues = _ass_cues(text)
+    else:
+        cues = _rows_cues(text, text.lstrip().startswith("WEBVTT"))
+    meta = {"clip": True}
+    if cues:
+        meta["lines"] = max(len(s) for _a, _b, s in cues) or 1
+    return _rebuild(cues), meta
+
+
+def read_own(path):
+    """parse_own for a file on disk."""
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        return parse_own(fh.read(), os.path.splitext(path)[1])
 
 
 NOTE_NAME = ".musictool-chat.json"
@@ -782,33 +1210,127 @@ def embed(video, sub, log=print):
     return out, None
 
 
+def extract_track(video):
+    """The text of the chat track `embed` put in a video (titled "Live
+    chat"), or None."""
+    subs = [s for s in _streams(video) if s[1] == "subtitle"]
+    pick = [s for s in subs if s[2] == TRACK_TITLE]
+    if not pick:
+        return None
+    exe = _ffmpeg()
+    for f in ("ass", "srt", "webvtt"):
+        try:
+            r = cancel.run([exe, "-hide_banner", "-loglevel", "error", "-i", video,
+                            "-map", f"0:{pick[0][0]}", "-c", "copy", "-f", f,
+                            "pipe:1"], capture_output=True, timeout=300)
+        except Exception:                                    # noqa: BLE001
+            return None
+        if r.returncode == 0 and r.stdout:
+            return r.stdout.decode("utf-8", "replace")
+    return None
+
+
+def _own_base(path):
+    """'NAME.chat.ass' / 'NAME.ass' -> 'NAME' (where the video would be)."""
+    base = os.path.splitext(path)[0]
+    return base[:-len(".chat")] if base.endswith(".chat") else base
+
+
+def _beside(path):
+    """The video a chat subtitle belongs to: same name, .mkv first."""
+    base = _own_base(path)
+    for ext in (".mkv",) + VIDEO_EXTS:
+        if os.path.isfile(base + ext):
+            return base + ext
+    return None
+
+
+def source_kind(src):
+    """'json' (a .live_chat.json), 'own' (a subtitle or log `chat` wrote),
+    'video' (one with a chat track in it) or 'link'."""
+    if not os.path.isfile(src):
+        return "link"
+    low = src.lower()
+    if low.endswith(".json"):
+        return "json"
+    if low.endswith(VIDEO_EXTS):
+        return "video"
+    if low.endswith(OWN_EXTS):
+        return "own"
+    return "link"
+
+
 def run(src, folder, o, style, log=print):
-    """The `chat` job. `src` is a link, a video id or a .live_chat.json file.
-    `style`: fmt, lines, hold, side, place, width, wrap, pad, names, offset,
-    range (start, end|None) or None for "from the video's name", video (a
-    file), embed. Writes a subtitle per matching video. -> exit code."""
+    """The `chat` job. `src` is a link, a video id, a .live_chat.json -- or
+    a chat file this wrote before (.ass/.srt/.vtt/.txt, or a video with the
+    chat track in it), to make it again in another format or with other
+    settings. `style`: fmt, lines, hold, side, place, width, wrap, pad,
+    names, box, gap, colours, offset, range (start, end|None), video (a
+    file), embed; None or missing = the file's own setting, else
+    DEFAULT_STYLE. Writes a subtitle per matching video. -> exit code."""
     from . import cancel
     from .util import part_label, clock
-    if src.lower().endswith(".json") and os.path.isfile(src):
+    kind = source_kind(src)
+    meta, own_fmt = {}, None
+    if kind == "json":
         path, vid = os.path.abspath(src), json_id(src)
         folder = folder or os.path.dirname(path)
+        msgs = load(path)
+    elif kind in ("own", "video"):
+        path = os.path.abspath(src)
+        folder = folder or os.path.dirname(path)
+        if kind == "video":
+            text = extract_track(path)
+            if text is None:
+                log(f"!! {os.path.basename(path)} has no \"{TRACK_TITLE}\" "
+                    f"track (the one `chat --embed` adds)")
+                return 1
+            msgs, meta = parse_own(text, "ass" if "[Events]" in text else "")
+        else:
+            try:
+                msgs, meta = read_own(path)
+            except OSError as e:
+                log(f"!! cannot read {path}: {e}")
+                return 1
+            own_fmt = {"ssa": "ass"}.get(path.lower().rsplit(".", 1)[-1],
+                                         path.lower().rsplit(".", 1)[-1])
+            if not is_ours(path):
+                log(f"   ({os.path.basename(path)} does not say musictool made "
+                    f"it -- reading it as a chat file anyway)")
+        idm = re.search(r"\[([\w-]{11})\]", os.path.basename(path))
+        vid = meta.get("id") or (idm.group(1) if idm else None)
+        if meta.get("clip"):
+            log("   (an older file, or SRT: messages rebuilt from what was on "
+                "screen when; times are kept as they were)")
     else:
         vid = video_id(src)
         if not vid:
-            log(f"!! not a YouTube link or a .live_chat.json file: {src}")
+            log(f"!! not a YouTube link, a .live_chat.json or a chat file: {src}")
             return 2
         path, err = fetch(src, folder, o, log)
         if err:
             log("!! " + err)
             return 130 if err == cancel.CANCELLED else 1
-    msgs = load(path)
+        msgs = load(path)
     if not msgs:
         log(f"!! no chat messages in {os.path.basename(path)}")
         return 1
-    log(f"{len(msgs)} messages, {clock(msgs[-1].t)} of chat")
-    fmt = style.get("fmt") or "ass"
+    log(f"{len(msgs)} message{'' if len(msgs) == 1 else 's'}, "
+        f"{clock(msgs[-1].t)} of chat")
+    # what you asked for, else what the file was made with, else the defaults
+    eff = dict(DEFAULT_STYLE)
+    eff.update({k: v for k, v in meta.items() if k in DEFAULT_STYLE and v is not None})
+    if own_fmt:
+        eff["fmt"] = own_fmt
+    eff.update({k: v for k, v in style.items() if k in DEFAULT_STYLE and v is not None})
+    fmt = eff["fmt"]
+    clip = bool(meta.get("clip"))       # times already the clip's
     if style.get("video"):
         videos = [style["video"]]
+    elif kind == "video":
+        videos = [path]
+    elif kind == "own":
+        videos = [v for v in [_beside(path)] if v]
     else:
         videos = find_videos(folder, vid) if vid else []
     # 'NAME.mp4' and the 'NAME.mkv' an earlier --embed made of it share one
@@ -818,9 +1340,16 @@ def run(src, folder, o, style, log=print):
         b_, e_ = os.path.splitext(v)
         if b_ not in by_base or e_.lower() == ".mkv":
             by_base[b_] = v
+    kept = None
+    if kind in ("own", "video") and not clip and "start" in meta:
+        kept = (float(meta.get("start") or 0),
+                None if meta.get("end") is None else float(meta["end"]))
     targets = []
     for v in by_base.values():
-        a, b = style.get("range") or part_from_name(v) or (0.0, None)
+        if clip:
+            a, b = style.get("range") or (0.0, None)
+        else:
+            a, b = style.get("range") or kept or part_from_name(v) or (0.0, None)
         if b is None:                    # no cues past the end of the file
             from .live import media_seconds
             secs = media_seconds(v)
@@ -828,31 +1357,38 @@ def run(src, folder, o, style, log=print):
                 b = a + secs + 1
         targets.append((v, (a, b)))
     if not targets:
-        rng = style.get("range") or (0.0, None)
-        base = path[:-len(".live_chat.json")] if path.endswith(".live_chat.json") \
-            else os.path.splitext(path)[0]
-        if rng != (0.0, None):
-            base += f" ({part_label(*rng)})"
+        rng = style.get("range") or (None if clip else kept) or (0.0, None)
+        if kind in ("own", "video"):
+            base = _own_base(path)
+        else:
+            base = path[:-len(".live_chat.json")] if path.endswith(
+                ".live_chat.json") else os.path.splitext(path)[0]
+            if rng != (0.0, None):
+                base += f" ({part_label(*rng)})"
+            log("no downloaded video of it found in the folder -- the subtitle "
+                "is saved next to the chat file; give it the video's name to "
+                "have the player load it")
         targets.append((base, rng))
-        log("no downloaded video of it found in the folder -- the subtitle "
-            "is saved next to the chat file; give it the video's name to "
-            "have the player load it")
-    keys = ("side", "place", "width", "wrap", "pad", "names", "font_size", "box")
-    look = {k: style[k] for k in keys if style.get(k) is not None}
+    look = {k: eff[k] for k in LOOK}
     rc = 0
     for v, (a, b) in targets:
         title = os.path.splitext(os.path.basename(v))[0]
-        off = float(style.get("offset") or 0)
-        if v.lower().endswith(VIDEO_EXTS):
+        snd = 0.0
+        if clip:
+            pass                         # already in the times
+        elif v.lower().endswith(VIDEO_EXTS):
             # the chat starts with the sound (see first_times)
-            _low, snd = first_times(v)
-            if snd and snd > 0.05:
-                off += snd
+            _low, s_ = first_times(v)
+            if s_ and s_ > 0.05:
+                snd = s_
                 log(f"   (the picture starts {snd:.1f} s before the sound in "
                     f"this file -- the chat is timed to the sound)")
-        text = render(msgs, fmt, lines=int(style.get("lines") or 5),
-                      hold=float(style.get("hold", 15) or 0), start=a, end=b,
-                      offset=off, title=title, **look)
+        elif kind in ("own", "video"):
+            snd = float(meta.get("sound") or 0)
+        text = render(msgs, fmt, lines=max(1, int(eff["lines"])),
+                      hold=float(eff["hold"] or 0), start=a, end=b,
+                      offset=float(eff["offset"] or 0), sound=snd,
+                      video_id=vid or "", title=title, **look)
         out = sub_path(v, fmt)
         write(out, text)
         part = f" (chat from {clock(a)})" if a else ""

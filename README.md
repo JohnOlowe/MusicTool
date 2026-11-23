@@ -25,7 +25,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── download.py       yt-dlp wrapper + videoId index
 │   ├── live.py           live streams: record from the start, watch, carry on
 │   ├── parts.py          get --range: keyframe start, keep what came down, carry on
-│   ├── chat.py           a stream's chat replay -> ass/srt/vtt/txt subtitles
+│   ├── chat.py           a stream's chat replay -> ass/srt/vtt/txt subtitles, and back
 │   ├── progress.py       yt-dlp progress lines -> the GUI's bars
 │   ├── lyrics.py         scan / fetch / embed pipeline
 │   ├── providers.py      ytmusic, lrclib, netease
@@ -33,7 +33,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1119 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1153 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -1072,6 +1072,8 @@ musictool chat URL -o "D:\Videos" --lines 6 --hold 0
 musictool chat URL --format srt --side right --pad 50
 musictool chat URL --embed                       # also as a track, copied
 musictool chat "D:\Videos\T [id].live_chat.json"  # one you already have
+musictool chat "D:\Videos\T [id].ass" --format srt  # a chat file it made, as SRT
+musictool chat "D:\Videos\T [id].mkv" --lines 3     # the chat track in a video
 ```
 
 - **How many messages at once: `--lines` (default 5).** A message stays on
@@ -1082,16 +1084,46 @@ musictool chat "D:\Videos\T [id].live_chat.json"  # one you already have
   minutes; `--hold 0` means a message stays until it is pushed off.
 - **Where: `--side right|left|center`, `--place bottom|middle|top`.** With
   ASS (the default) the chat is a column (`--width`, % of the picture) on
-  that side, with names in bold and coloured by role (owner, moderator,
-  member) and the text on a see-through dark box (`--no-box` for outlined
-  text instead). This works in mpv, VLC, MPC-HC, PotPlayer and anything else
+  that side. This works in mpv, VLC, MPC-HC, PotPlayer and anything else
   that uses libass. SRT uses `{\an3}`-style tags, which most players honour.
   For one that does not, `--pad 50` pushes every line right with no-break
   spaces: that gives a centred column on the right half (a subtitle file
   cannot line up a left edge, because it does not know the font). VTT uses
   cue positions (browsers, VLC).
-- **`--format ass|srt|vtt|txt`.** `txt` is a readable log, `[1:02:03] name:
-  message`, not a subtitle.
+- **Colour, no box, a little space.** Each name is bold and in colour, and
+  the message in a lighter tint of the same colour, so you can tell at a
+  glance whose line is whose. The owner, moderators and members get
+  YouTube's colours (yellow, blue, green), a Super Chat the colour YouTube
+  gave it, and everyone else a colour of their own, the same one every time.
+  `--colours role` colours only those, `--colours off` none. There is no box
+  behind the text: it is outlined in black with a soft shadow, so it reads
+  on a bright picture too (`--box` puts the see-through dark box back).
+  Between two messages there is a gap of 0.4 of a line (`--gap`, in lines;
+  `--gap 0` for none). The colours are in the file itself, in all three
+  subtitle formats. SRT and VTT cannot make a part-line gap, so there `--gap
+  1` or more puts an empty-looking line between messages; VTT's colours and
+  "no box" come from a STYLE block that browsers honour and some players
+  ignore.
+- **`--format ass|srt|vtt|txt`.** `txt` is a readable log, `[1:02:03.450]
+  name: message`, not a subtitle.
+- **Remaking a chat file.** Give `chat` a file it made before instead of the
+  link: an `.ass`, `.srt`, `.vtt` or `.txt`, or a video with the *Live chat*
+  track that `--embed` added. It is made again with whatever you change
+  (`--format`, `--lines`, `--side`, `--colours`, `--box`, `--offset`, ...).
+  Anything you leave out stays as that file had it, and nothing is
+  downloaded. The result goes beside the source (or beside the video with
+  the same name), and a file in the same format is replaced in place. ASS,
+  VTT and the text log keep every message and the settings inside them: the
+  ASS in a `[MusicTool Chat]` section that players skip, the VTT in a
+  comment, the log in its `#` lines. They read back exactly, in the
+  stream's time, so `--range` and a later `--embed` still line up. SRT has
+  no room for that, so its messages are rebuilt from what is on screen when,
+  with roles taken from the colours. Messages that never showed at all (more
+  than `--lines` arriving in the same instant) are not in an SRT. Files from
+  older versions are rebuilt the same way. To edit the chat by hand, edit the
+  text log (delete a line, fix a word) or the ASS `Message:` lines, then
+  remake it in the format you want. A subtitle musictool did not make is
+  read as well as it can be, and never overwritten (`NAME.chat.srt`).
 - **Parts.** A video named `(from 1h00m00s)` gets the chat from 1:00:00 on,
   starting at 0:00 of the file. Whatever was on screen at that moment stays
   up as if it had been there all along. `--range` sets the part by hand and
@@ -1429,9 +1461,12 @@ The stream's link, the folder, an optional **Copy to watch goes to** folder
   the picked streams if there are any.
 - **Open the copy** — plays the newest copy with the system's player.
 - **Live chat replay as subtitles** — Format, Messages at once, Longest on
-  screen, Side, Height, User names, SRT spaces, and *Also add it to the video
-  as a subtitle track*. **Get the chat** runs `chat` for the link into the
-  folder. A part downloaded with *Download this part* gets the chat of that
+  screen, Side, Height, User names, SRT spaces, Colours, Space between
+  messages, *Dark box behind the text*, and *Also add it to the video as a
+  subtitle track*. **Get the chat** runs `chat` for the link into the
+  folder. **Remake a chat file…** asks for a chat file musictool made (or a
+  video with the chat track) and makes it again with these settings, for
+  example as another format. A part downloaded with *Download this part* gets the chat of that
   part from its name. With no video of it in the folder, the *Only this
   part* field is used.
 
@@ -1575,7 +1610,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1119 assertions, 0 failures**, with or without
+**Verified by running the code — 1153 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1654,6 +1689,14 @@ subcommand.
   found the part and wrote the chat from 1:00:00. Before this, the same
   command without `--just-download` got no chat, because `--exact` had turned
   `--subs` off.
+- **Real chat, coloured and remade** (2026-11-23, R0GdEkPZSvM's 8 MB replay,
+  6,175 messages over 3:39:12): drawn onto a picture with ffmpeg's libass
+  filter, the new ASS shows coloured names and text, outlined with no box,
+  with a small gap between messages, and it reads over both a white and a
+  black background. Before, it was grey names on dark boxes. The ASS and the
+  text log made from it read back all 6,175 messages; the SRT read back
+  6,131. The other 44 were never on screen, because more than 5 arrived in
+  the same instant. Each step took about half a second.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that

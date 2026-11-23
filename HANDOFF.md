@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1119 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1153 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,14 +115,14 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1832   argparse + every cmd_* handler
-│   ├── gui.py         2621   tkinter GUI, 9 tabs
+│   ├── cli.py         1855   argparse + every cmd_* handler
+│   ├── gui.py         2674   tkinter GUI, 9 tabs
 │   ├── uicmd.py        675   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
 │   ├── download.py     899   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
 │   ├── parts.py        457   get --range: keyframe, salvage a .part, coverage, disk/FAT32
-│   ├── chat.py         877   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
+│   ├── chat.py        1413   chat replay -> ass/srt/vtt/txt (and back), find the video, embed as a track
 │   ├── util.py         614   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
@@ -131,7 +131,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 5972   44 sections (+8b), 1119 assertions
+│   ├── test_musictool.py 6226   45 sections (+8b), 1153 assertions
 │   └── tkstub.py          728   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -191,15 +191,20 @@ its length is checked afterwards.
 ```
 chat URL|FILE [-o DIR] [--video FILE] [--format ass|srt|vtt|txt] [--lines 5]
      [--hold 15] [--side right|left|center] [--place bottom|middle|top]
-     [--width 32] [--wrap 40] [--pad N] [--no-names] [--no-box]
+     [--width 32] [--wrap 40] [--pad N] [--no-names|--names]
+     [--colours name|role|off] [--box] [--gap 0.4]
      [--range S-E] [--offset S] [--embed] [--cookies ...]
 ```
 A finished stream's chat replay becomes a subtitle beside the matching video
 (found by `[id]` or by the index), timed to the part named in the file. A
 message stays until `--lines` newer ones are below it, or for at most
-`--hold` s. `--embed` copies it in as a track: an mkv is updated in place, an
-mp4 gets an mkv copy. See README, "Only part of a video, and the live chat as
-subtitles".
+`--hold` s. Names and messages are in colour, outlined with no box, with a
+0.4-line gap between messages. `--embed` copies it in as a track: an mkv is
+updated in place, an mp4 gets an mkv copy. `FILE` can also be a chat file it
+made (ass/srt/vtt/txt, or a video with the chat track): it is remade with
+what you change and keeps the rest. ASS, VTT and txt carry every message and
+the settings (`parse_own`); SRT is rebuilt from its cues. See README, "Only
+part of a video, and the live chat as subtitles".
 
 ---
 
@@ -341,7 +346,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1119 assertions.
+Nothing is half-finished — `main` is green at 1153 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

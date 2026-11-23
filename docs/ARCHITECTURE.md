@@ -35,13 +35,13 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1832 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` for `get --range` |
-| `gui.py` | 2621 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue, Stop / Force stop |
+| `cli.py` | 1855 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` for `get --range` |
+| `gui.py` | 2674 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 675 | parser → widget specs, `build_argv`, intent modes, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
 | `download.py` | 899 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
-| `chat.py` | 877 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `to_ass`/`to_srt`/`to_vtt`/`to_txt`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
+| `chat.py` | 1413 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `colour_of`, `to_ass`/`to_srt`/`to_vtt`/`to_txt` (messages and settings kept inside), `parse_own`/`read_own` (a file it made, back to messages), `extract_track`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
 | `parts.py` | 457 | `get --range` pieces: `keyframe_before` (where a part really starts), `trim`/`salvage` (a fragmented `.part` cut to its last whole piece and renamed to what it holds), `coverage`/`continue_point` (how far the files already go), `drop_temps`, `estimate_bytes`/`free_bytes`/`fs_type`/`is_fat` (the Android card behind FUSE) |
 | `util.py` | 614 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |

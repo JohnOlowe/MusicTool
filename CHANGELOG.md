@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — `--just-download`; `--exact --subs` keeps the chat
+## `3651ca9` — `--just-download`; `--exact --subs` keeps the chat
 *2026-11-23 · 1119 assertions*
 
 Asked for: a way to turn off the processing after a download, so nothing is

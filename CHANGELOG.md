@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — chat: remake a chat file; colours; no box; space between messages
+## `bf5b485` — chat: remake a chat file; colours; no box; space between messages
 *2026-11-23 · 1153 assertions*
 
 Asked for: a way to edit a chat that is already downloaded, which reads

@@ -5863,6 +5863,109 @@ else:
     print("  (no ffmpeg: the media checks of 43 are skipped)")
 
 
+# ============ 44. --just-download; --exact --subs keeps the chat
+print("\n44. --just-download adds nothing afterwards; --exact --subs saves the chat")
+from musictool import chat as CH44  # noqa: E402
+_a44 = download.build_args("http://x/v", {"output_dir": ".", "keep_video": True,
+                                          "embed_metadata": True,
+                                          "embed_thumbnail": True,
+                                          "embed_chapters": True,
+                                          "embed_subs": True, "sub_langs": "en",
+                                          "just_download": True})
+check("--just-download: no title, cover, chapters or subtitles put in the file",
+      not [x for x in _a44 if x.startswith("--embed-")]
+      and "--convert-thumbnails" not in _a44, str(_a44))
+check("...--subs are saved beside it instead, with their languages",
+      "--write-subs" in _a44 and _val(_a44, "--sub-langs") == "en", str(_a44))
+_b44 = download.build_args("http://x/v", {"output_dir": ".", "keep_video": True,
+                                          "embed_metadata": True,
+                                          "embed_thumbnail": True,
+                                          "embed_subs": True})
+check("...without it, everything is embedded as before",
+      all(x in _b44 for x in ("--embed-metadata", "--embed-thumbnail",
+                              "--embed-subs")) and "--write-subs" not in _b44,
+      str(_b44))
+_ap44 = build_parser().parse_args(["get", "u", "--just-download"])
+_o44 = C39._opts(_ap44)
+check("...and no lyrics (they are put inside the file too)",
+      _o44.get("just_download") and _o44.get("no_lyrics"), str(_o44))
+check("...it is in the GUI, and every mode turns it off",
+      "just_download" in {x["dest"] for x in uicmd.widget_specs("get")}
+      and "--just-download" in U.build_argv("get", {"just_download": True}, ["u"])
+      and all(m.get("just_download") is False for m in U.MODE_VALUES.values()))
+
+_o = {"format_selector": "299+140", "embed_subs": True, "keep_video": False,
+      "audio_format": "m4a", "merge_format": "", "embed_thumbnail": True}
+_l44 = []
+_ok = C39._apply_exact(_o, _EX, _l44.append)
+_t = "\n".join(_l44)
+check("--exact --subs: subtitles and a stream's chat saved beside the video "
+      "(they used to be dropped without a word)",
+      _ok and not _o["embed_subs"] and _o.get("write_subs")
+      and "saved beside the video" in _t, _t)
+check("...and yt-dlp is asked to write them",
+      "--write-subs" in download.build_args("u", dict(_o, output_dir=".")))
+
+check("chat finds the video id in a part's chat file name",
+      CH44.json_id("T [eRUHPTKNgkI] (1h00m00s-4h00m00s).live_chat.json")
+      == "eRUHPTKNgkI"
+      and CH44.json_id("T [eRUHPTKNgkI] (from 1h00m00s).live_chat.json")
+      == "eRUHPTKNgkI"
+      and CH44.json_id("T [eRUHPTKNgkI].live_chat.json") == "eRUHPTKNgkI")
+
+# a part in pieces: the chat (the whole video's) with the first piece only
+if _ff43:
+    _D44 = os.path.join(WORK, "parts44")
+    shutil.rmtree(_D44, ignore_errors=True)
+    os.makedirs(_D44)
+    _c44, _p44 = [], [20, 62]
+
+    def _fdl44(url, o, log=print, on_file=None, tag=""):
+        _c44.append(dict(o))
+        path = os.path.join(_D44, o["template"].replace("%(ext)s", "mp4"))
+        _mk43(path, _p44.pop(0))
+        if o.get("write_subs"):
+            open(path[:-4] + ".live_chat.json", "w").write("{}\n")
+        return [(path, "PARTVID0044")], None
+
+    def _per44():
+        per = {"output_dir": _D44, "format_selector": "299+140",
+               "net_max_wait": 0, "write_subs": True,
+               "_part": {"a": 100, "b": 160, "end": 160,
+                         "base": "Clip [PARTVID0044]", "vid": "PARTVID0044"}}
+        C43._set_part(per, 100, 160, 160)
+        return per
+
+    _o44 = (download.download, download.probe, PT.keyframe_before)
+    download.download = _fdl44
+    download.probe = lambda u, o: {"id": "PARTVID0044"}
+    PT.keyframe_before = lambda info, sel, t, exe, timeout=60: None
+    try:
+        _s44 = []
+        _f, _e = C43._download_part("u", _per44(), {"id": "PARTVID0044"},
+                                    _s44.append, "", None)
+        check("a part in two pieces fetches the chat with the first only",
+              _e is None and len(_c44) == 2 and _c44[0]["write_subs"]
+              and not _c44[1]["write_subs"] and not _c44[1].get("embed_subs")
+              and len(PT.sidecars(_D44, "PARTVID0044")) == 1,
+              str([(c.get("write_subs"), c.get("embed_subs")) for c in _c44]))
+        for _x in os.listdir(_D44):
+            if _x.endswith(".mp4"):
+                os.remove(os.path.join(_D44, _x))
+        _c44.clear()
+        _p44[:] = [62]
+        _s44 = []
+        _f, _e = C43._download_part("u", _per44(), {"id": "PARTVID0044"},
+                                    _s44.append, "", None)
+        check("...and a rerun with the chat already there does not fetch it "
+              "again",
+              _e is None and len(_c44) == 1 and not _c44[0]["write_subs"]
+              and "not fetched again" in " ".join(_s44), str(_s44))
+    finally:
+        download.download, download.probe, PT.keyframe_before = _o44
+    shutil.rmtree(_D44, ignore_errors=True)
+
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

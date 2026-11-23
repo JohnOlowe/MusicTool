@@ -33,7 +33,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1107 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1119 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -368,7 +368,8 @@ videos. In the GUI it is the **jobs** field under More Options.
 
 `-o/--output-dir` · `-t/--template` · `--format m4a|mp3|opus|flac|aac|ogg|wav` ·
 `-q/--audio-quality 0-10` · `--keep-video` · `--no-thumbnail` · `--no-metadata` ·
-`--chapters` · `--ascii` (ASCII-only filenames, helps picky players) ·
+`--chapters` · `--just-download` (see below) ·
+`--ascii` (ASCII-only filenames, helps picky players) ·
 `--cookies FILE` · `--cookies-from-browser auto|off|edge|chrome|firefox|brave|...` ·
 `--proxy` · `--limit-rate 2M` · `--concurrent N` (fragments of one video) ·
 `--jobs N` (videos in parallel, 1–8) ·
@@ -378,6 +379,18 @@ drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240) ·
 `--live-from-now` (a stream that is live is recorded from its start unless
 this is given) · `--range 1:00:00-` (only that part of a finished video; see
 [below](#only-part-of-a-video-and-the-live-chat-as-subtitles))
+
+**`--just-download`: done the moment the download is.** Normally, once a
+file is down, yt-dlp adds the title and other details, the cover, the chapters
+and the subtitles to it, and musictool adds lyrics. Each of those rewrites the
+file. For a long video that means a second full copy, which takes minutes on a
+phone's memory card and needs room for it. `--just-download` adds none of
+them. `--subs` are then saved as files beside the video, and a stream's chat
+too (`NAME.live_chat.json`, which `musictool chat` turns into subtitles). A
+part (`--range`) stays the fragmented MP4 it was written as. ffmpeg ends it
+with a seek index (`mfra`), so players seek in it normally. Tested on a 30 s
+part of a real 1080p60 stream: no step ran after the download, and seeking
+to 0:20 worked.
 
 ### Quality options (video downloads)
 
@@ -858,7 +871,10 @@ joined by `+`.
   `--no-thumbnail` keeps `.webm`.
 - **Audio alone** (`-f 251`) is taken out with its own codec: Opus stays Opus in
   `.opus`, AAC stays AAC in `.m4a` -- never re-encoded to `--format`.
-- No subtitle streams are added (mp4 would need them converted).
+- No subtitle streams are put inside the file (mp4 would need them converted).
+  With `--subs` they are saved beside it, and a stream's chat
+  (`NAME.live_chat.json`) too. They used to be dropped without a word, so
+  `--exact --subs` got no chat.
 - Checked against the video before anything starts. In a playlist (no list
   per video), only the form is checked, and yt-dlp stops if an id is missing.
 
@@ -1040,6 +1056,11 @@ title and cover turns it into an ordinary MP4.
 - A `.part` from an older musictool (an ordinary MP4, whose index is written
   only at the end) cannot be played or repaired by this. It is left as it is
   and the part is fetched again.
+- With `--subs`, the chat (it covers the whole video) is fetched with the
+  first piece only, and not again on a rerun once it is there. It is named
+  after the part, `TITLE [id] (1h00m00s-4h00m00s).live_chat.json`, and
+  `musictool chat` on that file finds the part's video and writes the chat
+  from where the part starts.
 
 **The chat replay as subtitles.** `chat` downloads a finished stream's chat
 replay (text only: about 8 MB for a busy 3½-hour stream) and turns it into a
@@ -1554,7 +1575,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1107 assertions, 0 failures**, with or without
+**Verified by running the code — 1119 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1625,6 +1646,14 @@ subcommand.
   `already here`. With a 60 MB file-size limit standing in for FAT32's 4 GB,
   a 5-minute part came down as three playable files that overlap by a few
   seconds.
+- **Real YouTube, `--just-download` and the chat** (2026-11-23, eRUHPTKNgkI,
+  `--range 1:00:00-1:00:30 --subs --exact -f 299+140`): the chat came down
+  beside the part (1.7 MB, all 11:21:25 of it), no step ran after the
+  download, and the part stayed a fragmented MP4 with its `mfra` index (it
+  seeks). A rerun fetched neither again. `musictool chat` on the chat file
+  found the part and wrote the chat from 1:00:00. Before this, the same
+  command without `--just-download` got no chat, because `--exact` had turned
+  `--subs` off.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that

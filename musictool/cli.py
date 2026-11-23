@@ -33,6 +33,11 @@ def _add_download_flags(p):
                    help="do not embed cover art")
     g.add_argument("--no-metadata", dest="embed_metadata", action="store_false")
     g.add_argument("--chapters", dest="embed_chapters", action="store_true")
+    g.add_argument("--just-download", dest="just_download", action="store_true",
+                   help="add nothing to the file afterwards: no title, cover, "
+                        "chapters or subtitles inside it, no lyrics -- it is "
+                        "done the moment the download is (--subs are saved as "
+                        "files beside it, a stream's chat too)")
     g.add_argument("--ascii", dest="ascii_names", action="store_true",
                    help="restrict filenames to ASCII (helps on some players)")
     g.add_argument("--cookies", help="cookies.txt (age-restricted / member content)")
@@ -336,7 +341,7 @@ def _opts(args):
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
               "quality", "max_size", "format_selector", "merge_format", "exact",
-              "audio_lang", "live_from_now",
+              "audio_lang", "live_from_now", "just_download",
               "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
               "retries", "net_max_wait", "download_archive", "lyrics_dir",
@@ -352,8 +357,9 @@ def _opts(args):
         over["yes_playlist"] = True
     if getattr(args, "providers", None):
         over["provider_order"] = [p.strip() for p in args.providers.split(",") if p.strip()]
-    if getattr(args, "no_lyrics", False):
-        over["no_lyrics"] = True
+    if getattr(args, "no_lyrics", False) or getattr(args, "just_download",
+                                                       False):
+        over["no_lyrics"] = True            # lyrics are put inside the file
     if getattr(args, "lyrics_only", False):
         over["lyrics_only"] = True
     if getattr(args, "audio_quality", None):
@@ -563,7 +569,14 @@ def _apply_exact(o, info, log=print):
     Without a probe (a playlist) only the ids' form was checked.
     """
     sel = o["format_selector"]
-    o["embed_subs"] = False
+    if o.get("embed_subs"):
+        # put inside an mp4 they would be converted (and a chat cannot go in
+        # at all): saved beside the video instead. They used to be dropped
+        # without a word -- --exact --subs got no chat.
+        o["embed_subs"] = False
+        o["write_subs"] = True
+        log("  subtitles (a stream's chat too) are saved beside the video, "
+            "not put inside it: --exact copies only the streams you chose")
     if not isinstance(info, dict) or info.get("error"):
         o["audio_format"] = "best"
         log(f"  exactly: -f {sel}, copied as it is (no list to check the ids "
@@ -790,8 +803,21 @@ def _download_part(url, per, info, say, tag, on_file):
     sleeps = iter(download.net_sleeps(float(per.get("net_max_wait", 240))))
     expired = big = stuck = rounds = 0
     last = None
+    subs = per.get("embed_subs") or per.get("write_subs")
+    put_in = per.get("embed_subs") and not per.get("write_subs")
+    if subs and vid and not put_in:
+        have = parts.sidecars(folder, vid)
+        if have:
+            say("  subtitles / chat already here, not fetched again: "
+                + ", ".join(os.path.basename(p) for p in have))
+            subs = False
     while True:
         rounds += 1
+        # the chat is for the whole video: fetched with the first piece only
+        # (each yt-dlp run would fetch it all again)
+        first = bool(subs and rounds == 1)
+        per["embed_subs"] = first and bool(put_in)
+        per["write_subs"] = first and not put_in
         if rounds > 1:
             # the links in `info` run out after some hours, and the keyframe
             # look-up uses them: fresh ones for every new piece
@@ -929,6 +955,11 @@ def cmd_get(args):
         if formats.exact_ids(o["format_selector"]) is None:
             print("!! " + formats.exact_plan(o["format_selector"], [])["error"])
             return 2
+    if o.get("just_download") and not o.get("lyrics_only"):
+        print("just downloading: nothing is added to the file afterwards (no "
+              "title, cover, chapters, subtitles or lyrics inside it)"
+              + ("; subtitles are saved beside it" if o.get("embed_subs")
+                 else ""))
     part = None
     if getattr(args, "part", None):
         try:
@@ -1070,7 +1101,9 @@ def cmd_get(args):
     if refused and not targets:
         return 1
     if o.get("no_lyrics"):
-        print("\n==> skipping lyrics (--no-lyrics)")
+        print("\n==> skipping lyrics ("
+              + ("--just-download" if o.get("just_download") else "--no-lyrics")
+              + ")")
         return 0
     if urls and live_urls >= set(urls):
         # only live recordings: no lyrics to look for -- and no sweep of the

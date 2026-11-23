@@ -404,16 +404,22 @@ def build_args(url, o):
             # "best" (--exact) copies the audio as it is; a quality would
             # only matter to a re-encode
             args += ["--audio-quality", str(o.get("audio_quality", 4))]
-    if o.get("embed_metadata", True):
+    # --just-download: nothing is added once the download is done. Each of
+    # these rewrites the file afterwards -- for a part, a second full copy:
+    # minutes on a phone's memory card, and room for it.
+    bare = o.get("just_download")
+    if o.get("embed_metadata", True) and not bare:
         args.append("--embed-metadata")
-    if o.get("embed_thumbnail"):
+    if o.get("embed_thumbnail") and not bare:
         args.append("--embed-thumbnail")
         if not o.get("keep_video"):
             args += ["--convert-thumbnails", "png"]
-    if o.get("embed_chapters"):
+    if o.get("embed_chapters") and not bare:
         args.append("--embed-chapters")
-    if o.get("embed_subs"):
-        args.append("--embed-subs")
+    if o.get("embed_subs") or o.get("write_subs"):
+        # beside the file when nothing may be added to it (or --exact)
+        args.append("--write-subs" if bare or o.get("write_subs")
+                    else "--embed-subs")
         if o.get("sub_langs"):
             args += ["--sub-langs", o["sub_langs"]]
     # a concrete quality, chosen from the size list (`formats`), or a raw -f

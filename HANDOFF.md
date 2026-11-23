@@ -98,7 +98,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1107 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1119 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -115,14 +115,14 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1799   argparse + every cmd_* handler
+│   ├── cli.py         1832   argparse + every cmd_* handler
 │   ├── gui.py         2621   tkinter GUI, 9 tabs
-│   ├── uicmd.py        672   parser -> widget specs, build_argv, intent modes
+│   ├── uicmd.py        675   parser -> widget specs, build_argv, intent modes
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     893   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── download.py     899   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
-│   ├── parts.py        438   get --range: keyframe, salvage a .part, coverage, disk/FAT32
-│   ├── chat.py         874   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
+│   ├── parts.py        457   get --range: keyframe, salvage a .part, coverage, disk/FAT32
+│   ├── chat.py         877   chat replay -> ass/srt/vtt/txt, find the video, embed as a track
 │   ├── util.py         614   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
 │   ├── lyrics.py       275   gather / process / embed
@@ -131,7 +131,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 5869   43 sections (+8b), 1107 assertions
+│   ├── test_musictool.py 5972   44 sections (+8b), 1119 assertions
 │   └── tkstub.py          728   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -341,7 +341,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1107 assertions.
+Nothing is half-finished — `main` is green at 1119 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

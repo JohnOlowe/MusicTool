@@ -235,6 +235,25 @@ def leftovers(folder, vid):
     return sorted(out)
 
 
+SUB_EXT = (".json", ".vtt", ".srt", ".ass", ".ssa", ".ttml", ".srv1", ".srv2",
+           ".srv3", ".lrc")
+
+
+def sidecars(folder, vid):
+    """Subtitle files of video `vid` already in `folder` (a stream's chat is
+    NAME [id] (...).live_chat.json), finished ones only."""
+    out = []
+    try:
+        names = os.listdir(folder or ".")
+    except OSError:
+        return out
+    for n in sorted(names):
+        if f"[{vid}]" in n and n.lower().endswith(SUB_EXT) \
+                and not n.startswith(".musictool"):
+            out.append(os.path.join(folder or ".", n))
+    return out
+
+
 def drop_temps(folder, vid):
     """Remove the half-made copies yt-dlp leaves when adding the title and
     cover runs out of room (NAME [id] (...).temp.mp4). -> paths removed."""

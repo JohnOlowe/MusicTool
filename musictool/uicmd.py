@@ -92,7 +92,8 @@ MODE_VALUES = {
     "music_single": {
         "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
         "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
-        "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
+        "embed_subs": False, "just_download": False,
+        "no_lyrics": False, "lyrics_only": False,
         "no_playlist": True, "playlist_items": "", "quality": "",
         "max_size": "", "format_selector": "", "merge_format": "", "exact": False,
         "template": "%(uploader)s - %(title)s.%(ext)s",
@@ -100,7 +101,8 @@ MODE_VALUES = {
     "music_playlist": {
         "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
         "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
-        "embed_subs": False, "no_lyrics": False, "lyrics_only": False,
+        "embed_subs": False, "just_download": False,
+        "no_lyrics": False, "lyrics_only": False,
         "no_playlist": False, "quality": "", "max_size": "",
         "format_selector": "", "merge_format": "", "exact": False,
         "template": "%(playlist_title)s/%(playlist_index)03d - "
@@ -109,7 +111,7 @@ MODE_VALUES = {
     "video_single": {
         "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
         "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
-        "no_lyrics": True, "lyrics_only": False, "no_playlist": True,
+        "just_download": False, "no_lyrics": True, "lyrics_only": False, "no_playlist": True,
         "playlist_items": "", "quality": "1080", "max_size": "",
         "format_selector": "", "exact": False,
         "template": "%(title)s.%(ext)s",
@@ -117,7 +119,7 @@ MODE_VALUES = {
     "video_playlist": {
         "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
         "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
-        "no_lyrics": True, "lyrics_only": False, "no_playlist": False,
+        "just_download": False, "no_lyrics": True, "lyrics_only": False, "no_playlist": False,
         "quality": "1080", "max_size": "", "format_selector": "", "exact": False,
         "template": "%(playlist_title)s/%(playlist_index)03d - "
                     "%(title)s.%(ext)s",
@@ -218,6 +220,7 @@ LABELS = {
     "embed_thumbnail": "Embed cover art",
     "embed_metadata": "Embed metadata",
     "embed_chapters": "Embed chapters",
+    "just_download": "Just download: add nothing to the file afterwards",
     "ascii_names": "ASCII-only filenames",
     "cookies": "cookies.txt (optional)",
     "cookies_from_browser": "Cookies from browser",

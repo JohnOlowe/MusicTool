@@ -565,8 +565,11 @@ def video_id(text):
 
 
 def json_id(path):
-    """The video id in a replay file's name: 'TITLE [ID].live_chat.json'."""
-    m = re.search(r"\[([\w-]{11})\]\.live_chat\.json$", os.path.basename(path))
+    """The video id in a replay file's name: 'TITLE [ID].live_chat.json', or
+    a part's 'TITLE [ID] (1h00m00s-4h00m00s).live_chat.json' (get --range
+    --subs saves the chat under the part's name)."""
+    m = re.search(r"\[([\w-]{11})\](?: \([\w -]+\))?\.live_chat\.json$",
+                  os.path.basename(path))
     if m:
         return m.group(1)
     m = re.match(r"([\w-]{11})\.live_chat\.json$", os.path.basename(path))

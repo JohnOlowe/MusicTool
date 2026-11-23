@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1107 assertions across 43 sections (plus 8b), 0 failures** — with or without
+**1119 assertions across 44 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -230,6 +230,13 @@ Proven by execution:
   fetching fresh links; a short file without an error renamed and continued;
   a failed title/cover step keeping the whole file and removing the half
   copy; any other error passed on.
+- `--just-download` and the chat (section 44): `build_args` with it puts
+  nothing in the file (no `--embed-*`), writes `--subs` beside it with their
+  languages, and without it everything is embedded as before; it implies no
+  lyrics, is in the GUI, and every mode turns it off; `--exact --subs` saves
+  subtitles beside the video (and says so) instead of dropping them; `chat`
+  reads the id from a part's chat name; a part in two pieces fetches the chat
+  with the first only, and a rerun with the chat there does not fetch it.
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

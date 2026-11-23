@@ -8,6 +8,36 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — `--just-download`; `--exact --subs` keeps the chat
+*2026-11-23 · 1119 assertions*
+
+Asked for: a way to turn off the processing after a download, so nothing is
+embedded and it stops almost as soon as the download does. Also: the chat
+did not seem to come down.
+
+- **The chat was being dropped.** `--exact` set `embed_subs` off without a
+  word (subtitles inside an mp4 would be converted), so `--exact --subs` got
+  no chat. Now `--exact` saves subtitles beside the video (`--write-subs`)
+  and says so. For a stream that includes the chat, `NAME.live_chat.json`.
+- **`--just-download`**: no `--embed-metadata`, `--embed-thumbnail`,
+  `--embed-chapters` or `--embed-subs`, and no lyrics. `--subs` are written
+  beside the file. Each embed step rewrites the file, and for a part that is a
+  second full copy (minutes on a phone's memory card, and room for it). A part
+  stays the fragmented MP4 it was written as; ffmpeg ends it with an `mfra`
+  index, so it seeks. In the GUI it is generated from the parser like every
+  option, and every mode turns it off.
+- **The chat once per part.** It covers the whole video, and every yt-dlp
+  run in `_download_part` would have fetched it again. Now it comes with the
+  first piece only, and not at all when it is already in the folder
+  (`parts.sidecars`).
+- **`chat` on a part's chat file** (`TITLE [id] (1h00m00s-4h00m00s).live_chat.json`)
+  found no video id: `json_id` expected `[id].live_chat.json`. Now it finds
+  the part and writes the chat from where it starts.
+- The "skipping lyrics" line names `--just-download` when that is the reason.
+- Tested for real on eRUHPTKNgkI (README, "Verified").
+
+---
+
 ## `5fb8d46` — Unfinished parts stay playable, and a rerun carries on
 *2026-11-22 · 1107 assertions*
 

@@ -55,8 +55,8 @@ first time, along with every shape of part around it.
   keeps the socket's send buffer small so that "written to ffmpeg" means
   "read by ffmpeg". Result: 31 MB for a 25 MB part, 14 MB for a 10.5 MB WebM
   part.
-- Tests: section 49 (29 checks) and one changed check in 43 (sound alone is
-  now looked up). README ("Verified": the real-YouTube results; the
+- Tests: section 49 (28 checks), and in 43 one check split in two (sound
+  alone is now looked up). README ("Verified": the real-YouTube results; the
   not-verified item is now only real network drops), HANDOFF, TESTING,
   DECISIONS (5 traps), ARCHITECTURE.
 

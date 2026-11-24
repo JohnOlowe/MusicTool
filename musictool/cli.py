@@ -332,9 +332,13 @@ def build_parser():
                     help="space between messages, in lines (default 0.4; 0 = "
                          "none). srt/vtt can only space whole lines: 1+")
     ch.add_argument("--range", dest="part", metavar="START-END",
-                    help="the part of the stream your video holds, e.g. "
-                         "1:00:00- . Normally read from the video's name "
-                         "('NAME (from 1h00m00s)', as `get --range` saves it)")
+                    help="which part of the stream, e.g. 0:00:00-6:40:00 . "
+                         "A video named with its part ('NAME (1h00m00s-"
+                         "2h00m00s)', as `get --range` saves it) is always "
+                         "timed from its name: this only picks the parts "
+                         "inside the range, the others are left alone. A "
+                         "video without a part in its name (or given with "
+                         "--video) is taken to hold this range")
     ch.add_argument("--offset", type=float,
                     help="seconds to move the chat later (negative: earlier); "
                          "on a chat file made before, this replaces the "

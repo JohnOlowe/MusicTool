@@ -53,6 +53,7 @@ COLOUR_MODES = ("name", "role", "off")
 TEXT = "FFFFFF"
 ROLE_OF = {v: k for k, v in COLOURS.items() if k not in ("", "paid")}
 OWN_EXTS = (".ass", ".ssa", ".srt", ".vtt", ".txt")
+RANGE_SLACK = 15.0                # s: how far a part's name may be from --range
 DATA = "[MusicTool Chat]"         # the ASS section with every message, as JSON
 
 # what `chat` does when nothing says otherwise; a file musictool made keeps
@@ -1344,20 +1345,51 @@ def run(src, folder, o, style, log=print):
     if kind in ("own", "video") and not clip and "start" in meta:
         kept = (float(meta.get("start") or 0),
                 None if meta.get("end") is None else float(meta["end"]))
+    rng = style.get("range")
+    # --range says which part of the stream you want the chat for. A video
+    # whose name says what part it holds is always timed from its own name:
+    # the range only picks which of them get a subtitle -- it must never put
+    # one part's chat on every part in the folder
+    pick = bool(rng) and not clip and not style.get("video")
     targets = []
     for v in by_base.values():
+        named = None if clip else part_from_name(v)
         if clip:
-            a, b = style.get("range") or (0.0, None)
+            a, b = rng or (0.0, None)
+        elif pick and named:
+            a, b = named
         else:
-            a, b = style.get("range") or kept or part_from_name(v) or (0.0, None)
+            a, b = rng or kept or named or (0.0, None)
         if b is None:                    # no cues past the end of the file
             from .live import media_seconds
             secs = media_seconds(v)
             if secs:
                 b = a + secs + 1
-        targets.append((v, (a, b)))
+        targets.append((v, (a, b), named))
+    if pick:
+        def inside(ab):
+            # a few seconds of slack: a part starts at the keyframe before
+            # the time asked for, and pieces of one part overlap by ~2 s
+            a, b = ab
+            if a < rng[0] - RANGE_SLACK:
+                return False
+            if rng[1] is None:
+                return True
+            return a < rng[1] if b is None else b <= rng[1] + RANGE_SLACK
+        parts = [t for t in targets if t[2] and inside(t[1])]
+        # a video without a part in its name holds what --range says, but
+        # only when no part of this range is here
+        keep = parts or [t for t in targets if not t[2]]
+        for v, (a, b), _n in targets:
+            if all(v != k[0] for k in keep):
+                log(f"   left alone: {os.path.basename(v)} (another part, "
+                    f"not {part_label(*rng)})")
+        if not keep and targets:
+            log(f"none of this stream's videos here holds {part_label(*rng)}")
+        targets = keep
+    targets = [(v, ab) for v, ab, _n in targets]
     if not targets:
-        rng = style.get("range") or (None if clip else kept) or (0.0, None)
+        rng = rng or (None if clip else kept) or (0.0, None)
         if kind in ("own", "video"):
             base = _own_base(path)
         else:
@@ -1365,9 +1397,10 @@ def run(src, folder, o, style, log=print):
                 ".live_chat.json") else os.path.splitext(path)[0]
             if rng != (0.0, None):
                 base += f" ({part_label(*rng)})"
-            log("no downloaded video of it found in the folder -- the subtitle "
-                "is saved next to the chat file; give it the video's name to "
-                "have the player load it")
+            log(("no video of that part found" if by_base else
+                 "no downloaded video of it found in the folder")
+                + " -- the subtitle is saved next to the chat file; give it "
+                "the video's name to have the player load it")
         targets.append((base, rng))
     look = {k: eff[k] for k in LOOK}
     rc = 0

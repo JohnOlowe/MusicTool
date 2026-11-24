@@ -5097,9 +5097,10 @@ check("...run again with other settings: our own file is replaced",
                                                                 + ".chat.srt"),
       _r.stdout[-300:])
 _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "0:10-0:20",
-                     "--format", "txt"], capture_output=True, text=True, env=ENV)
+                     "--video", _V, "--format", "txt"], capture_output=True,
+                    text=True, env=ENV)
 _tx = open(_V[:-4] + ".txt", encoding="utf-8").read()
-check("--range overrides the name: 0:10-0:20 only",
+check("--range with --video overrides the name: 0:10-0:20 only",
       "[0:00:00.000] @ann" in _tx and "@fay" not in _tx, _tx[-300:])
 _r = subprocess.run([sys.executable, ENTRY, "chat", _CJ, "--range", "junk"],
                     capture_output=True, text=True, env=ENV)
@@ -6218,6 +6219,78 @@ finally:
     G.cli_main = _cli45g
     tkstub.DIALOG.pop("open", None)
 shutil.rmtree(_D45, ignore_errors=True)
+
+
+# ============ 46. chat --range with several parts in the folder
+print("\n46. chat --range: only the parts inside it, each timed from its own name")
+from musictool import chat as CH46  # noqa: E402
+_D46 = os.path.join(WORK, "chat46")
+shutil.rmtree(_D46, ignore_errors=True)
+os.makedirs(_D46)
+_J46 = os.path.join(_D46, "Talk [ABCDEFGHIJK].live_chat.json")
+open(_J46, "w").write("\n".join(json.dumps({"replayChatItemAction": {
+    "videoOffsetTimeMsec": str(_t * 1000), "actions": [{"addChatItemAction": {
+        "item": {"liveChatTextMessageRenderer": {
+            "id": f"m{_t}", "authorName": {"simpleText": _a},
+            "message": {"runs": [{"text": _x}]}}}}}]}})
+    for _t, _a, _x in [(10, "@a", "first part"), (40, "@b", "second part"),
+                       (70, "@c", "third part")]) + "\n")
+_P46 = [os.path.join(_D46, f"Talk [ABCDEFGHIJK] ({_n}).mp4") for _n in
+        ("0h00m00s-0h00m30s", "0h00m28s-0h01m00s", "0h01m00s-0h01m30s")]
+for _p in _P46:
+    open(_p, "wb").write(b"not really a video")
+
+
+def _srt46(i):
+    _s = _P46[i][:-4] + ".srt"
+    return open(_s, encoding="utf-8-sig").read() if os.path.exists(_s) else ""
+
+
+def _run46(*a):
+    return subprocess.run([sys.executable, ENTRY, "chat", _J46, "--format",
+                           "srt", "--hold", "5", "--lines", "1"] + list(a),
+                          capture_output=True, text=True, env=ENV)
+
+
+_r = _run46()
+_all46 = [_srt46(i) for i in range(3)]
+check("no --range: every part gets its own piece of the chat",
+      "first part" in _all46[0] and "second part" in _all46[1]
+      and "00:00:12,000" in _all46[1] and "third part" in _all46[2]
+      and "00:00:10,000" in _all46[2] and "first part" not in _all46[2],
+      _r.stdout[-400:])
+_r = _run46("--range", "0:00:00-0:01:00", "--side", "left")
+check("--range 0-1:00: the two parts inside it are remade, each from its own "
+      "name -- not the range's chat on every part",
+      "00:00:12,000" in _srt46(1) and "first part" not in _srt46(1)
+      and "first part" in _srt46(0) and _srt46(0) != _all46[0],
+      _r.stdout[-400:] + _srt46(1)[:200])
+check("...the part outside it is left alone (said so), its subtitle unchanged",
+      _srt46(2) == _all46[2] and "left alone" in _r.stdout
+      and "0h01m00s-0h01m30s" in _r.stdout, _r.stdout[-400:])
+_r = _run46("--range", "0:01:00-")
+check("--range 1:00-: only the last part",
+      "third part" in _srt46(2) and "00:00:10,000" in _srt46(2)
+      and _r.stdout.count("left alone") == 2, _r.stdout[-400:])
+_r = _run46("--range", "2:00:00-3:00:00")
+check("a range none of the parts holds: nothing of theirs touched, the "
+      "subtitle goes beside the chat file with the range in its name",
+      _r.returncode == 0 and "no video of that part found" in _r.stdout
+      and _srt46(2) != "" and os.path.exists(os.path.join(
+          _D46, "Talk [ABCDEFGHIJK] (2h00m00s-3h00m00s).srt")),
+      _r.stdout[-400:])
+for _p in _P46:
+    os.remove(_p)
+_W46 = os.path.join(_D46, "Talk [ABCDEFGHIJK].mp4")
+open(_W46, "wb").write(b"not really a video")
+_r = _run46("--range", "0:00:30-")
+_w = open(_W46[:-4] + ".srt", encoding="utf-8-sig").read() \
+    if os.path.exists(_W46[:-4] + ".srt") else ""
+check("a video without a part in its name still takes --range as what it "
+      "holds",
+      "first part" not in _w and "second part" in _w and "00:00:10,000" in _w,
+      _r.stdout[-300:] + _w[:200])
+shutil.rmtree(_D46, ignore_errors=True)
 
 
 srv.shutdown()

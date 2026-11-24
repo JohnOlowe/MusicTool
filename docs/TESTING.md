@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1153 assertions across 45 sections (plus 8b), 0 failures** — with or without
+**1159 assertions across 46 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -190,8 +190,8 @@ Proven by execution:
   a part carrying over what was on screen, and offset; the ASS column,
   alignment and escaping, SRT `{\an3}`/pad/BOM, VTT positions, the TXT log;
   finding the video by `[id]`, never overwriting someone else's subtitle,
-  replacing our own; `chat FILE.json` timing from the name, `--range`
-  overriding it; `chat URL` downloading only the chat and never twice
+  replacing our own; `chat FILE.json` timing from the name, `--range` with
+  `--video` overriding it; `chat URL` downloading only the chat and never twice
   (fake yt-dlp); `--embed` making an mkv from an mp4 and replacing, not
   doubling, the track; a cut MP4 (picture below zero) giving an mkv whose
   chat starts at the cut, and a sidecar next to such an mkv timed to its
@@ -247,6 +247,12 @@ Proven by execution:
   log back into ASS, in place, and a foreign subtitle left alone; with real
   ffmpeg, `--embed` from an ASS and the chat track read back out of the
   `.mkv`; and the GUI's *Remake a chat file…* button.
+- `chat --range` with several parts in the folder (section 46): with no range
+  each part gets its own piece of the chat; a range remakes only the parts
+  inside it, each still timed from its own name, and leaves the others (and
+  their subtitles) alone, saying so; a range no part holds touches none of
+  them; a video without a part in its name still takes the range. (Before,
+  the range's chat was written over every part's subtitle.)
 
 **Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
 wiring, but renders nothing. Scroll feel, real clipping, real window resizing

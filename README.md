@@ -33,7 +33,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1153 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1159 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -1126,8 +1126,12 @@ musictool chat "D:\Videos\T [id].mkv" --lines 3     # the chat track in a video
   read as well as it can be, and never overwritten (`NAME.chat.srt`).
 - **Parts.** A video named `(from 1h00m00s)` gets the chat from 1:00:00 on,
   starting at 0:00 of the file. Whatever was on screen at that moment stays
-  up as if it had been there all along. `--range` sets the part by hand and
-  `--offset 2.5` moves the chat later.
+  up as if it had been there all along. Every part of the stream in the
+  folder gets its own piece of the chat, timed from its own name.
+  `--range 0:00:00-6:40:00` picks parts: only the ones inside that range get
+  a subtitle, still each from its own name, and the others are left alone.
+  A video without a part in its name (or one given with `--video`) is taken
+  to hold the range. `--offset 2.5` moves the chat later.
 - **Nothing is downloaded twice.** A `.live_chat.json` already in the folder
   is used. The video is found by `[id]` in its name or in musictool's index.
   A subtitle file musictool did not write is never overwritten (`NAME.chat.srt`
@@ -1610,7 +1614,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1153 assertions, 0 failures**, with or without
+**Verified by running the code — 1159 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

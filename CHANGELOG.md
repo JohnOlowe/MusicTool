@@ -8,6 +8,28 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — chat `--range` no longer puts one part's chat on every part
+*2026-11-23 · 1159 assertions*
+
+Reported: `chat` with a range (e.g. `0-6:40:00`) said the chat replay was
+already here, then wrote the same subtitles over the chat of every part in
+the folder, so most parts showed chat that did not belong to them.
+
+- **The cause.** `run` used `--range` in place of each video's own part, for
+  every video of the stream it found, so all parts got the chat of 0:00 to
+  6:40:00, timed from 0:00.
+- **Now** a video whose name says its part is always timed from its name.
+  `--range` only picks which parts get a subtitle: those inside it (with 15 s
+  of slack for the keyframe start and the ~2 s overlap of pieces). The others
+  are left alone, and each is named in the log. A range no part holds
+  touches none of them, and the subtitle goes beside the chat file. A video
+  without a part in its name, or one given with `--video`, still takes the
+  range as what it holds.
+- Section 46; one §40 check now passes `--video` (overriding the name is
+  what it tests).
+
+---
+
 ## `bf5b485` — chat: remake a chat file; colours; no box; space between messages
 *2026-11-23 · 1153 assertions*
 

@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — `get --range` tested on real YouTube: four bugs fixed
+## `26e2e43` — `get --range` tested on real YouTube: four bugs fixed
 *2026-11-24 · 1292 assertions*
 
 Asked for: "Test it properly, make sure there are no bugs", with fresh

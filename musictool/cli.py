@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import cancel
 from . import config as configmod
 from . import (chat, download, formats, live, lyrics, parts, progress,
-               providers, tags)
+               providers, rangeproxy, tags)
 from .uicmd import is_playlist_url
 from .util import (AUDIO_EXT, classify, common_root, detect_browser,
                    existing_paths, ffmpeg_hint, have_ffmpeg, is_termux,
@@ -71,6 +71,11 @@ def _add_download_flags(p):
                         "(from 1 hour to the end), 1:00:00-2:30:00, -45:00 or "
                         "1h-2h30m. Saved as 'NAME (from 1h00m00s)'; `chat` "
                         "reads that and matches the chat to it")
+    g.add_argument("--no-fast-range", dest="fast_range", action="store_false",
+                   default=None,
+                   help="fetch a --range part the old way, by ffmpeg alone "
+                        "(slow with an ffmpeg older than 8.1), instead of "
+                        "through musictool's 10 MB pieces")
     g.add_argument("--live-from-now", dest="live_from_now", action="store_true",
                    help="a stream that is live right now is recorded from the "
                         "start by default; this records from now instead")
@@ -367,7 +372,7 @@ def _opts(args):
               "keep_video", "embed_metadata", "embed_thumbnail", "embed_chapters",
               "ascii_names", "cookies", "cookies_from_browser",
               "quality", "max_size", "format_selector", "merge_format", "exact",
-              "audio_lang", "live_from_now", "just_download",
+              "audio_lang", "live_from_now", "just_download", "fast_range",
               "embed_subs", "sub_langs", "remote_components", "js_runtimes",
               "proxy", "rate_limit", "concurrent",
               "retries", "net_max_wait", "download_archive", "lyrics_dir",
@@ -714,8 +719,8 @@ def _resolve_quality(url, o, log=print, info=None):
 
 
 def _plan_part(url, per, info, live_st, part, say):
-    """Set up `get --range`: only START-END of a finished video, fetched by
-    ffmpeg straight from YouTube, saved as 'NAME (from 1h00m00s).ext'.
+    """Set up `get --range`: only START-END of a finished video, cut by
+    ffmpeg (reading through rangeproxy), saved as 'NAME (from 1h00m00s).ext'.
     -> False when it cannot be done (said why)."""
     a, b = part
     if is_playlist_url(url) or per.get("yes_playlist"):
@@ -749,13 +754,17 @@ def _plan_part(url, per, info, live_st, part, say):
                                    else "the end")
     say(f"  only part of it: {span}" + (f", {live.hms(end - a)} of video"
                                          if end else ""))
-    if not download.ffmpeg_chunked():
+    if rangeproxy.wanted(per):
+        say("  fast: ffmpeg reads the part through musictool, which fetches "
+            "it from YouTube in 10 MB pieces, like a whole download")
+    elif not download.ffmpeg_chunked():
         slow = f" ({live.hms((end - a) / 2)} or longer here)" if end else ""
-        say("  note: this ffmpeg fetches the part in one long request, which "
-            "YouTube slows to about 2x real time" + slow + ", so the "
-            "percentage creeps at first. ffmpeg 8.1 or newer asks in 10 MB "
-            "pieces and is 10-20x faster (check: ffmpeg -h protocol=http "
-            "lists -request_size).")
+        why = ("--proxy / --limit-rate" if per.get("fast_range", True)
+               else "--no-fast-range")
+        say("  note: with " + why + " this ffmpeg fetches the part in one "
+            "long request, which YouTube slows to about 2x real time" + slow
+            + ". ffmpeg 8.1 or newer asks in 10 MB pieces by itself (check: "
+            "ffmpeg -h protocol=http lists -request_size).")
     return True
 
 
@@ -813,7 +822,39 @@ def _size(path):
 def _download_part(url, per, info, say, tag, on_file):
     """Fetch a part so that whatever comes down plays, and carry on from
     where the files end -- after a drop, the 4 GB limit of a FAT32 card, or
-    on a later run -- instead of starting the part over. -> (files, error)."""
+    on a later run -- instead of starting the part over. -> (files, error).
+
+    ffmpeg reads it through musictool's range proxy (rangeproxy.py), which
+    fetches in 10 MB pieces: a part comes as fast as a whole video, with any
+    ffmpeg. Everything else is as it was."""
+    def waiting(w, err):
+        say(f"  ! network problem -- waiting {int(w)}s; the part goes on "
+            f"where it was")
+        progress.report({"type": "wait", "secs": w, "tag": tag} if tag else
+                        {"type": "wait", "secs": w})
+
+    fast = (rangeproxy.Proxy(on_wait=waiting) if rangeproxy.wanted(per)
+            else None)
+    try:
+        return _part_rounds(url, per, info, say, tag, on_file, fast)
+    finally:
+        if fast is not None:
+            fast.stop()
+            if fast.requests:
+                say(f"  fast: {fast.summary()}")
+
+
+def _fast_info(info, fast, say):
+    """The info for yt-dlp to load, its links pointed at the proxy -> a
+    temporary file, or None (nothing to read through it: HLS, another site)."""
+    try:
+        return rangeproxy.write_info(info, fast)
+    except (OSError, ValueError, TypeError) as e:
+        say(f"  ! could not prepare the fast way ({e}); ffmpeg fetches it alone")
+        return None
+
+
+def _part_rounds(url, per, info, say, tag, on_file, fast):
     P = per["_part"]
     a, b, end, vid = P["a"], P["b"], P["end"], P["vid"]
     folder = per.get("output_dir") or "."
@@ -829,6 +870,7 @@ def _download_part(url, per, info, say, tag, on_file):
     sleeps = iter(download.net_sleeps(float(per.get("net_max_wait", 240))))
     expired = big = stuck = rounds = 0
     last = None
+    slow = fast is None                  # the proxy failed: ffmpeg alone
     subs = per.get("embed_subs") or per.get("write_subs")
     put_in = per.get("embed_subs") and not per.get("write_subs")
     if subs and vid and not put_in:
@@ -880,8 +922,25 @@ def _download_part(url, per, info, say, tag, on_file):
                       seek=round(key + parts.KEY_NUDGE, 3))
         else:
             _set_part(per, start, b, end)
-        got, err = download.download(url, per, log=say, tag=tag,
-                                     on_file=on_file)
+        via = None if slow else _fast_info(info, fast, say)
+        if via:
+            per["info_json"] = via
+            fast.broken = None
+        try:
+            got, err = download.download(url, per, log=say, tag=tag,
+                                         on_file=on_file)
+        finally:
+            per.pop("info_json", None)
+            if via:
+                try:
+                    os.remove(via)
+                except OSError:
+                    pass
+        if via and err and err != cancel.CANCELLED and fast.net_error:
+            # ffmpeg only saw the proxy give up; this is why (and it makes
+            # the wait-for-the-network below happen, as it did without it)
+            err += ("\nERROR: musictool's range proxy was unable to connect "
+                    "to the server: " + fast.net_error)
         files.extend(got)
         ls = per["section_span"][0]
         if err and "Postprocessing" in err and vid:
@@ -904,9 +963,30 @@ def _download_part(url, per, info, say, tag, on_file):
         if err is None:
             done = got[-1][0] if got else None
             secs = parts.seconds(done) if done and os.path.exists(done) else None
+            cut = via and secs and fast.broken
+            if cut:
+                # ffmpeg took a cut stream for its end and said "done"; the
+                # sound (fetched early) may run on, so the header's length
+                # says nothing about how far the picture got
+                secs = parts.played_seconds(done) or secs
             if not end or not secs or secs + max(5.0, (end - ls) * 0.01) \
                     >= end - ls:
                 return files, None
+            if cut and ls + secs <= pos + 1:
+                # cut off again before it got past what is already here
+                # (only what was still in memory came): nothing new in it
+                try:
+                    os.remove(done)
+                except OSError:
+                    pass
+                files[:] = [(p, v) for p, v in files if p != done]
+                say(f"  ! cut off again before anything new came "
+                    f"({fast.broken}) -- trying again")
+                if "403" in str(fast.broken):
+                    expired += 1
+                    if expired > 3:
+                        return files, str(fast.broken)
+                continue
             new = parts.relabel(done, ls, ls + secs)
             try:
                 os.replace(done, new)
@@ -915,8 +995,14 @@ def _download_part(url, per, info, say, tag, on_file):
             files[:] = [(new if p == done else p, v) for p, v in files]
             if on_file and new != done:
                 on_file(new, vid)
-            say(f"!! it stopped at {live.hms(ls + secs)} without saying why "
-                f"(a long drop): kept as {os.path.basename(new)}, carrying on")
+            why = (f"the fast way was cut off: {fast.broken}" if cut
+                   else "without saying why (a long drop)")
+            say(f"!! it stopped at {live.hms(ls + secs)} {why}: kept as "
+                f"{os.path.basename(new)}, carrying on")
+            if cut and "403" in str(fast.broken):
+                expired += 1
+                if expired > 3:
+                    return files, str(fast.broken)
             continue                     # ffmpeg already waited out the drop
         kept_now = []
         if err is not None:
@@ -957,6 +1043,14 @@ def _download_part(url, per, info, say, tag, on_file):
                 f"from where the file ends")
             if not cancel.sleep(w):
                 return files, cancel.CANCELLED
+            continue
+        if via and not slow:
+            # something about reading through the proxy that was not
+            # foreseen: the rest the old way rather than not at all
+            slow = True
+            why = (err.strip().splitlines() or ["?"])[-1][:200]
+            say(f"  ! the fast way failed ({why}) -- fetching the rest by "
+                f"ffmpeg alone")
             continue
         return files, err
 

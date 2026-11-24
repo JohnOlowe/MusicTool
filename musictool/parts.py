@@ -221,6 +221,39 @@ def seconds(path):
     return media_seconds(path)
 
 
+def played_seconds(path, exe=None, timeout=1800):
+    """How long the picture AND the sound of a file last: the shorter one.
+    A part whose video was cut off while its sound (small, fetched early)
+    went on says in its header that it is as long as the sound. Reads the
+    file once per stream (nothing is decoded). None when it cannot tell."""
+    if not exe:
+        from .live import ffmpeg_exe
+        exe = ffmpeg_exe()
+    if not exe or not path or not os.path.exists(path):
+        return None
+    try:
+        head = cancel.run([exe, "-hide_banner", "-i", path], capture_output=True,
+                          text=True, errors="replace", timeout=60).stderr or ""
+    except Exception:                                        # noqa: BLE001
+        return None
+    out = []
+    for kind, sel in (("Video", "0:v:0"), ("Audio", "0:a:0")):
+        if not re.search(rf"Stream #0:\d+.*: {kind}:", head):
+            continue
+        try:
+            r = cancel.run([exe, "-hide_banner", "-nostats", "-v", "error",
+                            "-progress", "pipe:1", "-i", path, "-map", sel,
+                            "-c", "copy", "-f", "null", "-"],
+                           capture_output=True, text=True, errors="replace",
+                           timeout=timeout)
+        except Exception:                                    # noqa: BLE001
+            return None
+        us = re.findall(r"out_time_us=(\d+)", r.stdout or "")
+        if us and int(us[-1]) > 0:
+            out.append(int(us[-1]) / 1e6)
+    return min(out) if out else None
+
+
 def leftovers(folder, vid):
     """Unfinished parts of video `vid` (ffmpeg's NAME [id] (...).mp4.part)."""
     out = []
@@ -303,7 +336,8 @@ def _has_box(path, kind):
 
 def coverage(folder, vid):
     """Finished parts of video `vid` in `folder`: [(start, end, path)], with
-    the end measured from the file, not trusted from its name."""
+    the end measured from the file, not trusted from its name (and not past
+    the end in its name either)."""
     out = []
     try:
         names = os.listdir(folder or ".")
@@ -317,7 +351,13 @@ def coverage(folder, vid):
         p = os.path.join(folder or ".", n)
         secs = seconds(p)
         if secs:
-            out.append((float(lab[0]), lab[0] + secs, p))
+            stop = lab[0] + secs
+            if lab[1] is not None and lab[1] > lab[0]:
+                # named after a cut (cli._download_part): its sound may run
+                # on past the picture, so the header claims more than plays.
+                # The shorter of the two, never more than either says.
+                stop = min(stop, lab[1] + 0.5)
+            out.append((float(lab[0]), stop, p))
     return out
 
 

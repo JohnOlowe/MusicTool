@@ -14,6 +14,7 @@ musictool.py ──▶ cli.py ──▶ download.py ──▶ (yt-dlp subprocess
                    │
                    ├──▶ live.py ──▶ download.py, (ffmpeg for the watch copy)
                    ├──▶ parts.py ──▶ (ffmpeg: one packet for the keyframe)
+                   ├──▶ rangeproxy.py  a part's bytes: 10 MB pieces for ffmpeg
                    ├──▶ chat.py ──▶ (yt-dlp for the replay, ffmpeg to embed)
                    ├──▶ formats.py ──▶ (yt-dlp -J output)
                    ├──▶ lyrics.py ──▶ providers.py ──▶ tags.py ──▶ mutagen
@@ -35,14 +36,15 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 1859 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` for `get --range` |
+| `cli.py` | 1953 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` / `_part_rounds` for `get --range` |
 | `gui.py` | 3476 | tkinter GUI: 4 tabs, Smart + modes, foldable sections, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 1280 | parser → widget specs, `build_argv`, modes, link recognition, learning, window fit, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
-| `download.py` | 899 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `download.py` | 910 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size` and the range proxy is off; `info_json` → `--load-info-json` instead of the link), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `chat.py` | 1446 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `colour_of`, `to_ass`/`to_srt`/`to_vtt`/`to_txt` (messages and settings kept inside), `parse_own`/`read_own` (a file it made, back to messages), `extract_track`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
-| `parts.py` | 457 | `get --range` pieces: `keyframe_before` (where a part really starts), `trim`/`salvage` (a fragmented `.part` cut to its last whole piece and renamed to what it holds), `coverage`/`continue_point` (how far the files already go), `drop_temps`, `estimate_bytes`/`free_bytes`/`fs_type`/`is_fat` (the Android card behind FUSE) |
+| `parts.py` | 497 | `get --range` pieces: `keyframe_before` (where a part really starts), `trim`/`salvage` (a fragmented `.part` cut to its last whole piece and renamed to what it holds), `coverage`/`continue_point` (how far the files already go; never past the end in a name), `played_seconds` (the shorter of picture and sound), `drop_temps`, `estimate_bytes`/`free_bytes`/`fs_type`/`is_fat` (the Android card behind FUSE) |
+| `rangeproxy.py` | 525 | the fast way for `get --range`: `Proxy` (a local HTTP server ffmpeg reads a part through; it asks the server for 10 MB pieces, two ahead, starting with 1 MB, sharing pieces in flight, 48 MB kept for a re-read, about a minute of retries; `broken` when it had to cut ffmpeg's stream), `rewrite`/`write_info` (YouTube's plain links in yt-dlp's info pointed at it; `webpage_url` dropped so yt-dlp cannot start the part over), `wanted` |
 | `util.py` | 614 | filename normalisation, LRC parse/shift, HTTP (User-Agent, `Retry-After`, the response cache), browser/runtime detection, `parse_time`/`parse_range`/`part_label` |
 | `providers.py` | 379 | the three lyrics sources and candidate scoring |
 | `lyrics.py` | 275 | gather → process → embed |
@@ -107,6 +109,13 @@ Functions worth knowing by name because they are load-bearing:
   (stop, say so); FAT32's 4 GB (go on, new file); 403 (fresh links, go on);
   a network error (wait, go on); "Postprocessing" with the file whole (keep it
   untagged). Three rounds without getting further ends it.
+  `_download_part` itself only owns the range proxy (`rangeproxy.Proxy`, one
+  per part, stopped in a `finally`); `_part_rounds` is the loop. Each round
+  writes the info with its links pointed at the proxy (`_fast_info`) and yt-dlp
+  loads it. ffmpeg exits 0 after a stream the proxy cut (`fast.broken`), so a
+  "done" round is measured with `parts.played_seconds` then; a cut round with
+  nothing new is deleted; an unforeseen failure turns the proxy off for the
+  rest (`slow`).
 - `download.streams(path)` — reads stream info by parsing
   `ffmpeg -hide_banner -i` stderr, because `ffprobe` is frequently absent
   (imageio-ffmpeg never ships it; stripped Windows and Termux installs often

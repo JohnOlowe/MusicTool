@@ -199,6 +199,32 @@ that drops the connection on cue and against R0GdEkPZSvM with cookies:
   pair it with `-multiple_requests` and `-short_seek_size`, so all three are
   passed, and only when this ffmpeg lists `-request_size`. `--concurrent` does
   not help a part: FFmpegFD uses one connection per stream.
+- **So ffmpeg reads a part through musictool** (`rangeproxy.py`, 2026-11-24),
+  which works with any ffmpeg. yt-dlp runs FFmpegFD on whatever links the
+  info holds: with `--load-info-json` and the format links rewritten to
+  `http://127.0.0.1:PORT/p/N`, the ffmpeg command line read from the proxy
+  (checked with `-v`). The proxy turns each `bytes=N-` into bounded 10 MB
+  requests. Three traps found on the way:
+  - **`--load-info-json` starts over from `webpage_url` when the download
+    fails** (`YoutubeDL.download_with_info_file`: on `DownloadError` it
+    warns "The info failed to download ... trying with URL" and runs
+    `download([webpage_url])`). For a part that is a fresh ffmpeg with `-y`
+    over what came down. Only `webpage_url is None` stops it, and it is set
+    only during extraction, never on loaded info, so the proxy's info leaves
+    it out and keeps the link in the tags through `meta_purl` /
+    `meta_comment` (FFmpegMetadataPP takes `meta_*` fields as they are).
+  - **ffmpeg takes a refused reconnect for the end of the file.** With
+    `-reconnect 1`, a stream that ends early is asked for again from where it
+    stopped. A 403 to that request is logged (`HTTP error 403 Forbidden`), and
+    then ffmpeg finishes the file, says 100% and exits 0. The other input goes
+    on to the end, so with the sound fetched early the file's duration is the
+    full part while the picture stops at 34 s of 60. That is why the proxy
+    remembers a cut (`broken`) and `parts.played_seconds` measures each stream.
+  - **ffmpeg jumps around before it settles**: for a 720p fragmented MP4 it
+    read 0-1 MB, the last 800 KB (the `mfra` index), then the part, opening a
+    new connection for each jump, often back to bytes still in flight. A
+    piece being fetched for one connection is waited for by the others, not
+    fetched again (64 MB fetched for a 29 MB part before, 45 MB after).
 - **YouTube served the part from HLS** (itag 605 etc.,
   `.../playlist/index.m3u8`). ffmpeg then logs one `[https @ 0x…] Opening
   '…' for reading` line per piece. Lines from an ffmpeg component that do not

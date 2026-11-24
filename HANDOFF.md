@@ -100,7 +100,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1217 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1263 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -117,13 +117,14 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         1859   argparse + every cmd_* handler
+│   ├── cli.py         1953   argparse + every cmd_* handler
 │   ├── gui.py         3476   tkinter GUI: 4 tabs, Smart + 9 modes, foldable sections
 │   ├── uicmd.py       1280   parser -> widgets, build_argv, modes, link kinds, learning, window fit
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     899   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── download.py     910   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
-│   ├── parts.py        457   get --range: keyframe, salvage a .part, coverage, disk/FAT32
+│   ├── parts.py        497   get --range: keyframe, salvage a .part, coverage, disk/FAT32
+│   ├── rangeproxy.py   525   get --range, fast: a local proxy, 10 MB pieces for ffmpeg
 │   ├── chat.py        1446   chat replay -> ass/srt/vtt/txt (and back), find the video, embed as a track
 │   ├── util.py         614   classify, detect_browser, js_runtime, have_ffmpeg, parse_time/range
 │   ├── providers.py    379   lyrics sources (ytmusic, lrclib, netease)
@@ -133,7 +134,7 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 6737   47 sections (+8b), 1217 assertions
+│   ├── test_musictool.py 7251   48 sections (+8b), 1263 assertions
 │   └── tkstub.py          755   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -186,9 +187,11 @@ are merged by copy into mp4/webm/mkv, audio alone keeps its codec
 
 `get --range 1:00:00-` takes only that part of a finished video
 (`--download-sections` plus ffmpeg reconnect options, because ffmpeg otherwise
-stops quietly at a drop, and 10 MB requests when ffmpeg has `-request_size`,
-because YouTube slows one long request to about 2x real time). The file is named `TITLE [id] (from 1h00m00s)`, and
-its length is checked afterwards.
+stops quietly at a drop). ffmpeg reads it through musictool's range proxy
+(`rangeproxy.py`), which asks YouTube for 10 MB pieces, because YouTube slows
+ffmpeg's one long request to about 2x real time; `--no-fast-range` turns it
+off. The file is named `TITLE [id] (from 1h00m00s)`, and its length is checked
+afterwards (the picture's, after a cut stream).
 
 ```
 chat URL|FILE [-o DIR] [--video FILE] [--format ass|srt|vtt|txt] [--lines 5]
@@ -357,7 +360,9 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1217 assertions.
+Nothing is half-finished — `main` is green at 1263 assertions. The range
+proxy has not met real YouTube yet (the cookies had expired): the first real
+`get --range` will tell; `--no-fast-range` is the way back.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

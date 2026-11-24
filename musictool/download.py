@@ -373,6 +373,12 @@ def build_args(url, o):
         # 0. With these it reconnects where it stopped (1, 3, 7, 15 s ...);
         # a longer outage is caught afterwards (cli._download_part).
         rc = ffmpeg_reconnect_args()
+        if o.get("info_json"):
+            # read through musictool's range proxy (rangeproxy.py), which
+            # already asks in 10 MB pieces: ffmpeg's own pieces would only
+            # make it start over with a small one every 10 MB
+            rc = re.sub(r"\s*-(?:multiple_requests|request_size|short_seek_size)"
+                        r" \S+", "", rc).strip()
         if rc:
             args += ["--downloader-args", "ffmpeg_i:" + rc]
         # An ordinary MP4 is unplayable until ffmpeg writes its index at the
@@ -447,7 +453,12 @@ def build_args(url, o):
     args += ["--parse-metadata", "%(artist,uploader)s:%(meta_artist)s"]
     args += ["-o", o.get("template") or DEFAULT_TEMPLATE]
     args += ["-P", o.get("output_dir") or "."]
-    args.append(url)
+    if o.get("info_json"):
+        # a part read through the range proxy: the info yt-dlp already gave
+        # (probe), with its links pointed at the proxy -- see rangeproxy.py
+        args += ["--load-info-json", o["info_json"]]
+    else:
+        args.append(url)
     return args
 
 

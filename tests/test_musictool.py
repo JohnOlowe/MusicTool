@@ -5463,7 +5463,8 @@ _save41 = list(D41._RECONNECT)
 try:
     for _h41, _want41 in ((_old41, True), (_new41, False)):
         D41._RECONNECT[:] = [D41.http_opts(_h41)]
-        _said41, _per41 = [], {}
+        # the old way (the fast one is in 48)
+        _said41, _per41 = [], {"fast_range": False}
         _ok41 = C41._plan_part("https://youtu.be/ABCDEFGHIJK", _per41,
                                {"duration": 12030}, "was_live",
                                (6600.0, None), _said41.append)
@@ -5473,8 +5474,16 @@ try:
                  if _want41 else "no slowness warning"),
               _ok41 and _per41.get("download_sections") == "*6600-inf"
               and (("2x real time" in _txt41 and "0:45:15" in _txt41
-                    and "8.1" in _txt41) if _want41
-                   else "real time" not in _txt41), _txt41)
+                    and "8.1" in _txt41 and "--no-fast-range" in _txt41)
+                   if _want41 else "real time" not in _txt41), _txt41)
+    D41._RECONNECT[:] = [D41.http_opts(_old41)]
+    _said41, _per41 = [], {}
+    C41._plan_part("https://youtu.be/ABCDEFGHIJK", _per41, {"duration": 12030},
+                   "was_live", (6600.0, None), _said41.append)
+    _txt41 = " ".join(_said41)
+    check("old ffmpeg, the fast way (the default): no slowness warning, it "
+          "says it is fetched in 10 MB pieces",
+          "real time" not in _txt41 and "10 MB pieces" in _txt41, _txt41)
 finally:
     D41._RECONNECT[:] = _save41
 
@@ -6729,6 +6738,511 @@ finally:
     G.cli_main, G.download.probe = _cli47, _probe47
     tkstub.SCREEN[:] = _scr47
     _cfg47.PATH = _cp47
+
+
+# ============ 48. a part read through musictool's range proxy: 10 MB pieces,
+# ============     any ffmpeg (rangeproxy.py)
+print("\n--- 48. get --range, fast: ffmpeg reads through musictool's range proxy ---")
+import random as _rnd48  # noqa: E402
+import re  # noqa: E402
+import socket as _sock48  # noqa: E402
+import time as _t48  # noqa: E402
+import urllib.error as _ue48  # noqa: E402
+import urllib.request as _ur48  # noqa: E402
+from http.server import BaseHTTPRequestHandler as _BH48  # noqa: E402
+from http.server import ThreadingHTTPServer as _TS48  # noqa: E402
+from musictool import cli as C48  # noqa: E402
+from musictool import rangeproxy as RP  # noqa: E402
+
+_rnd48.seed(48)
+_DATA48 = bytes(_rnd48.getrandbits(8) for _ in range(3 * 1024 * 1024 + 12345))
+_O48 = {"mode": "ok", "log": [], "fail": 0, "file": None}
+
+
+class _Org48(_BH48):
+    protocol_version = "HTTP/1.0"
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        data = _DATA48 if _O48["file"] is None else open(_O48["file"], "rb").read()
+        rg = self.headers.get("Range")
+        m = re.fullmatch(r"bytes=(\d+)-(\d*)", rg or "")
+        s = int(m.group(1)) if m else 0
+        e = int(m.group(2)) if m and m.group(2) else None
+        _O48["log"].append((s, e, self.headers.get("User-Agent")))
+        if _O48["mode"] == "403":
+            return self.send_error(403, "Forbidden")
+        if _O48["fail"] > 0:                     # a drop: the connection dies
+            _O48["fail"] -= 1
+            self.connection.shutdown(_sock48.SHUT_RDWR)
+            return
+        if _O48["mode"] == "norange" or not m:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
+        e = min(len(data) - 1, e if e is not None else len(data) - 1)
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes {s}-{e}/{len(data)}")
+        self.send_header("Content-Length", str(e - s + 1))
+        self.send_header("Content-Type", "video/mp4")
+        self.end_headers()
+        try:
+            self.wfile.write(data[s:e + 1])
+        except OSError:
+            pass
+
+
+_osrv48 = _TS48(("127.0.0.1", 0), _Org48)
+_osrv48.daemon_threads = True
+threading.Thread(target=_osrv48.serve_forever, daemon=True).start()
+_OURL48 = f"http://127.0.0.1:{_osrv48.server_address[1]}/videoplayback"
+_KB = 1024
+
+
+def _px48(**kw):
+    a = dict(piece=256 * _KB, block=64 * _KB, ahead=2, cache=1024 * _KB,
+             sleeps=(0, 0), timeout=5)
+    a.update(kw)
+    return RP.Proxy(**a).start()
+
+
+def _get48(url, rng=None, limit=None):
+    req = _ur48.Request(url, headers={"Range": rng} if rng else {})
+    try:
+        with _ur48.urlopen(req, timeout=15) as r:
+            return r.status, r.headers, (r.read() if limit is None
+                                         else r.read(limit))
+    except _ue48.HTTPError as e:
+        return e.code, e.headers, b""
+
+
+def _reset48(mode="ok", fail=0):
+    _O48.update(mode=mode, fail=fail, file=None)
+    _O48["log"].clear()
+
+
+_reset48()
+_p48 = _px48()
+_u48 = _p48.add(_OURL48, {"User-Agent": "UA-48"})
+check("a link is local, and the same for the same source",
+      _u48.startswith("http://127.0.0.1:") and
+      _p48.add(_OURL48, {"User-Agent": "UA-48"}) == _u48, _u48)
+_st, _h, _b = _get48(_u48)
+check("the whole file, asked for without a range, comes through unchanged",
+      _st == 200 and _b == _DATA48, f"{_st} {len(_b)}")
+check("...asked of the server only in bounded pieces of at most 256 KB, "
+      "with the source's headers",
+      _O48["log"] and all(e is not None and e - s + 1 <= 256 * _KB
+                          for s, e, _ua in _O48["log"])
+      and all(ua == "UA-48" for _s, _e, ua in _O48["log"]),
+      str(_O48["log"][:6]))
+check("...starting with one small piece (64 KB): a jump costs little",
+      _O48["log"][0][:2] == (0, 64 * _KB - 1), str(_O48["log"][:2]))
+
+_reset48()
+_p48.stop()
+_p48 = _px48()
+_u48 = _p48.add(_OURL48, {"User-Agent": "UA-48"})
+_s0 = 1500000
+_st, _h, _b = _get48(_u48, f"bytes={_s0}-")
+check("everything from a byte on (what ffmpeg asks for): 206, the right "
+      "range and bytes",
+      _st == 206 and _b == _DATA48[_s0:] and _h.get("Content-Range") ==
+      f"bytes {_s0}-{len(_DATA48) - 1}/{len(_DATA48)}", f"{_st} {len(_b)}")
+check("...and the server never sees an open-ended request",
+      all(e is not None for _s, e, _ua in _O48["log"]), str(_O48["log"][:4]))
+_n48 = len(_O48["log"])
+_st, _h, _b = _get48(_u48, "bytes=3000000-3100000")
+check("a bounded range: exactly those bytes",
+      _st == 206 and _b == _DATA48[3000000:3100001], f"{_st} {len(_b)}")
+check("...and read again from what was just fetched, nothing asked again",
+      len(_O48["log"]) == _n48, str(_O48["log"][_n48:]))
+_st, _h, _b = _get48(_u48, f"bytes={len(_DATA48) + 5}-")
+check("past the end: 416, with the size",
+      _st == 416 and (_h.get("Content-Range") or "").endswith(
+          f"/{len(_DATA48)}"), str(_st))
+_st, _h, _b = _get48(_u48, "bytes=-500")
+check("a range it does not handle (from the end) is refused, not guessed",
+      _st == 416, str(_st))
+check("an unknown link: 404", _get48(
+    f"http://127.0.0.1:{_p48.port}/p/999")[0] == 404)
+_p48.stop()
+
+# ffmpeg stops reading at the end of the part: what was fetched beyond is lost
+_reset48()
+_p48 = _px48(cache=64 * _KB * 4)
+_u48 = _p48.add(_OURL48)
+_st, _h, _b = _get48(_u48, "bytes=0-", limit=700 * _KB)
+_t48.sleep(0.6)
+check("ffmpeg reads 700 KB and stops: little more is fetched (not the 3 MB "
+      "file)", len(_b) == 700 * _KB and _p48.fetched < 2 * 1024 * _KB,
+      f"fetched {_p48.fetched // _KB} KB")
+_p48.stop()
+
+# two connections wanting the same piece at once: fetched once
+_reset48()
+_p48 = _px48(piece=1024 * _KB, block=1024 * _KB)
+_u48 = _p48.add(_OURL48)
+_res48 = []
+_ths48 = [threading.Thread(target=lambda: _res48.append(
+    _get48(_u48, "bytes=100-1000")[2])) for _ in range(4)]
+[t.start() for t in _ths48]
+[t.join() for t in _ths48]
+check("four connections at once for the same piece: one request to the server",
+      _res48 == [_DATA48[100:1001]] * 4 and len(_O48["log"]) == 1,
+      str(_O48["log"]))
+_p48.stop()
+
+# the links ran out: 403 straight through (cli._download_part asks again)
+_reset48("403")
+_p48 = _px48()
+_u48 = _p48.add(_OURL48)
+check("a 403 from the server reaches ffmpeg as a 403, without retrying",
+      _get48(_u48, "bytes=0-")[0] == 403 and len(_O48["log"]) == 1,
+      str(_O48["log"]))
+_p48.stop()
+
+# a short drop: the piece is asked again
+_reset48(fail=2)
+_p48 = _px48(sleeps=(0, 0, 0))
+_u48 = _p48.add(_OURL48)
+_st, _h, _b = _get48(_u48, "bytes=1000-")
+check("two dropped connections: retried, and the bytes are still exact",
+      _st == 206 and _b == _DATA48[1000:] and _p48.net_error is None,
+      f"{_st} {len(_b)} {_p48.net_error}")
+_p48.stop()
+
+# the server cannot be reached at all
+_dead48 = _sock48.socket()
+_dead48.bind(("127.0.0.1", 0))
+_dport48 = _dead48.getsockname()[1]
+_dead48.close()
+_p48 = _px48()
+_u48 = _p48.add(f"http://127.0.0.1:{_dport48}/videoplayback")
+_st, _h, _b = _get48(_u48, "bytes=0-")
+check("the server cannot be reached: 504 to ffmpeg, and why is kept",
+      _st == 504 and "refused" in (_p48.net_error or "").lower(),
+      f"{_st} {_p48.net_error}")
+_err48 = ("ERROR: ffmpeg exited with code 1\nERROR: musictool's range proxy "
+          "was unable to connect to the server: " + _p48.net_error)
+check("...which makes the part wait for the network and carry on",
+      download.retryable(_err48), _err48)
+_p48.stop()
+
+# a server that ignores ranges: passed on as it is
+_reset48("norange")
+_p48 = _px48()
+_u48 = _p48.add(_OURL48)
+_st, _h, _b = _get48(_u48, "bytes=2000000-")
+check("a server that ignores ranges: its answer is passed on, from the byte "
+      "asked for", _st == 206 and _b == _DATA48[2000000:], f"{_st} {len(_b)}")
+_p48.stop()
+check("a proxy that was never started stops quietly",
+      RP.Proxy().stop() is None)
+
+# real ffmpeg, cutting a part through it: the same file as from the original
+_d48 = os.path.join(WORK, "rp48")
+shutil.rmtree(_d48, ignore_errors=True)
+os.makedirs(_d48)
+_src48 = os.path.join(_d48, "src.mp4")
+subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                "testsrc2=size=320x240:rate=25", "-f", "lavfi", "-i",
+                "sine=f=440:sample_rate=44100", "-t", "12", "-c:v", "libx264",
+                "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", _src48], capture_output=True)
+
+
+def _cut48(src, out):
+    r = subprocess.run([FF, "-v", "error", "-y", "-ss", "5", "-t", "3", "-i",
+                        src, "-c", "copy", "-movflags",
+                        "+frag_keyframe+empty_moov+default_base_moof", out],
+                       capture_output=True, text=True)
+    return r.returncode, (open(out, "rb").read() if os.path.exists(out)
+                          else b"")
+
+
+_reset48()
+_O48["file"] = _src48
+_p48 = _px48(piece=128 * _KB, block=16 * _KB)
+_rc1, _a48 = _cut48(_src48, os.path.join(_d48, "local.mp4"))
+_rc2, _b48 = _cut48(_p48.add(_OURL48), os.path.join(_d48, "via.mp4"))
+check("ffmpeg cutting a part through the proxy writes the very same file",
+      os.path.exists(_src48) and _rc1 == 0 and _rc2 == 0 and _a48
+      and _a48 == _b48, f"{_rc1} {_rc2} {len(_a48)} {len(_b48)}")
+_p48.stop()
+_O48["file"] = None
+
+# --- which links go through it
+_INFO48 = {"id": "FASTVID0048", "title": "Fast", "duration": 600,
+           "http_headers": {"User-Agent": "TOP"},
+           "formats": [
+               {"format_id": "137", "protocol": "https",
+                "url": "https://rr3---sn-x.googlevideo.com/videoplayback?a=1",
+                "http_headers": {"User-Agent": "F137"}},
+               {"format_id": "140", "protocol": "https",
+                "url": "https://rr3---sn-x.googlevideo.com/videoplayback?a=2"},
+               {"format_id": "95", "protocol": "m3u8_native",
+                "url": "https://manifest.googlevideo.com/x.m3u8"},
+               {"format_id": "x", "protocol": "https",
+                "url": "https://example.com/video.mp4"}],
+           "requested_formats": [
+               {"format_id": "137", "protocol": "https",
+                "url": "https://rr3---sn-x.googlevideo.com/videoplayback?a=1",
+                "http_headers": {"User-Agent": "F137"}}]}
+_p48 = RP.Proxy()
+_new48, _n48 = RP.rewrite(_INFO48, _p48)
+_fm48 = {f["format_id"]: f for f in _new48["formats"]}
+check("YouTube's plain links are pointed at the proxy (formats and the "
+      "chosen ones)",
+      _n48 == 3 and _fm48["137"]["url"].startswith("http://127.0.0.1:")
+      and _fm48["140"]["url"].startswith("http://127.0.0.1:")
+      and _new48["requested_formats"][0]["url"] == _fm48["137"]["url"],
+      str(_n48))
+check("...HLS and other sites' links are left alone, and the original info too",
+      _fm48["95"]["url"].endswith(".m3u8") and _fm48["x"]["url"] ==
+      "https://example.com/video.mp4" and _INFO48["formats"][0][
+          "url"].startswith("https://rr3"))
+check("...each with its own headers (or the video's)",
+      _p48._srcs[0].headers == {"User-Agent": "F137"}
+      and _p48._srcs[1].headers == {"User-Agent": "TOP"},
+      str([s.headers for s in _p48._srcs.values()]))
+check("nothing to read through it (no formats): no file",
+      RP.write_info({"id": "x"}, _p48) is None)
+_p48.stop()
+check("used unless --proxy, --limit-rate, --no-fast-range or a dry run",
+      RP.wanted({}) and not RP.wanted({"proxy": "socks5://h:1"})
+      and not RP.wanted({"rate_limit": "1M"})
+      and not RP.wanted({"fast_range": False})
+      and not RP.wanted({"dry_run": True}))
+_a48 = C48._opts(build_parser().parse_args(["get", "--no-fast-range", "u"]))
+_b48 = C48._opts(build_parser().parse_args(["get", "u"]))
+check("--no-fast-range turns it off; it is on by default",
+      _a48.get("fast_range") is False and _b48.get("fast_range", True) is True)
+
+_rc48 = list(download._RECONNECT)
+download._RECONNECT[:] = ["-reconnect 1 -multiple_requests 1 -request_size "
+                          "10485760 -short_seek_size 10485760"]
+try:
+    _arg48 = download.build_args("https://youtu.be/x", {
+        "download_sections": "*60-120", "info_json": "/tmp/i.json"})
+    _plain48 = download.build_args("https://youtu.be/x", {
+        "download_sections": "*60-120"})
+finally:
+    download._RECONNECT[:] = _rc48
+_ix48 = _arg48.index("--load-info-json")
+check("yt-dlp loads the rewritten info instead of the link",
+      _arg48[_ix48 + 1] == "/tmp/i.json" and "https://youtu.be/x" not in
+      _arg48 and _plain48[-1] == "https://youtu.be/x")
+check("...and ffmpeg's own 10 MB pieces are left out then (the proxy has "
+      "them)", "ffmpeg_i:-reconnect 1" in _arg48
+      and not any("request_size" in a for a in _arg48)
+      and any("request_size" in a for a in _plain48))
+
+# --- in the part download
+_D48 = os.path.join(_d48, "out")
+os.makedirs(_D48)
+_INFO48["id"] = "FASTVID0048"
+_seen48, _plan48 = [], []
+_odl48, _opr48, _okf48 = (download.download, download.probe,
+                          PT.keyframe_before)
+_osl48 = C48.cancel.sleep
+_oPx48, _ohosts48 = RP.Proxy, RP.HOSTS
+
+
+def _fdl48(url, o, log=print, on_file=None, tag=""):
+    j = o.get("info_json")
+    info = json.load(open(j)) if j else None
+    _seen48.append({"json": j, "info": info, "exists": bool(j and
+                                                             os.path.exists(j))})
+    return _plan48.pop(0)(o, info)
+
+
+def _ok48(o, info):
+    p = os.path.join(_D48, o["template"].replace("%(ext)s", "mp4"))
+    open(p, "wb").write(b"not really a video")
+    return [(p, "FASTVID0048")], None
+
+
+def _per48(**kw):
+    per = {"output_dir": _D48, "format_selector": "137+140",
+           "net_max_wait": 30, "_part": {"a": 60, "b": 120, "end": 120,
+                                         "base": "Fast [FASTVID0048]",
+                                         "vid": "FASTVID0048"}}
+    per.update(kw)
+    C48._set_part(per, 60, 120, 120)
+    return per
+
+
+download.download = _fdl48
+download.probe = lambda u, o: dict(_INFO48)
+PT.keyframe_before = lambda *a, **k: None
+C48.cancel.sleep = lambda w: True
+try:
+    _said48 = []
+    _plan48[:] = [_ok48]
+    _per = _per48()
+    _f, _e = C48._download_part("u", _per, dict(_INFO48), _said48.append, "",
+                                None)
+    _s0 = _seen48[0]
+    check("a part is fetched with yt-dlp loading the info, YouTube's links "
+          "pointed at the proxy",
+          _e is None and _s0["exists"] and _s0["info"]["formats"][0][
+              "url"].startswith("http://127.0.0.1:"), str((_e, _s0)[:1]))
+    check("...the temporary info is removed afterwards, and not left in the "
+          "options", not os.path.exists(_s0["json"]) and "info_json" not in _per)
+    _port48 = int(re.search(r":(\d+)/", _s0["info"]["formats"][0]["url"])
+                  .group(1))
+    _c48 = _sock48.socket()
+    _c48.settimeout(2)
+    check("...and the proxy is shut when the part is done",
+          _c48.connect_ex(("127.0.0.1", _port48)) != 0)
+    _c48.close()
+
+    _seen48.clear()
+    _plan48[:] = [_ok48]
+    C48._download_part("u", _per48(fast_range=False), dict(_INFO48),
+                       lambda m: None, "", None)
+    check("--no-fast-range: the link as before, no info file",
+          _seen48 and _seen48[0]["json"] is None)
+
+    # something unforeseen about the proxy: the rest the old way
+    for _x in os.listdir(_D48):
+        os.remove(os.path.join(_D48, _x))
+    _seen48.clear()
+    _said48 = []
+    _plan48[:] = [lambda o, info: ([], "ERROR: something odd happened"), _ok48]
+    _f, _e = C48._download_part("u", _per48(), dict(_INFO48), _said48.append,
+                                "", None)
+    check("an unforeseen failure the fast way: tried again by ffmpeg alone",
+          _e is None and len(_seen48) == 2 and _seen48[0]["json"]
+          and _seen48[1]["json"] is None
+          and any("the fast way failed" in m for m in _said48),
+          str((_e, _said48[-3:])))
+    _plan48[:] = [lambda o, info: ([], "ERROR: something odd happened")]
+    _f, _e = C48._download_part("u", _per48(fast_range=False), dict(_INFO48),
+                                lambda m: None, "", None)
+    check("...while the old way passes such an error on, as before",
+          _e == "ERROR: something odd happened" and not _plan48, str(_e))
+
+    # the proxy could not reach YouTube: a network wait, then carrying on
+    for _x in os.listdir(_D48):
+        os.remove(os.path.join(_D48, _x))
+    _seen48.clear()
+    _said48 = []
+
+    _INFO48["formats"][0]["url"] = f"http://127.0.0.1:{_dport48}/videoplayback"
+    _INFO48["requested_formats"] = []
+    RP.HOSTS = None                          # a local link, read through it
+
+    class _QuickPx48(RP.Proxy):
+        def __init__(self, **kw):
+            kw.setdefault("sleeps", (0,))
+            super().__init__(**kw)
+
+    def _ask48(o, info):
+        u = info["formats"][0]["url"]
+        _get48(u, "bytes=0-")                 # 504: the server is gone
+        return [], "ERROR: ffmpeg exited with code 1: Server returned 5XX"
+
+    RP.Proxy = _QuickPx48
+    _plan48[:] = [_ask48, _ok48]
+    _f, _e = C48._download_part("u", _per48(), dict(_INFO48), _said48.append,
+                                "", None)
+    check("the proxy could not reach YouTube: the part waits for the network "
+          "and carries on, the fast way still",
+          _e is None and len(_seen48) == 2 and _seen48[1]["json"]
+          and any("network problem" in m for m in _said48)
+          and not any("the fast way failed" in m for m in _said48),
+          str((_e, _said48[-4:])))
+    # --- cut off: ffmpeg takes a cut stream for its end and says "done"
+    def _mk48(path, v, a):
+        subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                        f"testsrc2=size=160x120:rate=10:d={v}", "-f", "lavfi",
+                        "-i", f"sine=f=440:sample_rate=22050:d={a}", "-c:v",
+                        "libx264", "-preset", "ultrafast", "-g", "10",
+                        "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags",
+                        "+frag_keyframe+empty_moov+default_base_moof", path],
+                       capture_output=True)
+        return path
+
+    _m48 = _mk48(os.path.join(_d48, "short-video.mp4"), 4, 9)
+    check("played_seconds: the shorter of picture and sound (the header says "
+          "the longer)", abs((PT.played_seconds(_m48) or 0) - 4) < 0.6
+          and abs((PT.seconds(_m48) or 0) - 9) < 0.6,
+          f"{PT.played_seconds(_m48)} {PT.seconds(_m48)}")
+    check("...and None for what is not a video",
+          PT.played_seconds(os.path.join(_d48, "nothing.mp4")) is None)
+    _cv48 = os.path.join(_d48, "cov")
+    os.makedirs(_cv48)
+    shutil.copy(_m48, os.path.join(_cv48, "X [COVVID0048] (0h01m00s-0h01m04s).mp4"))
+    shutil.copy(_m48, os.path.join(_cv48, "X [COVVID0048] (from 0h02m00s).mp4"))
+    _c48 = sorted(PT.coverage(_cv48, "COVVID0048"))
+    check("coverage: a part named after a cut counts only as far as its name",
+          len(_c48) == 2 and abs(_c48[0][1] - 64.5) < 0.01
+          and abs(_c48[1][1] - 129) < 0.6, str([c[:2] for c in _c48]))
+    shutil.rmtree(_cv48)
+
+    # the proxy notices; and says when it waits for the network
+    _reset48("403")
+    _w48 = []
+    _p48 = _px48(on_wait=lambda w, e: _w48.append(w))
+    _get48(_p48.add(_OURL48), "bytes=0-")
+    check("a refusal is remembered (ffmpeg may take it for the end)",
+          "403" in str(_p48.broken), str(_p48.broken))
+    _p48.stop()
+    _p48 = _px48(on_wait=lambda w, e: _w48.append(w), sleeps=(0.2, 0.2))
+    C48.cancel.sleep = _osl48                # really waiting, here
+    _get48(_p48.add(f"http://127.0.0.1:{_dport48}/videoplayback"), "bytes=0-")
+    C48.cancel.sleep = lambda w: True
+    check("...and so is the server being gone, after telling of each wait",
+          "cannot be reached" in str(_p48.broken) and _w48 == [0.2, 0.2],
+          f"{_p48.broken} {_w48}")
+    _p48.stop()
+
+    RP.Proxy = _oPx48
+    _INFO48["formats"][0]["url"] = _OURL48
+
+    def _cut48(v, a, mode="403"):
+        def step(o, info):
+            _O48["mode"] = mode
+            _get48(info["formats"][0]["url"], "bytes=0-")
+            _O48["mode"] = "ok"
+            p = os.path.join(_D48, o["template"].replace("%(ext)s", "mp4"))
+            _mk48(p, v, a)
+            return [(p, "FASTVID0048")], None
+        return step
+
+    for _x in os.listdir(_D48):
+        os.remove(os.path.join(_D48, _x))
+    _seen48.clear()
+    _said48 = []
+    # 1: cut at 20 s of picture (sound to 60); 2: cut again, nothing new;
+    # 3: the rest
+    _plan48[:] = [_cut48(20, 60), _cut48(1, 1), _cut48(42, 42, mode="ok")]
+    _f, _e = C48._download_part("u", _per48(), dict(_INFO48), _said48.append,
+                                "", None)
+    _names48 = sorted(os.listdir(_D48))
+    check("cut off at 1:20 while the sound went on: named after the picture "
+          "(1:00-1:20), and carried on from there",
+          _e is None and any("(0h01m00s-0h01m20s)" in n for n in _names48)
+          and any("cut off" in m and "1:20" in m for m in _said48),
+          str((_e, _names48, _said48[-6:])))
+    check("...a round cut off again before anything new came leaves no file",
+          len(_names48) == 2 and any("before anything new" in m
+                                     for m in _said48), str(_names48))
+    check("...and the rest came into its own file, from just before 1:20",
+          any("(0h01m19s-0h02m00s)" in n or "(0h01m18s-0h02m00s)" in n
+              for n in _names48) and not _plan48, str(_names48))
+finally:
+    RP.Proxy, RP.HOSTS = _oPx48, _ohosts48
+    download.download, download.probe = _odl48, _opr48
+    PT.keyframe_before = _okf48
+    C48.cancel.sleep = _osl48
+    _osrv48.shutdown()
+shutil.rmtree(_d48, ignore_errors=True)
 
 
 srv.shutdown()

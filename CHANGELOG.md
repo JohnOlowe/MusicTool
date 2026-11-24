@@ -8,6 +8,46 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — `get --range` as fast as a whole download, with any ffmpeg
+*2026-11-24 · 1263 assertions*
+
+Asked for: a part (`--range`) that downloads at normal speed. ffmpeg fetched
+it in one open-ended request, which YouTube slows to about 2x real time;
+only ffmpeg 8.1+ could ask in pieces.
+
+- **A local range proxy** (`musictool/rangeproxy.py`). For the length of a
+  part, YouTube's plain links in yt-dlp's info point at a small HTTP server on
+  127.0.0.1, and yt-dlp loads that info (`--load-info-json`) instead of the
+  link. ffmpeg's "everything from byte N" becomes 10 MB requests, two ahead.
+  ffmpeg still seeks, cuts and writes the fragmented MP4 itself, so the
+  part logic (salvage, carry on, FAT32, full disk, 403, Stop) is unchanged.
+  Against a server that throttles like YouTube: 1.2 s instead of 28.3 s for a
+  1-minute 720p part, and the file is byte-for-byte the same.
+- **Careful with the data**: 1 MB first per connection, growing as ffmpeg
+  reads; 48 MB kept in memory for a jump back; a piece in flight shared, not
+  fetched twice; at most 20 MB fetched past the end of the part.
+- **Drops** are retried for about a minute while ffmpeg waits, so the part
+  goes on in the same file (`! network problem -- waiting Ns; the part goes
+  on where it was`).
+- **A cut stream is caught.** Found while testing: when the links ran out
+  mid-part, ffmpeg took the refused reconnect for the end, said 100% and
+  exited 0, with the sound running on past the picture, so the file looked
+  complete. The proxy remembers a cut; `parts.played_seconds` measures the
+  shorter of picture and sound; the file is renamed to what it holds and the
+  rest comes with fresh links. `parts.coverage` no longer counts a file past
+  the end in its name, and a retry that gets nothing new leaves no file.
+- **yt-dlp cannot start the part over**: `--load-info-json` retries a failed
+  download from `webpage_url` (a fresh ffmpeg with `-y` over what came down),
+  so the proxy's info leaves it out and keeps the link in the tags through
+  `meta_purl` / `meta_comment`.
+- Off with `--no-fast-range`, `--proxy` or `--limit-rate`; HLS and other sites
+  as before. An unforeseen failure finishes the part the old way. The "this
+  ffmpeg is slow" note now appears only when the proxy is off.
+- Not yet run against real YouTube: both cookie files had expired.
+- Tests: section 48 (46 new checks); section 41 adjusted.
+
+---
+
 ## `09fd28e` — the window rebuilt: four tabs, Smart modes that learn, links recognised as you paste
 *2026-11-24 · 1217 assertions*
 

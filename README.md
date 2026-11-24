@@ -25,6 +25,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── download.py       yt-dlp wrapper + videoId index
 │   ├── live.py           live streams: record from the start, watch, carry on
 │   ├── parts.py          get --range: keyframe start, keep what came down, carry on
+│   ├── rangeproxy.py     get --range, fast: ffmpeg reads through 10 MB pieces
 │   ├── chat.py           a stream's chat replay -> ass/srt/vtt/txt subtitles, and back
 │   ├── progress.py       yt-dlp progress lines -> the GUI's bars
 │   ├── lyrics.py         scan / fetch / embed pipeline
@@ -33,7 +34,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1217 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1263 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -383,7 +384,8 @@ videos. In the GUI it is the **jobs** field under More Options.
 drop) · `--net-max-wait SECONDS` (how long to keep retrying, default 240) ·
 `--live-from-now` (a stream that is live is recorded from its start unless
 this is given) · `--range 1:00:00-` (only that part of a finished video; see
-[below](#only-part-of-a-video-and-the-live-chat-as-subtitles))
+[below](#only-part-of-a-video-and-the-live-chat-as-subtitles)) ·
+`--no-fast-range` (fetch such a part by ffmpeg alone, the old, slower way)
 
 **`--just-download`: done the moment the download is.** Normally, once a
 file is down, yt-dlp adds the title and other details, the cover, the chapters
@@ -995,8 +997,8 @@ to know which part of the chat goes with it. A range
 on a stream that is still live, or past the video's end, is refused before
 anything downloads, and parts get no lyrics.
 
-- The part is fetched by ffmpeg straight from YouTube, not by yt-dlp's own
-  downloader. ffmpeg gives up at the first dropped connection and *still
+- The part is cut by ffmpeg, not fetched by yt-dlp's own downloader (yt-dlp
+  hands every part to ffmpeg). ffmpeg gives up at the first dropped connection and *still
   reports success*: in a test a 15 s drop turned a 4-minute part into 6
   seconds, with `100%` and exit code 0. So musictool tells ffmpeg to
   reconnect (`--downloader-args "ffmpeg_i:-reconnect 1 ..."`, using only the
@@ -1004,15 +1006,40 @@ anything downloads, and parts get no lyrics.
   bit-identical to an undisturbed one. Afterwards the length of the file is
   compared with what was asked for. If it is short, the file is renamed to
   what it holds and the rest is fetched into a new file.
-- **Speed: use ffmpeg 8.1 or newer.** YouTube slows one long, open-ended
-  request to about 2x real time, so with an older ffmpeg 1:30:30 of a 1080p
-  stream takes about 45 minutes, and for the first minutes the percentage
-  sits near 0.0% with an ETA of hours: it looks stuck, but the `.part` file
-  is growing. When `ffmpeg -h protocol=http` lists `-request_size`, musictool
-  asks for 10 MB at a time (`-request_size 10485760 -multiple_requests 1
-  -short_seek_size 10485760`). On the same stream that ran at 17-70x: 39% of
-  the 1:30:30 part in 44 s, against 1.3% in 50 s before. With an older ffmpeg,
-  `get --range` says so before it starts and estimates how long it will take.
+- **Speed: as fast as a whole video, with any ffmpeg.** ffmpeg asks for a
+  part in one long, open-ended request, and YouTube slows that to about 2x
+  real time: 1:30:30 of a 1080p stream took about 45 minutes, with the
+  percentage near 0.0% for minutes. So ffmpeg no longer talks to YouTube
+  itself. For the length of the part musictool runs a small proxy on
+  127.0.0.1, points the links in yt-dlp's info at it, and has yt-dlp load that
+  info (`--load-info-json`) instead of the link. When ffmpeg asks for
+  "everything from byte N on", the proxy asks YouTube for 10 MB pieces, two at
+  a time, and hands them on in order, as yt-dlp's own downloader does for a
+  whole video. ffmpeg seeks, cuts and writes exactly as before. Against a
+  server that slows open-ended requests the way YouTube does, a 1-minute 720p
+  part took 1.2 s instead of 28 s, and the file was byte-for-byte the same.
+  The log says `fast: ...` before the part and how much it fetched after.
+  - **Kind to a limited connection.** Each connection starts with 1 MB and
+    grows only as ffmpeg reads (ffmpeg looks at the start of the file and
+    jumps a few times before it settles). The last 48 MB stay in memory, so a
+    jump back costs nothing, and a piece two connections want is fetched once.
+    At most 20 MB past the end of the part are fetched and thrown away.
+  - **A drop:** each piece is retried for about a minute while ffmpeg waits,
+    so the part goes on in the same file. Longer than that, or when YouTube
+    refuses (403: the links ran out), ffmpeg's stream is cut. ffmpeg takes
+    that for the end and reports success, and because the sound is small and
+    came early, the file's header still claims the whole length. musictool
+    knows it cut the stream: it measures how far the picture got, names the
+    file after that, and fetches the rest with fresh links into a new file. A
+    retry that gets nothing new leaves no file.
+  - Only YouTube's links go through it (they need no cookies); HLS and other
+    sites are fetched as before, and so is everything with `--proxy` or
+    `--limit-rate`. `--no-fast-range` turns it off. Then ffmpeg 8.1 or newer
+    still asks for 10 MB at a time by itself (`-request_size 10485760
+    -multiple_requests 1 -short_seek_size 10485760`: 17-70x on the stream
+    above), and with an older one `get --range` says it will be slow before
+    it starts. If the proxy fails in a way nobody foresaw, the rest of the
+    part is fetched the old way rather than not at all.
 - Progress: ffmpeg gives a position rather than a percentage, so it is turned
   into `13.3% of the part  4m 00s of 30m 00s  2.42x  ETA 10m 44s`, on one
   line. ffmpeg's description of its input and output, and the one line it
@@ -1688,7 +1715,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1217 assertions, 0 failures**, with or without
+**Verified by running the code — 1263 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1775,6 +1802,16 @@ subcommand.
   text log made from it read back all 6,175 messages; the SRT read back
   6,131. The other 44 were never on screen, because more than 5 arrived in
   the same instant. Each step took about half a second.
+- **The fast way for a part** (2026-11-24, real yt-dlp 2026.11.23 and real
+  ffmpeg). Against a local server that slows open-ended requests to about 2x
+  real time and answers 10 MB pieces fast, the way YouTube does, a 1-minute
+  part of a 720p video with separate picture and sound took 1.2 s through the
+  proxy and 28.3 s the old way, and the two files were byte-for-byte the same.
+  The server never saw an open-ended request; 45 MB were fetched for the 29 MB
+  part. With the server refusing (403) partway through, ffmpeg said 100% with
+  34 s of picture under a minute of sound; the file was renamed to 1:00-1:34,
+  and the next run fetched 1:32-2:00 into a second file. The same part of a
+  real remote file (archive.org) came through the proxy too, redirect and all.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that
@@ -1796,6 +1833,12 @@ the newer one).
   short part and one chat replay were fetched (above), and nothing else. The format
   logic is tested against the shapes yt-dlp reports for YouTube, including a
   dubbed video, but a real dubbed video has not been loaded into the tab.
+- **The fast way for a part on real YouTube.** On 2026-11-24 both cookie
+  files had been rotated (yt-dlp: "no longer valid") and YouTube asked this
+  machine to sign in, so the range proxy was tested against the server
+  described above and archive.org, not against googlevideo.com. If it
+  misbehaves there, `--no-fast-range` brings back the old way, and a failure
+  nobody foresaw already falls back to it by itself.
 - **A real YouTube live stream** -- for the same reason. yt-dlp's live
   handling was read in its source and driven with a live-style stream (above);
   the Windows "Access is denied" locks were simulated, not produced by

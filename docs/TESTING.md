@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1217 assertions across 47 sections (plus 8b), 0 failures** — with or without
+**1263 assertions across 48 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -283,6 +283,20 @@ Proven by execution:
   and the Library job remembered across a restart; the window sized from the
   display (1080x720 centred on 1920x1080, 1008x520 on 1024x600, never larger
   than the screen) and the log asked for its height before the first frame.
+- the fast way for a part (section 48), against a real local HTTP server
+  standing in for YouTube: the bytes exact whole, from a byte on and in a
+  bounded range; the server asked only in bounded pieces, starting small;
+  a re-read from memory; a reader that stops costing little more; four
+  connections wanting one piece making one request; a 403 passed on; dropped
+  connections retried; a dead server giving 504 and an error that makes the
+  part wait for the network; a server that ignores ranges passed through;
+  real ffmpeg cutting a part through the proxy writing the same file as from
+  the original. Then: only YouTube's plain links rewritten, with their own
+  headers; `--load-info-json` instead of the link and no `-request_size`;
+  `--no-fast-range`, `--proxy`, `--limit-rate`; in `_download_part` the
+  temporary info removed and the proxy shut, an unforeseen failure finished
+  the old way, a cut stream (sound running on past the picture) measured by
+  the picture, renamed and carried on, and a round with nothing new deleted.
 
 **Not proven by the suite:** pixels. `tkstub` reproduces widget trees,
 geometry and command wiring, but renders nothing. The four-tab window was

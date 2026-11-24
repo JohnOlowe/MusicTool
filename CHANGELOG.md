@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — chat `--range` no longer puts one part's chat on every part
+## `4fc4c19` — chat `--range` no longer puts one part's chat on every part
 *2026-11-23 · 1159 assertions*
 
 Reported: `chat` with a range (e.g. `0-6:40:00`) said the chat replay was

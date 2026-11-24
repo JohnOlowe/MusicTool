@@ -362,6 +362,31 @@ figure.
 
 These all caused a real bug at some point.
 
+- **`x or fallback` swallows a measured 0.** `played_seconds(done) or secs`
+  took a part whose picture never came (0 s) for the sound's 2:35, and the
+  rest of the part was never fetched. Test `is not None`. The measuring had
+  the same hole: a stream with no packets was skipped as "unknown" rather
+  than counted as 0. (A cover is not a picture: map `0:V`, not `0:v`.)
+- **An MP4 written with `empty_moov` cannot take HLS sound as it comes.** The
+  AAC in MPEG-TS has a header on every frame. ffmpeg would remove them by
+  itself, but only after the file's header is out, and `empty_moov` writes
+  it at once: `Error submitting a packet to the muxer: Operation not
+  permitted`, every time. Ask for `-bsf:a aac_adtstoasc` up front, and only
+  for AAC (on Opus that filter is an error).
+- **ffmpeg's `-ss` does not land where you asked, for sound alone or HLS
+  either.** WebM Opus starts at the cue before (asked 1:00, got 0:50); HLS
+  starts at the piece before. Its timestamps come out differently from one
+  run to the next, so they cannot be looked up at all. A name that claims a
+  later start than the file has makes the next run carry on too late, and
+  leaves a gap.
+- **A selector says nothing about the formats.** `bv*+ba/b` became 301 (HLS)
+  on one day and 401+251 on another video. Ask yt-dlp: `--load-info-json F
+  --simulate --print %(format_id)s -f SEL` runs offline in half a second.
+- **The system takes megabytes for a reader before the reader takes any.**
+  The proxy grew its read-ahead on what it had written to ffmpeg's socket,
+  and the socket's buffers took several MB before ffmpeg read a byte. A
+  small `SO_SNDBUF` keeps "written" close to "read".
+
 - **A shared options dict makes per-URL decisions global.** `_resolve_quality`
   memoises into `o["format_selector"]`; passing the same dict to every URL made
   videos 2..N inherit video 1's format ids, so dubbed videos arrived in the

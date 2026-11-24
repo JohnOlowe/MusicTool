@@ -8,6 +8,60 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — `get --range` tested on real YouTube: four bugs fixed
+*2026-11-24 · 1292 assertions*
+
+Asked for: "Test it properly, make sure there are no bugs", with fresh
+cookies. The fast way (`00eea3b`) was run against googlevideo.com for the
+first time, along with every shape of part around it.
+
+- **What worked as it was.** A 2-minute 1080p60 part came in 7 s. Parts were
+  the same bytes as `--no-fast-range` (MP4), or the same packets (MKV). Also
+  fine: format 18, audio alone, the default selection with title and cover,
+  from 0:00, to the end, Ctrl+C, `kill -9` then the rerun, and a third run
+  saying "already here".
+- **Fixed: a picture that never came was taken for the whole part.** An
+  expired link refused at ffmpeg's first request gave a file with an empty
+  video stream and 2:35 of sound, named as the rest of the part, and nothing
+  more was fetched. There were two holes:
+  - `played_seconds` skipped a stream with no packets instead of counting
+    it as 0 (a cover picture is still ignored: `0:V`).
+  - `played_seconds(...) or secs` turned a measured 0 back into the header's
+    length.
+
+  Now the round is dropped and fetched again; on real YouTube a third round
+  finished the part with no gap.
+- **Fixed: HLS parts always failed** (`Operation not permitted`). YouTube gave
+  a 3-hour video only as HLS that afternoon. Its AAC carries per-frame
+  headers that ffmpeg can only remove before an `empty_moov` MP4's header is
+  written: `-bsf:a aac_adtstoasc` is added when the part is HLS and all its
+  sound is AAC (`download.needs_aac_fix`, `AAC_FIX`).
+- **Fixed: parts named later than they start, which could leave a gap when
+  carried on.** A WebM's Opus asked at 1:00 starts at 0:50. The keyframe
+  look-up now covers sound alone, and it finds the formats by asking yt-dlp
+  (`download.resolve_ids`, offline, `--load-info-json --simulate`) instead
+  of giving up on `bv*+ba/b`. HLS start times cannot be read at all (they
+  differed between two runs), so an HLS part carried on overlaps by 12 s
+  instead of 2 (`parts.HLS_SLACK`).
+- **Fixed: `--subs` with a part was timed from the video's start** (every
+  line 57 s early in a part from 0:57). For a part, subtitles go beside it:
+  - the whole ones keep the video's plain name;
+  - each part file gets its own, cut from its exact start
+    (`parts.cut_subtitles`: VTT, SRT, ASS; `cli._part_subs`).
+- **Less waste.** 98 MB were fetched for a 76 MB part. The proxy now reads
+  the file's own index (an MP4's `sidx`, a WebM's Cues) and reads nothing
+  ahead past the byte where the part ends (`Proxy.until`, `mp4_index`,
+  `webm_index`, `stop_byte`). It also starts each connection at 256 KB, and
+  keeps the socket's send buffer small so that "written to ffmpeg" means
+  "read by ffmpeg". Result: 31 MB for a 25 MB part, 14 MB for a 10.5 MB WebM
+  part.
+- Tests: section 49 (29 checks) and one changed check in 43 (sound alone is
+  now looked up). README ("Verified": the real-YouTube results; the
+  not-verified item is now only real network drops), HANDOFF, TESTING,
+  DECISIONS (5 traps), ARCHITECTURE.
+
+---
+
 ## `00eea3b` — `get --range` as fast as a whole download, with any ffmpeg
 *2026-11-24 · 1263 assertions*
 

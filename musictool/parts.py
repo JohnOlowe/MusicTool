@@ -163,22 +163,57 @@ def trim(path):
 # ----------------------------------------------------- keyframe and timing
 
 def _video_format(info, selector):
-    """The video format a selector like '299+140' names, with an https URL
-    ffmpeg can seek in. None for HLS, audio only, or a selector that is an
-    expression rather than ids."""
+    """The format a part's start is decided by, from a selector like
+    '299+140': its video (its sound, when it has none) -- with an https URL
+    ffmpeg can seek in. None for HLS or a selector that is an expression
+    rather than ids (cli resolves those first: download.resolve_ids)."""
     if not isinstance(info, dict) or not selector:
         return None
     ids = [s.strip() for s in str(selector).split("+")]
     if any(not re.fullmatch(r"[\w-]+", s) for s in ids):
         return None
     by_id = {str(f.get("format_id")): f for f in info.get("formats") or []}
-    for fid in ids:
-        f = by_id.get(fid)
-        if (f and (f.get("vcodec") or "none") != "none"
-                and str(f.get("url", "")).startswith("https://")
+    picked = [by_id.get(fid) for fid in ids]
+    if not all(picked):
+        return None
+    if any(is_hls(f) for f in picked):
+        return None                      # times cannot be read: HLS_SLACK
+    video = [f for f in picked if (f.get("vcodec") or "none") != "none"]
+    for f in video or picked:
+        if (str(f.get("url", "")).startswith("https://")
                 and f.get("protocol") in ("https", "http")):
             return f
     return None
+
+
+def chosen_formats(info, selector):
+    """The formats a selector like '301' or '299+140' names. For an
+    expression (bv*+ba/b) yt-dlp's choice is guessed: the best of what there
+    is -- HLS when the video has no DASH formats with a picture (YouTube
+    sometimes gives only HLS and format 18), else the DASH ones."""
+    if not isinstance(info, dict):
+        return []
+    fmts = [f for f in info.get("formats") or [] if isinstance(f, dict)]
+    by_id = {str(f.get("format_id")): f for f in fmts}
+    ids = [x.strip() for x in str(selector or "").split("+")]
+    if ids and all(x in by_id for x in ids):
+        return [by_id[x] for x in ids]
+    dash = [f for f in fmts if is_hls(f) is False
+            and (f.get("vcodec") or "none") != "none"
+            and (f.get("acodec") or "none") == "none"]
+    return dash or [f for f in fmts if is_hls(f)]
+
+
+def is_hls(f):
+    return str(f.get("protocol") or "").startswith("m3u8")
+
+
+# An HLS part does not start where it was asked to: ffmpeg seeks to a piece
+# of the stream (5-10 s long), and its times cannot be read beforehand --
+# YouTube's itag 301 asked at 1:00:00 gave a file from 0:59:55, and the same
+# look-up gave 1:00:00 one minute and 0:59:55 the next. A part carried on
+# after it overlaps by this much more, so the gap that would leave is never.
+HLS_SLACK = 10
 
 
 def keyframe_before(info, selector, t, exe, timeout=60):
@@ -199,7 +234,10 @@ def keyframe_before(info, selector, t, exe, timeout=60):
     cmd = [exe, "-v", "error", "-nostdin"]
     if hdr:
         cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in hdr.items())]
-    cmd += ["-ss", f"{t:.3f}", "-i", f["url"], "-map", "0:v:0", "-c", "copy",
+    # sound alone starts early too: a WebM's Opus at the Cue before (10 s
+    # apart -- asked at 1:00, it began at 0:50)
+    kind = "v" if (f.get("vcodec") or "none") != "none" else "a"
+    cmd += ["-ss", f"{t:.3f}", "-i", f["url"], "-map", f"0:{kind}:0", "-c", "copy",
             "-copyts", "-frames:v", "1", "-f", "framemd5", "-"]
     try:
         r = cancel.run(cmd, capture_output=True, text=True, errors="replace",
@@ -237,8 +275,10 @@ def played_seconds(path, exe=None, timeout=1800):
     except Exception:                                        # noqa: BLE001
         return None
     out = []
-    for kind, sel in (("Video", "0:v:0"), ("Audio", "0:a:0")):
-        if not re.search(rf"Stream #0:\d+.*: {kind}:", head):
+    # 0:V is a picture that moves -- not a cover (attached pic)
+    for kind, sel in (("Video", "0:V:0"), ("Audio", "0:a:0")):
+        if not any(f": {kind}:" in ln and "attached pic" not in ln
+                   for ln in head.splitlines() if "Stream #0:" in ln):
             continue
         try:
             r = cancel.run([exe, "-hide_banner", "-nostats", "-v", "error",
@@ -248,9 +288,13 @@ def played_seconds(path, exe=None, timeout=1800):
                            timeout=timeout)
         except Exception:                                    # noqa: BLE001
             return None
-        us = re.findall(r"out_time_us=(\d+)", r.stdout or "")
-        if us and int(us[-1]) > 0:
-            out.append(int(us[-1]) / 1e6)
+        us = re.findall(r"out_time_us=(-?\d+)", r.stdout or "")
+        if r.returncode == 0 or us:
+            # a stream with nothing in it lasts 0 s -- not "unknown": found
+            # on real YouTube, a part whose picture link ran out (403) at
+            # ffmpeg's first request was its sound alone, 2:35 of it, and
+            # was taken for the whole part
+            out.append(max(0, int(us[-1])) / 1e6 if us else 0.0)
     return min(out) if out else None
 
 
@@ -270,6 +314,87 @@ def leftovers(folder, vid):
 
 SUB_EXT = (".json", ".vtt", ".srt", ".ass", ".ssa", ".ttml", ".srv1", ".srv2",
            ".srv3", ".lrc")
+
+
+# ------------------------------------------------- subtitles for a part
+# yt-dlp fetches a video's subtitles whole, timed from its very start -- put
+# beside (or into) a part from 0:57 on, every line came 57 s early (found on
+# real YouTube). So the whole ones keep the video's plain name, NAME [id].en.vtt
+# (right for a whole download too), and each part gets its own, cut to it.
+
+SUB_TEXT = ("vtt", "srt", "ass", "ssa")
+SUB_PART_RE = re.compile(rf" \((?:from {_T}|{_T}-{_T})\)\.([\w-]+)\.("
+                         + "|".join(SUB_TEXT) + r")$", re.I)
+_TS = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d\d)[.,](\d{1,3})")
+
+
+def _ts_secs(m):
+    h, mi, s, frac = m.groups()
+    return (int(h or 0) * 3600 + int(mi) * 60 + int(s)
+            + int(frac) / (10 ** len(frac)))
+
+
+def _ts_text(t, kind):
+    t = max(0.0, t)
+    ms = int(round(t * 1000))
+    h, ms = divmod(ms, 3600000)
+    mi, ms = divmod(ms, 60000)
+    sec, ms = divmod(ms, 1000)
+    if kind in ("ass", "ssa"):
+        return f"{h}:{mi:02d}:{sec:02d}.{ms // 10:02d}"
+    sep = "," if kind == "srt" else "."
+    return f"{h:02d}:{mi:02d}:{sec:02d}{sep}{ms:03d}"
+
+
+def cut_subtitles(text, kind, start, length=None):
+    """Subtitles of a whole video -> those of the part from `start` (seconds)
+    on, lasting `length` (None: to the end): every time moved back by
+    `start`, lines wholly outside the part left out, one that began before
+    it begins at 0. kind: vtt, srt, ass or ssa."""
+    kind = kind.lower()
+    end = None if length is None else start + length
+    if kind in ("ass", "ssa"):
+        out = []
+        for ln in text.splitlines():
+            if ln.startswith("Dialogue:"):
+                f = ln.split(",", 9)
+                a, b = _TS.fullmatch(f[1].strip()), _TS.fullmatch(f[2].strip())
+                if a and b:
+                    ta, tb = _ts_secs(a), _ts_secs(b)
+                    if tb <= start or (end is not None and ta >= end):
+                        continue
+                    f[1] = _ts_text(ta - start, kind)
+                    f[2] = _ts_text(tb - start, kind)
+                    ln = ",".join(f)
+            out.append(ln)
+        return "\n".join(out) + "\n"
+    blocks = re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip("\n"))
+    out, n = [], 0
+    for blk in blocks:
+        lines = blk.split("\n")
+        at = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if at is None:
+            if not out and kind == "vtt":         # WEBVTT header, styles
+                out.append(blk)
+            elif kind == "vtt" and re.match(r"(STYLE|REGION)\b", blk):
+                out.append(blk)
+            continue
+        left, _arrow, right = lines[at].partition("-->")
+        a = _TS.search(left)
+        b = _TS.search(right)
+        if not a or not b:
+            continue
+        ta, tb = _ts_secs(a), _ts_secs(b)
+        if tb <= start or (end is not None and ta >= end):
+            continue
+        rest = right[b.end():]
+        lines[at] = (_ts_text(ta - start, kind) + " --> "
+                     + _ts_text(tb - start, kind) + rest)
+        if kind == "srt":
+            n += 1
+            lines = [str(n)] + lines[at:]
+        out.append("\n".join(lines))
+    return "\n\n".join(out) + "\n"
 
 
 def sidecars(folder, vid):

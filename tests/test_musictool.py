@@ -5747,12 +5747,17 @@ if os.name == "posix":
     check("the keyframe a part would start on is read from the video",
           _k43 == 8695.0 and "-ss 8700.000" in _ar43 and "User-Agent: UA" in _ar43
           and "https://v/x" in _ar43, str(_k43) + _ar43)
-    check("...none for HLS, audio only, or a selector expression",
+    check("...none for HLS or a selector expression",
           PT.keyframe_before({"formats": [dict(_inf43["formats"][0],
                                                protocol="m3u8_native")]},
                              "299", 8700, _fx43) is None
-          and PT.keyframe_before(_inf43, "140", 8700, _fx43) is None
           and PT.keyframe_before(_inf43, "bv*+ba", 8700, _fx43) is None)
+    # found on real YouTube: a WebM's Opus asked at 1:00 began at 0:50
+    _ka43 = PT.keyframe_before(_inf43, "140", 8700, _fx43)
+    _aa43 = open(_fx43 + ".args").read()
+    check("...sound alone is looked up too, in its sound",
+          _ka43 == 8695.0 and "-map 0:a:0" in _aa43 and "https://v/a" in _aa43,
+          str(_ka43) + _aa43)
     check("...and a keyframe too far away is not believed",
           PT.keyframe_before(_inf43, "299", 9000, _fx43) is None)
 
@@ -7243,6 +7248,389 @@ finally:
     C48.cancel.sleep = _osl48
     _osrv48.shutdown()
 shutil.rmtree(_d48, ignore_errors=True)
+
+
+# ============ 49. found on real YouTube (cookies, 2026-11-24): the file's own
+# ============     index, HLS-only videos, sound alone, what yt-dlp picks
+print("\n--- 49. real-YouTube findings: index, HLS parts, sound alone ---")
+import struct as _st49  # noqa: E402
+import tempfile  # noqa: E402
+
+TMP = os.path.join(WORK, "s49")
+os.makedirs(TMP, exist_ok=True)
+os.makedirs(_D48, exist_ok=True)            # section 48 removed its folder
+_srv49 = _TS48(("127.0.0.1", 0), _Org48)      # and shut its server
+_srv49.daemon_threads = True
+threading.Thread(target=_srv49.serve_forever, daemon=True).start()
+_OURL48 = f"http://127.0.0.1:{_srv49.server_address[1]}/videoplayback"
+
+
+def _box49(kind, body):
+    return _st49.pack(">I4s", 8 + len(body), kind) + body
+
+
+def _sidx49(refs, ts=1000, first=0, v=0, hier=False):
+    b = bytes([v, 0, 0, 0]) + _st49.pack(">II", 1, ts)
+    b += _st49.pack(">II", 0, first) if v == 0 else _st49.pack(">QQ", 0, first)
+    b += _st49.pack(">HH", 0, len(refs))
+    for size, dur in refs:
+        b += _st49.pack(">III", size | (1 << 31 if hier else 0), dur,
+                        0x90000000)
+    return _box49(b"sidx", b)
+
+
+_head49 = _box49(b"ftyp", b"dash" + b"\0" * 8) + _box49(b"moov", b"\0" * 40)
+_sx49 = _sidx49([(1000, 5000), (2000, 5000), (1500, 4000)])
+_ix49 = RP.mp4_index(_head49 + _sx49 + b"\0" * 64)
+_o49 = len(_head49) + len(_sx49)
+check("an MP4's sidx gives where each piece begins (seconds, byte)",
+      _ix49 == [(0.0, _o49), (5.0, _o49 + 1000), (10.0, _o49 + 3000)],
+      str(_ix49))
+_sx49b = _sidx49([(10, 1000), (20, 1000)], v=1, first=7)
+_ix49b = RP.mp4_index(_head49 + _sx49b)
+_o49b = len(_head49) + len(_sx49b) + 7
+check("...version 1 too, with its first offset",
+      _ix49b == [(0.0, _o49b), (1.0, _o49b + 10)], str((_ix49b, _o49b)))
+check("...an index of indexes, a cut-off sidx, or none at all: None",
+      RP.mp4_index(_head49 + _sidx49([(10, 1)], hier=True)) is None
+      and RP.mp4_index(_head49 + _sx49[:30]) is None
+      and RP.mp4_index(_head49 + _box49(b"mdat", b"\0" * 9)) is None
+      and RP.mp4_index(b"") is None)
+
+
+def _el49(eid, body):
+    idb = eid.to_bytes((eid.bit_length() + 7) // 8, "big")
+    n = len(body)
+    return idb + bytes([0x40 | (n >> 8), n & 0xFF]) + body   # 2-byte size
+
+
+def _u49(eid, v, n=4):
+    return _el49(eid, v.to_bytes(n, "big"))
+
+
+_cues49 = _el49(0x1C53BB6B, b"".join(
+    _el49(0xBB, _u49(0xB3, t) + _el49(0xB7, _u49(0xF7, 1, 1) + _u49(0xF1, at)))
+    for t, at in ((0, 500), (5000, 9000), (10000, 20000))))
+_info49 = _el49(0x1549A966, _u49(0x2AD7B1, 1000000))
+_ebml49 = _el49(0x1A45DFA3, _u49(0x4282, 0x7765626D))
+_seg49 = bytes.fromhex("18538067") + bytes.fromhex("01FFFFFFFFFFFFFF")
+_wb49 = _ebml49 + _seg49 + _info49 + _cues49 + bytes.fromhex("1F43B675") + \
+    b"\x81\x00"
+_w0 = len(_ebml49) + len(_seg49)
+_wix49 = RP.webm_index(_wb49)
+check("a WebM's Cues give where each Cluster begins (from the Segment)",
+      _wix49 == [(0.0, _w0 + 500), (5.0, _w0 + 9000), (10.0, _w0 + 20000)],
+      str(_wix49))
+check("...no Cues before the first Cluster, or not WebM at all: None",
+      RP.webm_index(_ebml49 + _seg49 + _info49 + bytes.fromhex("1F43B675")
+                    + b"\x81\x00") is None
+      and RP.webm_index(_head49) is None and RP.webm_index(b"\x1a") is None)
+_ix = [(0.0, 100), (5.0, 200), (10.0, 300), (15.0, 400)]
+check("the byte the reading ahead stops at: one piece past the one the part "
+      "ends in; none for the last pieces, an unknown end or no index",
+      RP.stop_byte(_ix, 7) == 400 and RP.stop_byte(_ix, 3) == 300
+      and RP.stop_byte(_ix, 12) is None and RP.stop_byte(_ix, None) is None
+      and RP.stop_byte(None, 7) is None,
+      str([RP.stop_byte(_ix, t) for t in (3, 7, 12)]))
+
+# through the proxy: the index read from the first bytes, no read-ahead past
+# where the part ends (measured: 98 MB fetched for a 76 MB part before)
+_PB49 = 64 * _KB
+_body49 = _rnd48.randbytes(40 * _PB49) if hasattr(_rnd48, "randbytes") else \
+    bytes(40 * _PB49)
+_hd49 = _head49 + _sidx49([(_PB49, 1000)] * 39 + [(_PB49 - 2000, 1000)])
+_file49 = os.path.join(TMP, "idx49.mp4")
+with open(_file49, "wb") as _f:
+    _f.write((_hd49 + _body49)[:len(_hd49) + 40 * _PB49 - 2000])
+_reset48()
+_O48["file"] = _file49
+_p49 = _px48(piece=256 * _KB, block=64 * _KB, cache=4096 * _KB)
+_u49 = _p49.add(_OURL48)
+_st, _h, _b = _get48(_u49, "bytes=0-", limit=1000)
+_src49 = list(_p49._srcs.values())[0]
+check("...the index is read from the first bytes fetched",
+      _src49.index and len(_src49.index) == 40 and _src49.index[1][0] == 1.0,
+      str((_src49.index or [])[:2]))
+_p49.until = 12.5
+_lim49 = RP.stop_byte(_src49.index, 12.5)
+_O48["log"].clear()
+_st, _h, _b = _get48(_u49, f"bytes={_src49.index[3][1]}-")
+_whole49 = open(_file49, "rb").read()
+check("...a part read to its end comes whole and right",
+      _st == 206 and _b == _whole49[_src49.index[3][1]:], f"{_st} {len(_b)}")
+_past49 = [(s, e) for s, e, _ua in _O48["log"] if e is not None and s >= _lim49]
+check("...and past where the part ends it is fetched one small piece at a "
+      "time, only as asked (no 256 KB pieces ahead)",
+      _past49 and all(e - s + 1 <= 64 * _KB for s, e in _past49)
+      and all(e < -(-_lim49 // (64 * _KB)) * 64 * _KB or s >= _lim49
+              for s, e, _ua in _O48["log"] if e is not None),
+      str((_lim49, _O48["log"][:8])))
+_p49.stop()
+_reset48()
+
+# HLS: the sound needs its headers taken off before an MP4 is begun
+_IH49 = {"formats": [
+    {"format_id": "18", "protocol": "https", "vcodec": "avc1",
+     "acodec": "mp4a.40.2"},
+    {"format_id": "301", "protocol": "m3u8_native", "vcodec": "avc1",
+     "acodec": "mp4a.40.2"}]}
+_ID49 = {"formats": [
+    {"format_id": "137", "protocol": "https", "vcodec": "avc1",
+     "acodec": "none"},
+    {"format_id": "251", "protocol": "https", "vcodec": "none",
+     "acodec": "opus", "url": "https://v/251"},
+    {"format_id": "95", "protocol": "m3u8_native", "vcodec": "avc1",
+     "acodec": "mp4a.40.2"}]}
+check("an HLS part with AAC sound needs aac_adtstoasc; with Opus, DASH or "
+      "nothing chosen it does not",
+      download.needs_aac_fix(_IH49, "301")
+      and download.needs_aac_fix(_IH49, "bv*+ba/b")
+      and not download.needs_aac_fix(_IH49, "18")
+      and not download.needs_aac_fix(_ID49, "137+251")
+      and not download.needs_aac_fix(_ID49, "bv*+ba/b")
+      and not download.needs_aac_fix({"formats": [
+          dict(_ID49["formats"][2], acodec="opus")]}, "95")
+      and not download.needs_aac_fix(None, "301"))
+_fa49 = download.build_args("https://youtu.be/x", {
+    "download_sections": "*60-120", "aac_fix": True})
+_fb49 = download.build_args("https://youtu.be/x", {
+    "download_sections": "*60-120"})
+check("...then ffmpeg is told so, with the fragmented MP4 kept",
+      any(a.startswith("ffmpeg_o:") and "+empty_moov" in a and
+          a.endswith("-bsf:a aac_adtstoasc") for a in _fa49)
+      and not any("adtstoasc" in a for a in _fb49))
+check("HLS or not, as chosen: a guess for an expression (HLS only when there "
+      "is no DASH picture)",
+      PT.is_hls(_IH49["formats"][1]) and not PT.is_hls(_IH49["formats"][0])
+      and [f["format_id"] for f in PT.chosen_formats(_IH49, "bv*")] == ["301"]
+      and [f["format_id"] for f in PT.chosen_formats(_ID49, "bv*")] == ["137"]
+      and [f["format_id"] for f in PT.chosen_formats(_ID49, "137+251")]
+      == ["137", "251"])
+check("...and the keyframe is not looked up in HLS (its times cannot be read)",
+      PT._video_format(_IH49, "301") is None
+      and PT._video_format(_ID49, "251")["format_id"] == "251")
+
+# which formats a selector picks: yt-dlp is asked, offline
+_fy49 = os.path.join(TMP, "fakeytdlp49")
+with open(_fy49, "w") as _f:
+    _f.write("#!/bin/sh\necho \"$@\" > \"$0.args\"\necho 401+251\n")
+os.chmod(_fy49, 0o755)
+_oyc49 = download.ytdlp_cmd
+try:
+    download.ytdlp_cmd = lambda: [_fy49]
+    _r1 = download.resolve_ids(_ID49, {"format_selector": "137+251"})
+    _r2 = download.resolve_ids(_ID49, {"keep_video": True,
+                                       "audio_lang": "en"})
+    _a2 = open(_fy49 + ".args").read()
+    _r3 = download.resolve_ids(_ID49, {"format_selector": "ba/b"})
+    _a3 = open(_fy49 + ".args").read()
+    with open(_fy49, "w") as _f:
+        _f.write("#!/bin/sh\necho 'ERROR: no'\nexit 1\n")
+    _r4 = download.resolve_ids(_ID49, {"format_selector": "ba/b"})
+finally:
+    download.ytdlp_cmd = _oyc49
+check("what yt-dlp will pick is asked of it from the info, offline; plain ids "
+      "are taken as they are",
+      _r1 == "137+251" and _r2 == "401+251" and "--load-info-json" in _a2
+      and "--simulate" in _a2 and "bv*+ba[language^=en]" in _a2
+      and "-x" not in _a2.split(), str((_r1, _r2, _a2)))
+check("...sound alone with -x, as the download has; a failure gives None",
+      _r3 == "401+251" and "-x" in _a3.split() and "-f ba/b" in _a3
+      and _r4 is None, str((_r3, _r4, _a3)))
+check("...and its temporary info file is removed",
+      not [n for n in os.listdir(tempfile.gettempdir())
+           if n.startswith("musictool-sel-")])
+
+# an HLS part carried on: more overlap, since the file began up to a piece
+# earlier than its name says (asked at 1:00:00, it held 0:59:55 on)
+_INFOH49 = dict(_INFO48, formats=[
+    {"format_id": "301", "protocol": "m3u8_native", "vcodec": "avc1",
+     "acodec": "mp4a.40.2", "url": "https://manifest.googlevideo.com/x.m3u8"}])
+_ocv49 = PT.coverage
+_seen48.clear()
+download.download = _fdl48
+download.probe = lambda u, o: dict(_INFOH49)
+PT.keyframe_before = lambda *a, **k: None
+try:
+    for _x in os.listdir(_D48):
+        os.remove(os.path.join(_D48, _x))
+    _plan48[:] = [_ok48]
+    _cov49 = [[(60.0, 90.0, os.path.join(_D48, "Fast [FASTVID0048] "
+                                         "(0h01m00s-0h01m30s).mp4"))], ]
+    PT.coverage = lambda folder, vid: _cov49[0] if _seen48 == [] else []
+    _said49 = []
+    _per49 = _per48(format_selector="301")
+    _f, _e = C48._download_part("u", _per49, dict(_INFOH49), _said49.append,
+                                "", None)
+    _sec49 = _per49.get("download_sections")
+    check("an HLS part carried on starts 12 s back (2 + one HLS piece), "
+          "never leaving a gap", _sec49 == "*78-120"
+          and _seen48 and _seen48[0]["json"] is None, str((_sec49, _said49)))
+    check("...and its sound filter is on", _per49.get("aac_fix") is True)
+    _seen48.clear()
+    _plan48[:] = [_ok48]
+    PT.coverage = lambda folder, vid: _cov49[0] if _seen48 == [] else []
+    download.probe = lambda u, o: dict(_INFO48)
+    _per49 = _per48(format_selector="137+140")
+    C48._download_part("u", _per49, dict(_INFO48), lambda m: None, "", None)
+    check("...a DASH part as before: 2 s back, no filter",
+          _per49.get("download_sections") == "*88-120"
+          and not _per49.get("aac_fix"), str(_per49.get("download_sections")))
+finally:
+    PT.coverage = _ocv49
+    download.download, download.probe = _odl48, _opr48
+    PT.keyframe_before = _okf48
+
+# a picture that never came: its link refused at ffmpeg's first request (403)
+# while the sound came -- on real YouTube a 2.5 MB "part" of 2:35 that was
+# taken for the whole rest of it
+if FF and "_mk48" in globals():
+    _z0 = os.path.join(TMP, "z0.mp4")
+    _z49 = os.path.join(TMP, "nopicture.mp4")
+    subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=160x120:rate=10:d=1", "-f", "lavfi", "-i",
+                    "sine=d=9", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", _z0], capture_output=True)
+
+    def _nopic49(path, a):
+        subprocess.run([FF, "-v", "error", "-y", "-i", _z0, "-t", str(a),
+                        "-map", "0", "-c", "copy", "-bsf:v", "noise=drop=1",
+                        "-movflags",
+                        "+frag_keyframe+empty_moov+default_base_moof", path],
+                       capture_output=True)
+        return path
+
+    _nopic49(_z49, 9)
+    check("played_seconds: a picture with nothing in it lasts 0 s, not "
+          "'unknown' (the header says the sound's 9 s)",
+          PT.played_seconds(_z49) == 0.0 and (PT.seconds(_z49) or 0) > 8,
+          f"{PT.played_seconds(_z49)} {PT.seconds(_z49)}")
+    _jp49 = os.path.join(TMP, "c.jpg")
+    subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=red:s=32x32", "-frames:v", "1", _jp49],
+                   capture_output=True)
+    _cvr49 = os.path.join(TMP, "cover.m4a")
+    subprocess.run([FF, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=4",
+                    "-c:a", "aac", os.path.join(TMP, "a.m4a")],
+                   capture_output=True)
+    subprocess.run([FF, "-v", "error", "-y", "-i", os.path.join(TMP, "a.m4a"),
+                    "-i", _jp49, "-map", "0", "-map", "1", "-c", "copy",
+                    "-disposition:v", "attached_pic", _cvr49],
+                   capture_output=True)
+    check("...while a cover picture is no picture: a song with one plays "
+          "its length", abs((PT.played_seconds(_cvr49) or 0) - 4) < 0.2,
+          str(PT.played_seconds(_cvr49)))
+
+    _ocv49b = PT.coverage
+    os.makedirs(_D48, exist_ok=True)
+    for _x in os.listdir(_D48):
+        os.remove(os.path.join(_D48, _x))
+
+    def _cut49(v, a, mode="403", nopic=False):
+        def step(o, info):
+            _O48["mode"] = mode
+            _get48(info["formats"][0]["url"], "bytes=0-")
+            _O48["mode"] = "ok"
+            p = os.path.join(_D48, o["template"].replace("%(ext)s", "mp4"))
+            _nopic49(p, a) if nopic else _mk48(p, v, a)
+            return [(p, "FASTVID0048")], None
+        return step
+
+    _INFO48["formats"][0]["url"] = _OURL48
+    download.download = _fdl48
+    download.probe = lambda u, o: dict(_INFO48)
+    PT.keyframe_before = lambda *a, **k: None
+    _ohosts49 = RP.HOSTS
+    RP.HOSTS = None
+    try:
+        _reset48()
+        _seen48.clear()
+        _said49 = []
+        _plan48[:] = [_cut49(20, 60), _cut49(0, 9, nopic=True),
+                      _cut49(42, 42, mode="ok")]
+        _f, _e = C48._download_part("u", _per48(), dict(_INFO48),
+                                    _said49.append, "", None)
+        _n49 = sorted(os.listdir(_D48))
+        check("a round whose picture never came is not taken for the rest of "
+              "the part: dropped, and fetched again",
+              _e is None and len(_n49) == 2
+              and any("(0h01m00s-0h01m20s)" in n for n in _n49)
+              and any("before anything new" in m for m in _said49)
+              and not _plan48, str((_e, _n49, _said49[-5:])))
+    finally:
+        RP.HOSTS = _ohosts49
+        download.download, download.probe = _odl48, _opr48
+        PT.keyframe_before = _okf48
+        PT.coverage = _ocv49b
+
+# subtitles: fetched whole, timed from the video's start -- cut to the part
+_vtt49 = ("WEBVTT\nKind: captions\nLanguage: en\n\n"
+          "00:00:01.360 --> 00:00:03.000 align:start position:0%\nfirst\n\n"
+          "00:00:55.720 --> 00:00:59.360\nacross the start\n\n"
+          "00:01:10.000 --> 00:01:12.000\ninside\n\n"
+          "01:40.000 --> 01:41.000\nafter\n")
+_c49 = PT.cut_subtitles(_vtt49, "vtt", 57.04, 33)
+check("a WebVTT cut to a part from 0:57.04: moved back, what is outside "
+      "left out, a line across the start begins at 0",
+      _c49.startswith("WEBVTT\nKind: captions") and "first" not in _c49
+      and "after" not in _c49
+      and "00:00:00.000 --> 00:00:02.320\nacross the start" in _c49
+      and "00:00:12.960 --> 00:00:14.960\ninside" in _c49, _c49)
+_srt49 = PT.cut_subtitles("1\n00:00:01,360 --> 00:00:03,000\nfirst\n\n"
+                          "2\n00:01:10,000 --> 00:01:12,500\ninside\n",
+                          "srt", 60, None)
+check("...an SRT too, numbered again from 1",
+      _srt49 == "1\n00:00:10,000 --> 00:00:12,500\ninside\n", repr(_srt49))
+_ass49 = PT.cut_subtitles("[Events]\nDialogue: 0,0:00:01.36,0:00:03.00,"
+                          "Default,,0,0,0,,first, a\nDialogue: 0,0:01:10.00,"
+                          "0:01:12.00,Default,,0,0,0,,in, it\n", "ass", 60)
+check("...and ASS (its text may hold commas)",
+      "first" not in _ass49 and "Dialogue: 0,0:00:10.00,0:00:12.00,Default,,"
+      "0,0,0,,in, it" in _ass49, _ass49)
+
+_S49 = os.path.join(TMP, "subs")
+os.makedirs(_S49)
+_pf49 = os.path.join(_S49, "S [SUBVID0049] (0h00m57s-0h01m30s).mkv")
+open(_pf49, "w").close()
+_before49 = set(os.listdir(_S49))
+with open(os.path.join(_S49, "S [SUBVID0049] (0h00m57s-0h01m30s).en.vtt"),
+          "w") as _f:
+    _f.write(_vtt49)
+_said49 = []
+_perS49 = {"output_dir": _S49, "_part": {"vid": "SUBVID0049",
+                                         "starts": {_pf49: 57.04}}}
+C48._part_subs(_perS49, [(_pf49, "SUBVID0049")], _before49, _said49.append)
+_ns49 = sorted(os.listdir(_S49))
+_cut49s = open(os.path.join(_S49, "S [SUBVID0049] (0h00m57s-0h01m30s).en.vtt")
+               ).read()
+check("after a part: the whole subtitles get the video's plain name, and the "
+      "part its own, cut to it (from its exact start)",
+      "S [SUBVID0049].en.vtt" in _ns49 and len(_ns49) == 3
+      and open(os.path.join(_S49, "S [SUBVID0049].en.vtt")).read() == _vtt49
+      and "00:00:00.000 --> 00:00:02.320" in _cut49s
+      and any("cut to the part" in m for m in _said49), str((_ns49, _said49)))
+_pf49b = os.path.join(_S49, "S [SUBVID0049] (0h01m28s-0h02m00s).mkv")
+open(_pf49b, "w").close()
+C48._part_subs(dict(_perS49, _part={"vid": "SUBVID0049"}),
+               [(_pf49b, "SUBVID0049")], set(os.listdir(_S49)), lambda m: None)
+check("...a part carried on later gets its own from the whole ones already "
+      "here (by its name's start), the others untouched",
+      "00:00:00.000 --> 00:00:00.000" not in open(os.path.join(
+          _S49, "S [SUBVID0049] (0h01m28s-0h02m00s).en.vtt")).read()
+      and open(os.path.join(_S49, "S [SUBVID0049] (0h00m57s-0h01m30s).en.vtt")
+               ).read() == _cut49s
+      and "after" in open(os.path.join(
+          _S49, "S [SUBVID0049] (0h01m28s-0h02m00s).en.vtt")).read())
+_pp49 = {"embed_subs": True}
+C48._plan_part("https://www.youtube.com/watch?v=SUBVID0049", _pp49,
+               {"id": "SUBVID0049", "duration": 600}, "was_live", (60, 120),
+               lambda m: None)
+check("--subs with --range: beside the part (inside it they would keep the "
+      "whole video's times)",
+      _pp49.get("write_subs") is True and not _pp49.get("embed_subs"))
+_srv49.shutdown()
+shutil.rmtree(_d48, ignore_errors=True)
+shutil.rmtree(TMP, ignore_errors=True)
 
 
 srv.shutdown()

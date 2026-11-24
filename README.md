@@ -34,7 +34,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1263 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1292 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -1019,11 +1019,15 @@ anything downloads, and parts get no lyrics.
   server that slows open-ended requests the way YouTube does, a 1-minute 720p
   part took 1.2 s instead of 28 s, and the file was byte-for-byte the same.
   The log says `fast: ...` before the part and how much it fetched after.
-  - **Kind to a limited connection.** Each connection starts with 1 MB and
+  - **Kind to a limited connection.** Each connection starts with 256 KB and
     grows only as ffmpeg reads (ffmpeg looks at the start of the file and
     jumps a few times before it settles). The last 48 MB stay in memory, so a
     jump back costs nothing, and a piece two connections want is fetched once.
-    At most 20 MB past the end of the part are fetched and thrown away.
+    Every YouTube DASH format carries its own index (an MP4's `sidx`, a
+    WebM's Cues), so the proxy knows the byte where the part ends and fetches
+    nothing ahead past it. On real YouTube a 25 MB part cost 31 MB, a 10.5 MB
+    WebM part 14 MB (before this: 98 MB for a 76 MB part). A format without
+    an index (the old progressive 18) wastes at most about 20 MB.
   - **A drop:** each piece is retried for about a minute while ffmpeg waits,
     so the part goes on in the same file. Longer than that, or when YouTube
     refuses (403: the links ran out), ffmpeg's stream is cut. ffmpeg takes
@@ -1033,7 +1037,7 @@ anything downloads, and parts get no lyrics.
     file after that, and fetches the rest with fresh links into a new file. A
     retry that gets nothing new leaves no file.
   - Only YouTube's links go through it (they need no cookies); HLS and other
-    sites are fetched as before, and so is everything with `--proxy` or
+    sites are fetched as before (see *HLS-only videos* below), and so is everything with `--proxy` or
     `--limit-rate`. `--no-fast-range` turns it off. Then ffmpeg 8.1 or newer
     still asks for 10 MB at a time by itself (`-request_size 10485760
     -multiple_requests 1 -short_seek_size 10485760`: 17-70x on the stream
@@ -1054,6 +1058,29 @@ anything downloads, and parts get no lyrics.
   before the time it is given and landed on the keyframe before. In a test the
   part's first packet was the keyframe itself, and the sound started 0.17 s in
   instead of being stretched.
+
+- **Subtitles with a part** (`--subs`) are saved beside it, never inside:
+  yt-dlp fetches a video's subtitles whole, timed from its very start, so a
+  part from 0:57 had every line 57 s early. The whole ones keep the video's
+  plain name (`TITLE [id].en.vtt`, right for a whole download too), and each
+  part gets its own, cut to it from its exact start
+  (`TITLE [id] (0h00m57s-0h01m30s).en.vtt`, which players load by
+  themselves). VTT, SRT and ASS are cut; a stream's chat stays a
+  `.live_chat.json` for `chat`, as before.
+- **HLS-only videos.** YouTube sometimes gives a video only as HLS (plus
+  the small format 18). That happened here on 2026-11-24 to a 3-hour video
+  that had DASH formats an hour earlier. Such a part is fetched by ffmpeg
+  as before (the proxy is not needed: HLS comes in pieces anyway). Two things
+  are different: (1) the sound has to be told to drop its per-frame headers
+  (`-bsf:a aac_adtstoasc`) or every part fails with `Operation not
+  permitted`, and musictool now adds that; (2) its start cannot be read
+  beforehand, so a part may begin up to one HLS piece (5-10 s) before its
+  name says, and a part carried on overlaps by 12 s instead of 2.
+- **Which formats a part uses** is asked of yt-dlp itself, offline, from the
+  info it already gave (half a second). The keyframe, the sound filter and
+  the overlap all depend on it, and a selector like `bv*+ba/b` does not say.
+  Sound alone starts early too: a WebM's Opus asked at 1:00 begins at the cue
+  before, 0:50, and the file is now named so.
 
 ### If a part does not finish
 
@@ -1715,7 +1742,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1263 assertions, 0 failures**, with or without
+**Verified by running the code — 1292 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live
@@ -1812,6 +1839,32 @@ subcommand.
   34 s of picture under a minute of sound; the file was renamed to 1:00-1:34,
   and the next run fetched 1:32-2:00 into a second file. The same part of a
   real remote file (archive.org) came through the proxy too, redirect and all.
+- **The fast way on real YouTube** (2026-11-24, the maintainer's cookies,
+  yt-dlp 2026.11.23, ffmpeg 9.0.2):
+  - **Speed.** A 2-minute 1080p60 part (`-f 299+140`, 73 MiB) came in 7 s
+    of download, 20 s with extraction. It played with no decode errors, and
+    picture and sound both lasted 125.0 s from the keyframe 5 s early.
+  - **Same bytes as the old way.** Parts of `137+140` (MP4) and `248+251`
+    (WebM) were compared with `--no-fast-range`: the MP4 was byte-for-byte
+    the same, the MKV's packets were identical (Matroska writes a random
+    segment ID), and the WebM came 2.6x faster.
+  - **Other shapes.** Format 18, audio alone, the default selection with
+    title and cover added, from 0:00, to the video's end, and `--subs` all
+    gave right files.
+  - **Ctrl+C** in the middle left a playable 1:57 file and no process
+    behind, and the rerun fetched the rest. `kill -9` left a `.part` that the
+    rerun renamed (it played 100 s) before fetching the rest. A third run
+    said `already here`.
+  - **An expired link** (the signature spoiled partway) was handled twice in
+    a row, the second time at ffmpeg's first request. That second case found
+    a bug, now fixed: the picture never came, the sound alone (2:35) was
+    taken for the whole rest of the part. The empty round is dropped now, and
+    a third round with fresh links finished it, with no gap.
+  - **Bugs this found and fixed:** HLS parts failing with `Operation not
+    permitted`; HLS and sound-alone parts named a piece later than they
+    start, which could leave a gap when carried on; `--subs` with a part
+    timed from the video's start; the proxy fetching up to 20 MB past every
+    part. See *Only part of a video*.
 - **The GUI, drawn.** Under a virtual display (Xvfb) the real Tk window was
   opened and screenshotted, including the Audio tracks, Quality and Live
   streams tabs; that
@@ -1833,12 +1886,9 @@ the newer one).
   short part and one chat replay were fetched (above), and nothing else. The format
   logic is tested against the shapes yt-dlp reports for YouTube, including a
   dubbed video, but a real dubbed video has not been loaded into the tab.
-- **The fast way for a part on real YouTube.** On 2026-11-24 both cookie
-  files had been rotated (yt-dlp: "no longer valid") and YouTube asked this
-  machine to sign in, so the range proxy was tested against the server
-  described above and archive.org, not against googlevideo.com. If it
-  misbehaves there, `--no-fast-range` brings back the old way, and a failure
-  nobody foresaw already falls back to it by itself.
+- **A dropped connection on real YouTube.** The machine cannot cut its own
+  network, so drops were simulated against the local server only. On real
+  YouTube, an expired link (403), Ctrl+C and `kill -9` were tested (above).
 - **A real YouTube live stream** -- for the same reason. yt-dlp's live
   handling was read in its source and driven with a live-style stream (above);
   the Windows "Access is denied" locks were simulated, not produced by

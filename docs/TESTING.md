@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1263 assertions across 48 sections (plus 8b), 0 failures** — with or without
+**1292 assertions across 49 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -283,6 +283,11 @@ Proven by execution:
   and the Library job remembered across a restart; the window sized from the
   display (1080x720 centred on 1920x1080, 1008x520 on 1024x600, never larger
   than the screen) and the log asked for its height before the first frame.
+- what testing on real YouTube found (section 49): an MP4's `sidx` and a
+  WebM's Cues read (built byte by byte), no reading ahead past the part, the
+  HLS sound filter, yt-dlp asked which formats it picks (a fake yt-dlp), the
+  longer overlap for HLS, a picture with nothing in it measured as 0 s (made
+  with ffmpeg's `noise=drop=1`), and subtitles cut to a part
 - the fast way for a part (section 48), against a real local HTTP server
   standing in for YouTube: the bytes exact whole, from a byte on and in a
   bounded range; the server asked only in bounded pieces, starting small;

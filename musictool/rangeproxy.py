@@ -18,14 +18,19 @@ part download holds as it was: carrying on after a drop, the 4 GB limit of
 a FAT32 card, a full disk, fresh links after a 403, Stop and Force stop.
 
 Kind to a limited connection:
-  * each connection starts with a 1 MB piece and only grows (up to two 10
+  * each connection starts with a 256 KB piece and only grows (up to two 10
     MB pieces ahead) while ffmpeg actually reads -- ffmpeg looks at the
     start of the file and jumps around a little before it settles, and a
-    jump costs at most about a megabyte;
+    jump costs well under a megabyte. "Reads" is what ffmpeg took: the
+    socket's send buffer is kept small, or the system would take megabytes
+    for it, and the read-ahead grew on those;
+  * the file's own index (an MP4's sidx, a WebM's Cues: every YouTube DASH
+    format has one) says at which byte the part ends: no reading ahead past
+    it (anything after it is still served, piece by piece, if ffmpeg asks);
   * the last ~48 MB fetched are kept in memory, so a jump back, or ffmpeg
     reconnecting after a drop, does not fetch the same bytes again;
-  * what is fetched beyond the end of the part (ffmpeg stops reading, the
-    pieces in flight are thrown away) is at most about 20 MB.
+  * a file without an index (an old progressive MP4) loses at most about
+    20 MB fetched past the end of the part.
 
 A drop: each piece is retried after 1, 2, 4, 8, 15 and 30 s (about a
 minute), while ffmpeg simply waits on its connection -- the part goes on in
@@ -43,6 +48,8 @@ import http.client
 import json
 import os
 import re
+import socket
+import struct
 import tempfile
 import threading
 import time
@@ -55,7 +62,8 @@ from urllib.parse import urlsplit
 from . import cancel
 
 PIECE = 10 * 1024 * 1024        # like yt-dlp's own downloader (download.CHUNK)
-BLOCK = 1024 * 1024             # the first piece of a connection; cache unit
+BLOCK = 256 * 1024              # the first piece of a connection; cache unit
+SNDBUF = 256 * 1024             # what the system may take for ffmpeg
 AHEAD = 2                       # pieces in flight per connection
 CACHE = 48 * 1024 * 1024        # recently fetched bytes kept for a re-read
 SLEEPS = (1, 2, 4, 8, 15, 30)   # a piece is retried after these (1 min)
@@ -79,6 +87,8 @@ class _Src:
         self.n, self.url, self.headers = n, url, dict(headers or {})
         self.size = None
         self.ctype = None
+        self.index = None                # [(seconds, byte)] -- see mp4_index
+        self.indexed = False
         self.lock = threading.Lock()
 
 
@@ -99,7 +109,9 @@ class Proxy:
     ffmpeg), requests (to the server); net_error: the last time the server
     could not be reached, cleared by the next piece that came; broken: why
     a stream to ffmpeg had to be cut short (None: never). on_wait(secs,
-    error) is told before each wait for the network."""
+    error) is told before each wait for the network. `until`: where the
+    part ends, in seconds (None: the end of the video) -- set before each
+    run, it stops the reading ahead at the byte the file's index gives."""
 
     def __init__(self, opener=None, piece=PIECE, block=BLOCK, ahead=AHEAD,
                  cache=CACHE, sleeps=SLEEPS, timeout=30, on_wait=None):
@@ -111,6 +123,7 @@ class Proxy:
         self.fetched = self.served = self.requests = 0
         self.net_error = None
         self.broken = None
+        self.until = None
         self.on_wait = on_wait
         self._waited = 0.0
         self._srcs = {}
@@ -255,12 +268,20 @@ class Proxy:
                 self._cache.popitem(last=False)
 
     def _keep(self, src, lo, data):
-        """Cache the whole blocks in `data` (which starts at block-aligned lo)."""
+        """Cache the whole blocks in `data` (which starts at block-aligned lo),
+        and read the file's index from its start."""
         B = self.block
+        if lo == 0 and not src.indexed:
+            src.indexed = True
+            src.index = mp4_index(data) or webm_index(data)
         for k in range(0, len(data), B):
             blk = data[k:k + B]
             if len(blk) == B or (src.size and lo + k + len(blk) == src.size):
                 self._cache_put(src, (lo + k) // B, blk)
+
+    def stop_for(self, src):
+        """The byte the reading ahead stops at for this part, or None."""
+        return stop_byte(src.index, self.until)
 
     def run(self, src, lo, hi):
         """Bytes lo..hi-1 (lo on a block boundary): from the cache where it
@@ -311,12 +332,173 @@ class Proxy:
         return b"".join(have[i] for i in idx)[:hi - lo]
 
 
+# ----------------------------------------------- where in the file a time is
+# YouTube's files carry their own index near the start -- an MP4's sidx box,
+# a WebM's Cues -- listing where each piece (a few seconds) begins. With it
+# the proxy knows the byte where the part ends, and stops reading ahead
+# there: without it, the last pieces fetched ahead were thrown away when
+# ffmpeg stopped (15 MB for a 2 MB stretch of sound, measured).
+
+def mp4_index(data):
+    """[(seconds, byte)] where each piece of a DASH MP4 begins, from the sidx
+    box in `data` (the start of the file); None without one (or when it
+    does not fit in `data`)."""
+    pos = 0
+    while pos + 8 <= len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        head = 8
+        if n == 1:
+            if pos + 16 > len(data):
+                return None
+            n = struct.unpack(">Q", data[pos + 8:pos + 16])[0]
+            head = 16
+        if n < 8:
+            return None
+        if kind == b"sidx":
+            if pos + n > len(data):
+                return None
+            b = data[pos + head:pos + n]
+            ts = struct.unpack(">I", b[8:12])[0]
+            if b[0] == 0:
+                t, first = struct.unpack(">II", b[12:20])
+                i = 20
+            else:
+                t, first = struct.unpack(">QQ", b[12:28])
+                i = 28
+            count = struct.unpack(">H", b[i + 2:i + 4])[0]
+            i += 4
+            if not ts or len(b) < i + 12 * count:
+                return None
+            off, out = pos + n + first, []
+            for _k in range(count):
+                ref, dur, _sap = struct.unpack(">III", b[i:i + 12])
+                i += 12
+                if ref >> 31:                    # an index of indexes
+                    return None
+                out.append((t / ts, off))
+                off += ref & 0x7FFFFFFF
+                t += dur
+            return out or None
+        if kind in (b"moof", b"mdat"):
+            return None
+        pos += n
+    return None
+
+
+def _vint(data, pos, keep_marker=False):
+    """An EBML number at `pos` -> (value, next pos); value None when the
+    size is "unknown"."""
+    first = data[pos]
+    length = 1
+    while length <= 8 and not first & (0x80 >> (length - 1)):
+        length += 1
+    if length > 8 or pos + length > len(data):
+        raise ValueError("bad EBML number")
+    v = first if keep_marker else first & (0xFF >> length)
+    for k in range(1, length):
+        v = (v << 8) | data[pos + k]
+    if not keep_marker and v == (1 << (7 * length)) - 1:
+        v = None
+    return v, pos + length
+
+
+def _uint(b):
+    return int.from_bytes(b, "big") if b else 0
+
+
+def webm_index(data):
+    """[(seconds, byte)] where each Cluster a WebM's Cues point at begins,
+    from `data` (the start of the file); None when the Cues are not in it."""
+    try:
+        eid, pos = _vint(data, 0, True)
+        size, pos = _vint(data, pos)
+        if eid != 0x1A45DFA3 or size is None:
+            return None
+        pos += size
+        eid, pos = _vint(data, pos, True)
+        _size, pos = _vint(data, pos)
+        if eid != 0x18538067:                    # Segment
+            return None
+        seg, scale, cues = pos, 1000000, None
+        while pos < len(data):
+            eid, p2 = _vint(data, pos, True)
+            size, p2 = _vint(data, p2)
+            if eid == 0x1F43B675 or size is None:     # a Cluster: too late
+                break
+            end = p2 + size
+            if end > len(data):
+                break
+            if eid == 0x1549A966:                     # Info
+                q = p2
+                while q < end:
+                    cid, q2 = _vint(data, q, True)
+                    csz, q2 = _vint(data, q2)
+                    if cid == 0x2AD7B1:               # TimecodeScale
+                        scale = _uint(data[q2:q2 + csz]) or scale
+                    q = q2 + (csz or 0)
+            elif eid == 0x1C53BB6B:                   # Cues
+                cues = (p2, end)
+            pos = end
+        if not cues:
+            return None
+        out, q = [], cues[0]
+        while q < cues[1]:
+            cid, q2 = _vint(data, q, True)
+            csz, q2 = _vint(data, q2)
+            if cid == 0xBB and csz:                   # CuePoint
+                t = at = None
+                r = q2
+                while r < q2 + csz:
+                    eid, r2 = _vint(data, r, True)
+                    esz, r2 = _vint(data, r2)
+                    if eid == 0xB3:                   # CueTime
+                        t = _uint(data[r2:r2 + esz])
+                    elif eid == 0xB7:                 # CueTrackPositions
+                        u = r2
+                        while u < r2 + esz:
+                            fid, u2 = _vint(data, u, True)
+                            fsz, u2 = _vint(data, u2)
+                            if fid == 0xF1 and at is None:
+                                at = _uint(data[u2:u2 + fsz])
+                            u = u2 + (fsz or 0)
+                    r = r2 + (esz or 0)
+                if t is not None and at is not None:
+                    out.append((t * scale / 1e9, seg + at))
+            q = q2 + (csz or 0)
+        return sorted(out) or None
+    except (ValueError, IndexError):
+        return None
+
+
+def stop_byte(index, t_end, margin=1):
+    """The byte past which nothing is needed for a part ending at t_end:
+    where the piece `margin` pieces after the one holding t_end ends.
+    None: to the end of the file."""
+    if not index or t_end is None:
+        return None
+    for k, (t, _b) in enumerate(index):
+        if t > t_end:
+            j = k + margin
+            return index[j][1] if j < len(index) else None
+    return None
+
+
 class _Handler(BaseHTTPRequestHandler):
     proxy = None
     protocol_version = "HTTP/1.0"
 
     def log_message(self, *a):                  # not on the user's screen
         pass
+
+    def setup(self):
+        super().setup()
+        # left to itself the system takes megabytes from us for ffmpeg, and
+        # the read-ahead below would take that for ffmpeg reading
+        try:
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
+                                       SNDBUF)
+        except OSError:
+            pass
 
     def do_GET(self):
         P = self.proxy
@@ -372,7 +554,7 @@ class _Handler(BaseHTTPRequestHandler):
         """Bytes start..end to ffmpeg, in order, with pieces fetched ahead:
         more of them the more ffmpeg has read, and never more than
         ahead x piece bytes beyond what it has read (checked after every
-        1 MB handed on) -- that is all that is lost when it stops."""
+        block handed on) -- that is all that is lost when it stops."""
         P = self.proxy
         B = P.block
         st = {"pos": start, "nxt": lo + len(first), "read": 0}
@@ -381,12 +563,19 @@ class _Handler(BaseHTTPRequestHandler):
 
         def ahead():
             window = min(P.ahead * P.piece, max(B, 2 * st["read"] + B))
-            while (st["nxt"] < stop_at and len(pending) < P.ahead
-                   and st["nxt"] - st["pos"] < window):
+            lim = P.stop_for(src)
+            while st["nxt"] < stop_at and len(pending) < P.ahead:
                 nxt = st["nxt"]
-                size = min(P.piece, max(B, (window - max(0, nxt - st["pos"]))
+                # past the end of the part (the index says): one piece at a
+                # time, only as ffmpeg asks
+                w = window if lim is None or nxt < lim else B
+                if nxt - st["pos"] >= w:
+                    break
+                size = min(P.piece, max(B, (w - max(0, nxt - st["pos"]))
                                         // B * B))
                 hi = min(nxt + size, stop_at)
+                if lim is not None and nxt < lim:
+                    hi = min(hi, max(nxt + B, -(-lim // B) * B))
                 pending.append((nxt, P._pool.submit(P.run, src, nxt, hi)))
                 st["nxt"] = hi
 

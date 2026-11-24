@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -740,6 +741,12 @@ def _plan_part(url, per, info, live_st, part, say):
     per["live_from_start"] = False
     per["no_lyrics"] = True
     per["no_rerun"] = True              # see _download_part
+    if per.get("embed_subs"):
+        # inside the part they would keep the whole video's times (every
+        # line 57 s early in a part from 0:57); beside it they are cut to it
+        per["embed_subs"] = False
+        per["write_subs"] = True
+        say("  subtitles are saved beside the part, timed to it")
     t = per.get("template") or download.DEFAULT_TEMPLATE
     base = None
     if t.endswith(".%(ext)s"):
@@ -788,11 +795,11 @@ def _set_part(per, start, b, end, label_start=None, seek=None):
         per["template"] = base + f" ({part_label(ls, b)}).%(ext)s"
 
 
-def _part_space(per, info, a, end, say):
+def _part_space(per, info, a, end, say, ids=None):
     """Before a part: will what is left of it (A to END) fit on the disk,
     and in one file?"""
     folder = per.get("output_dir") or "."
-    est = parts.estimate_bytes(info, per.get("format_selector"),
+    est = parts.estimate_bytes(info, ids or per.get("format_selector"),
                                (end - a) if end else None)
     if not est:
         return
@@ -835,13 +842,87 @@ def _download_part(url, per, info, say, tag, on_file):
 
     fast = (rangeproxy.Proxy(on_wait=waiting) if rangeproxy.wanted(per)
             else None)
+    want_subs = bool(per.get("write_subs") or per.get("embed_subs"))
+    folder = per.get("output_dir") or "."
     try:
-        return _part_rounds(url, per, info, say, tag, on_file, fast)
+        before = set(os.listdir(folder))
+    except OSError:
+        before = set()
+    try:
+        files, err = _part_rounds(url, per, info, say, tag, on_file, fast)
+        if want_subs:
+            _part_subs(per, files, before, say)
+        return files, err
     finally:
         if fast is not None:
             fast.stop()
             if fast.requests:
                 say(f"  fast: {fast.summary()}")
+
+
+def _part_subs(per, files, before, say):
+    """After a part: yt-dlp's subtitles of the whole video (named after the
+    part's first file) get the video's plain name, NAME [id].en.vtt, and
+    every file of the part its own, cut to it (parts.cut_subtitles)."""
+    P = per["_part"]
+    vid = P.get("vid")
+    folder = per.get("output_dir") or "."
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    if not vid:
+        return
+    for n in names:
+        m = parts.SUB_PART_RE.search(n)
+        if not m or f"[{vid}]" not in n or n in before:
+            continue
+        src = os.path.join(folder, n)
+        dst = os.path.join(folder, n[:m.start()] + f".{m.group(10)}."
+                           f"{m.group(11)}")
+        try:
+            if os.path.exists(dst):
+                os.remove(src)
+            else:
+                os.replace(src, dst)
+        except OSError:
+            pass
+    starts = P.get("starts") or {}
+    made = []
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return
+    for path, _v in files:
+        name = os.path.basename(path)
+        m = parts.LABEL_RE.search(name)
+        lab = parts.parse_label(name)
+        if not m or not lab or m.group(11):          # unfinished: .part
+            continue
+        base, stem = name[:m.start()], name[:-len(lab[2])]
+        start = starts.get(path, lab[0])
+        length = lab[1] - start + 1 if lab[1] is not None else None
+        for w in names:
+            mm = re.fullmatch(re.escape(base) + r"\.([\w-]+)\.("
+                              + "|".join(parts.SUB_TEXT) + ")", w, re.I)
+            if not mm:
+                continue
+            out = os.path.join(folder, f"{stem}.{mm.group(1)}.{mm.group(2)}")
+            if os.path.exists(out):
+                continue
+            try:
+                with open(os.path.join(folder, w), encoding="utf-8",
+                          errors="replace") as fh:
+                    text = fh.read()
+                with open(out, "w", encoding="utf-8") as fh:
+                    fh.write(parts.cut_subtitles(text, mm.group(2), start,
+                                                 length))
+                made.append(out)
+            except OSError as e:
+                say(f"  ! could not cut the subtitles to the part ({e})")
+    if made:
+        say("  subtitles cut to the part: "
+            + ", ".join(os.path.basename(p) for p in made))
 
 
 def _fast_info(info, fast, say):
@@ -894,6 +975,11 @@ def _part_rounds(url, per, info, say, tag, on_file, fast):
                 info = fresh
         pos, used = (parts.continue_point(parts.coverage(folder, vid), a, end)
                      if vid else (a, []))
+        # which formats these are (bv*+ba/b does not say): their start,
+        # HLS or not, and the sound filter depend on it
+        ids = download.resolve_ids(info, per) or per.get("format_selector")
+        hls = any(parts.is_hls(f) for f in parts.chosen_formats(info, ids))
+        per["aac_fix"] = download.needs_aac_fix(info, ids)
         if end and pos >= end - 1:
             say("  already here, nothing to download: "
                 + ", ".join(os.path.basename(p) for p in used))
@@ -904,19 +990,27 @@ def _part_rounds(url, per, info, say, tag, on_file, fast):
                 return files, "the part is not getting any further"
         last = pos
         if rounds == 1:
-            _part_space(per, info, pos, end, say)
+            _part_space(per, info, pos, end, say, ids)
         start = a
         if pos > a + 1:
             start = max(a, pos - 2)      # a little overlap, never a gap
+            if hls:
+                start = max(a, start - parts.HLS_SLACK)
             say(f"  already here: {live.hms(a)} to {live.hms(pos)} ("
                 + ", ".join(os.path.basename(p) for p in used)
                 + f") -- fetching {live.hms(start)} on, into a new file")
-        key = parts.keyframe_before(info, per.get("format_selector"), start,
+        key = parts.keyframe_before(info, ids, start,
                                     live.ffmpeg_exe())
         if key is not None and start - key > 0.05:
-            say(f"  starts at the keyframe at {live.hms(key)} "
-                f"({start - key:.1f} s early), so the picture and sound line "
-                f"up from the first frame")
+            got = parts.chosen_formats(info, ids)
+            if not got or any((f.get("vcodec") or "none") != "none"
+                              for f in got):
+                say(f"  starts at the keyframe at {live.hms(key)} "
+                    f"({start - key:.1f} s early), so the picture and sound "
+                    f"line up from the first frame")
+            else:
+                say(f"  starts at {live.hms(key)} ({start - key:.1f} s early): "
+                    f"the sound can only be cut where its pieces begin")
         if key is not None:
             _set_part(per, start, b, end, label_start=key,
                       seek=round(key + parts.KEY_NUDGE, 3))
@@ -926,6 +1020,7 @@ def _part_rounds(url, per, info, say, tag, on_file, fast):
         if via:
             per["info_json"] = via
             fast.broken = None
+            fast.until = b               # no reading ahead past the part
         try:
             got, err = download.download(url, per, log=say, tag=tag,
                                          on_file=on_file)
@@ -963,14 +1058,20 @@ def _part_rounds(url, per, info, say, tag, on_file, fast):
         if err is None:
             done = got[-1][0] if got else None
             secs = parts.seconds(done) if done and os.path.exists(done) else None
-            cut = via and secs and fast.broken
+            cut = bool(via and secs and fast.broken)
             if cut:
                 # ffmpeg took a cut stream for its end and said "done"; the
                 # sound (fetched early) may run on, so the header's length
-                # says nothing about how far the picture got
-                secs = parts.played_seconds(done) or secs
-            if not end or not secs or secs + max(5.0, (end - ls) * 0.01) \
-                    >= end - ls:
+                # says nothing about how far the picture got. 0 is an answer:
+                # the picture's link refused at once, the sound alone came
+                # (found on real YouTube -- `or secs` took that for whole)
+                played = parts.played_seconds(done)
+                if played is not None:
+                    secs = played
+            if not end or secs is None or (not secs and not cut) \
+                    or secs + max(5.0, (end - ls) * 0.01) >= end - ls:
+                if done:
+                    P.setdefault("starts", {})[done] = ls
                 return files, None
             if cut and ls + secs <= pos + 1:
                 # cut off again before it got past what is already here
@@ -993,6 +1094,7 @@ def _part_rounds(url, per, info, say, tag, on_file, fast):
             except OSError:
                 new = done
             files[:] = [(new if p == done else p, v) for p, v in files]
+            P.setdefault("starts", {})[new] = ls
             if on_file and new != done:
                 on_file(new, vid)
             why = (f"the fast way was cut off: {fast.broken}" if cut

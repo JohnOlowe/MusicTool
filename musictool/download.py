@@ -386,7 +386,8 @@ def build_args(url, o):
         # was gigabytes of nothing. Fragmented, everything up to the last
         # whole piece (one keyframe, 2-5 s) plays -- see parts.py. Other
         # containers ignore the option (checked: matroska).
-        args += ["--downloader-args", "ffmpeg_o:" + FRAGMENTED]
+        args += ["--downloader-args", "ffmpeg_o:" + FRAGMENTED
+                 + (" " + AAC_FIX if o.get("aac_fix") else "")]
     args += ["--retries", str(o.get("retries", 5))]
     args += ["--fragment-retries", str(o.get("retries", 5))]
     # Without these a WiFi drop silently ruins a download made of pieces
@@ -465,6 +466,73 @@ def build_args(url, o):
 _RECONNECT = []
 
 FRAGMENTED = "-movflags +frag_keyframe+empty_moov+default_base_moof"
+
+# The sound of an HLS stream (in MPEG-TS pieces) is AAC with a header on
+# every frame (ADTS); an MP4 wants it without. ffmpeg would take the headers
+# off by itself, but only after it has written the file's header -- and with
+# empty_moov that is at once, so every part of such a stream failed: "Error
+# submitting a packet to the muxer: Operation not permitted", 300 KB, nothing
+# kept (measured, YouTube itag 301, when YouTube gave this machine only HLS).
+# Asked for up front, it works. Only for AAC: on Opus the filter is an error.
+AAC_FIX = "-bsf:a aac_adtstoasc"
+
+
+def resolve_ids(info, o, timeout=60):
+    """The format ids yt-dlp will download for this video ('401+251', '301'),
+    asked of yt-dlp itself, offline, from `info` (half a second) -- a part's
+    start, its HLS-ness and its sound filter all depend on which formats
+    they are, and a selector like bv*+ba/b does not say. Plain ids are
+    returned as they are. None when it cannot be told."""
+    sel = o.get("format_selector")
+    if sel and re.fullmatch(r"[\w-]+(\+[\w-]+)*", str(sel)):
+        return str(sel)
+    if not isinstance(info, dict) or not info.get("formats"):
+        return None
+    args = []
+    if sel:
+        args += ["-f", str(sel)]
+    else:
+        d = formats.audio_lang_selector(o.get("keep_video"), o.get("audio_lang"))
+        if d:
+            args += ["-f", d]
+    if not o.get("keep_video"):
+        args.append("-x")
+    if o.get("audio_multistreams"):
+        args.append("--audio-multistreams")
+    if o.get("video_multistreams"):
+        args.append("--video-multistreams")
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="musictool-sel-", suffix=".info.json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(info, fh)
+        r = cancel.run(ytdlp_cmd() + ["--load-info-json", path, "--simulate",
+                                      "--no-warnings", "--ignore-config",
+                                      "--print", "%(format_id)s"] + args,
+                       capture_output=True, text=True, errors="replace",
+                       timeout=timeout)
+    except Exception:                                        # noqa: BLE001
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    out = (r.stdout or "").strip().splitlines()
+    ids = out[-1].strip() if out and r.returncode == 0 else ""
+    return ids if re.fullmatch(r"[\w-]+(\+[\w-]+)*", ids) else None
+
+
+def needs_aac_fix(info, selector):
+    """Whether a part of this video, in these formats, needs AAC_FIX: some of
+    it comes over HLS and all its sound is AAC (parts.chosen_formats guesses
+    what an expression like bv*+ba/b picks)."""
+    from . import parts
+    chosen = parts.chosen_formats(info, selector)
+    sounds = [str(f.get("acodec")) for f in chosen
+              if (f.get("acodec") or "none") != "none"]
+    return (any(parts.is_hls(f) for f in chosen) and bool(sounds)
+            and all(a.startswith(("mp4a", "aac")) for a in sounds))
 
 # YouTube slows ONE open-ended request to about 2x real time -- measured on a
 # 1080p stream: 1:00 of video in 30 s. Asked for in 10 MB requests the same

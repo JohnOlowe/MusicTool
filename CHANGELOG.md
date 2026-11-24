@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — the window rebuilt: four tabs, Smart modes that learn, links recognised as you paste
+## `09fd28e` — the window rebuilt: four tabs, Smart modes that learn, links recognised as you paste
 *2026-11-24 · 1217 assertions*
 
 Asked for: a cleaner window with just four tabs, most of the rest moved into

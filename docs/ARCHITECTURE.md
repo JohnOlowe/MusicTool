@@ -36,8 +36,8 @@ button cannot drift away from what the same options do on the command line.
 | module | lines | responsibility |
 |---|---|---|
 | `cli.py` | 1859 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` for `get --range` |
-| `gui.py` | 2674 | tkinter GUI, 9 tabs, the log pane, the progress panel, the queue, Stop / Force stop |
-| `uicmd.py` | 675 | parser → widget specs, `build_argv`, intent modes, pane geometry |
+| `gui.py` | 3476 | tkinter GUI: 4 tabs, Smart + modes, foldable sections, the log pane, the progress panel, the queue, Stop / Force stop |
+| `uicmd.py` | 1280 | parser → widget specs, `build_argv`, modes, link recognition, learning, window fit, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
 | `download.py` | 899 | yt-dlp invocation (`runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size`), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
@@ -64,9 +64,9 @@ Functions worth knowing by name because they are load-bearing:
 - `formats.audio_tracks(rows, lang)` → `(tracks, note)` — the audio-only rows
   in one language (`"all"`/`"any"` = every language), original first, then by
   bitrate. Untagged tracks are kept with a note; a language the video lacks
-  gives `[]` and a note naming the ones it has. The Audio tracks tab and
-  `pair_with_audio`/`auto_pick(…, lang=, pinned=)` build on it, so the Quality
-  tab pairs video with audio in the right language, or with the pinned track.
+  gives `[]` and a note naming the ones it has. The Audio tracks section and
+  `pair_with_audio`/`auto_pick(…, lang=, pinned=)` build on it, so Quality &
+  size pairs video with audio in the right language, or with the pinned track.
 - `util.Http.json(url, …)` — every lyrics request. The response cache is keyed
   on method, URL, params **and body**; until 2026-11-18 a dict body was left
   out of the key, so every YouTube Music POST shared one entry and each song
@@ -75,7 +75,9 @@ Functions worth knowing by name because they are load-bearing:
   compact per-videoId result, `lrclib` passes `shrink=` to keep only the
   fields it reads. Entries written under the old key are dropped on load.
 - `download.probe(url, o)` — the `-J` read behind `check`, `formats`, the
-  quality/language picks and the Quality/Audio tracks tabs. It passes
+  quality/language picks, the Quality/Audio tracks sections and *Identify
+  online* (`uicmd.refine_kind` reads its `live_status`, duration, shape and
+  categories). It passes
   `--ignore-no-formats-error` (so a failed JS challenge returns the info with
   only storyboards instead of dying in format selection) and keeps yt-dlp's
   warnings in `info["_warnings"]`; `download.no_media_reason(info)` turns
@@ -140,36 +142,74 @@ writing:
 Consequences you have to respect:
 
 - **A clipped-off widget counts as a missing option.** The maintainer's display
-  is ~1600×720. `OptionsPane` folds rarely-used rows behind a *More options*
-  disclosure; a fresh Download pane shows 11 of 42 (31 folded). Folding is by
+  is ~1600×720. The window is sized from the display (`uicmd.fit_window`) and
+  held within it (`maxsize`). Download's long tail sits in the folded *More
+  options* section, and inside it `OptionsPane` folds rarely-used rows again
+  (`pinned=("output_dir",)` keeps Save to out of it: it is on the tab). Folding is by
   "non-empty or changed" — folding by "differs from default" showed 1 of the then-41
   rows, which is not a UI, it is a hiding place.
 - **Nothing in a worker thread touches a widget.** `gui.worker` puts events on
   a queue; `pump()` on the main thread drains it every 120 ms. A swallowed
   `AttributeError` in a worker thread looks exactly like a frozen UI.
-- **`pump()` reschedules itself before it does any work** (`gui.py:538`). If it
+- **`pump()` reschedules itself before it does any work** (`def pump` in
+  `run()`). If it
   reschedules last, one bad event stops the reschedule and freezes the log and
   progress bar for the rest of the session.
 - **`log(msg)` adds the newline if the message lacks one.** GUI-side notes
   used to run together on one line; text arriving from `QueueStream` (the CLI's
   own output) already ends in newlines and is unchanged.
-- **The Audio tracks tab shares state with the Quality tab.** It uses the same
-  URL box and the same loaded format rows (`q_load`). Pinning a track stores
+- **The Audio tracks section shares state with Quality & size.** It uses the
+  same URL field (which follows the first link in the box until you type your
+  own) and the same loaded format rows (`q_load`). Pinning a track stores
   it per URL (`q_pinned`); loading a different URL clears it. Picking a real
-  language writes the Download tab's `audio_lang`; "all" does not.
-- **Every tab body is a `ScrollArea`** with a pinned path row above a scrolling
-  body, and the mouse wheel is bound with `bind_all` plus an ancestry filter
-  (`_over_me`) so scrolling works regardless of focus.
+  language writes `audio_lang`; "all" does not.
+- **Download, Library and Settings are each one `ScrollArea`**; Report's tree
+  scrolls itself. The run buttons are pinned below the area. The mouse wheel
+  is bound with `bind_all` plus an ancestry filter (`_over_me`) so scrolling
+  works regardless of focus. `ScrollArea.relayout()` (on every resize, after
+  idle) re-wraps long labels to the width the *canvas* shows — measuring
+  against the label's parent would let a wide label hold its parent wide —
+  lays out rows registered with `flow(row)` onto more lines when narrow, and
+  shows the horizontal bar only if something still does not fit. The mode
+  buttons reflow from 5 columns down to 2 the same way.
+- **`Section`** is a foldable block (a `Section.Toolbutton` checkbutton header
+  with ▸/▾, title and a one-line blurb); which are open is saved as
+  `gui_extra.open_sections`.
 - **Pane geometry is computed, not guessed:**
-  `uicmd.pane_split(total, log_frac=0.34, min_top=170, min_log=90)`, and the
+  `uicmd.pane_split(total, log_frac=0.25, min_top=170, min_log=140)`;
+  `split_heights(window_h)` gives the heights the panes ask for so the first
+  frame is already split right; on every resize the sash is placed again,
+  *after idle* (the PanedWindow shares a resize out after the `<Configure>`
+  handler, which would move a sash placed in it), until you move it yourself.
+  The
   progress pane width is persisted as `progress_width` with a 300 px floor and
   a `BARS_MIN = 160` minimum so the bars can never be dragged out of view.
 
-### Intent modes
+### Modes, Smart, and what a link is
 
-Checkboxes are driven by intent, not by the user. `uicmd.MODE_VALUES` holds a
-dict per mode (`music_single`, `music_playlist`, `video_single`,
-`video_playlist`) and `apply_mode` writes those values into the option widgets.
+Checkboxes are driven by intent, not by the user. `uicmd.MODES` has nine —
+`song`, `album`, `music_video`, `video`, `short`, `podcast`,
+`video_playlist`, `channel`, `live` — and `uicmd.MODE_VALUES` a dict per mode
+that `OptionsPane.apply` writes into the option widgets. Each mode has an
+icon, a label, a summary, a button text, a *what* (audio/video) and a
+*scope* (single/playlist); `mode_switch(mode, scope=)` moves along one axis.
+The old four names (`music_single` …) are read through `MODE_ALIASES` /
+`canonical_mode`, so old settings files keep working.
+
+`classify_link(url)` names a link from the link alone (`LINK_KINDS`: kind →
+label, icon, mode, plural); `classify_links(urls, refined)` sums several up
+and picks the mode for the lot; `extract_links` / `stray_lines` read a pasted
+message. `refine_kind(kind, info)` improves the answer from a `probe`.
+
+`smart_plan(links, store, learn_on, chosen, last)` → `{mode, values, learned,
+why}` is the one decision. With Smart chosen, the mode is the link's — or
+your habit for that kind of link (`favourite_mode`); a mode you chose is
+obeyed. Values are the mode's, plus the settings you made a habit of for
+that mode (`learned_values`, only `LEARNABLE` keys). `learn(store, kind, mode,
+values)` returns a new store (it does not change the one passed in) keeping
+the last `LEARN_KEEP` = 10 per kind and per setting; `favourite` needs a
+majority and at least two picks. The store is `config["learned"]`. With no
+link, Smart keeps `last` and says it is waiting.
 
 **A blank in `MODE_VALUES` means "no opinion", and only the three keys in
 `MODE_RESET` may ever be cleared by a mode switch:**

@@ -1,20 +1,38 @@
 """Tkinter GUI.
 
+Layout -- four tabs:
+  * Download: one link box that recognises what you pasted (a song, an album,
+    a Short, a live stream, a channel...), a row of modes with Smart first,
+    and below them, folded away until wanted, the quality picker, the audio
+    tracks, the live-stream tools and the full option list.
+  * Library: the songs you already have -- fix lyrics, scan for duplicates,
+    move lyrics in and out of .lrc files -- on one folder and one file list.
+  * Report: the last lyrics report, as a tree.
+  * Settings: what Smart has learned, the window, lyrics sources, saved
+    defaults and the environment check.
+
 Design notes:
   * Option widgets are generated from the argparse parser, so every CLI flag is
     present here automatically -- adding a flag to cli.py adds a widget.
-  * The most-used toggles are shown a second time in a "quick options" strip
-    bound to the SAME variables as the generated widgets. It is another view of
-    them, not a copy, so the two cannot disagree.
+  * The most-used toggles are shown a second time in a "fine-tune" / "quick
+    options" strip bound to the SAME variables as the generated widgets. It is
+    another view of them, not a copy, so the two cannot disagree. The Save to
+    field on the Download tab is the same kind of second view.
+  * Smart mode reads the link (uicmd.classify_links), picks the mode that kind
+    of link wants -- or the one you pick for it most often -- and applies the
+    values you have made a habit of for that mode (uicmd.smart_plan). It only
+    learns from runs you start.
   * Running a job builds the exact argv the CLI would receive and calls
     cli.main(argv), with stdout/stderr redirected into the log pane. There is no
     second implementation of the options to drift out of sync.
-  * Tabs and log live in a vertical PanedWindow, so the log can be dragged to
-    any height (or resized with the buttons above it).
+  * Tabs and log live in a vertical PanedWindow. The sash is placed from the
+    real height on every resize until you move it yourself, so the log opens
+    at a quarter of the window instead of wherever an unmapped window put it.
+  * The window is sized from the screen (uicmd.fit_window): 1080x720 where it
+    fits, never larger than the display, centred, with the taskbar kept clear.
   * Each tab's body is a ScrollArea: one scrollbar pair for everything on the
     tab, so a short or narrow window can never push a control out of reach.
-    The path field, the quick options and the run buttons are pinned outside
-    it, so those stay on screen while the rest scrolls.
+    The run buttons are pinned outside it, so they stay on screen.
   * tkinter is imported at module level on purpose: if it is missing (common on
     Termux) the ImportError surfaces when cli.py imports this module, so the CLI
     can print install instructions instead of a traceback.
@@ -108,6 +126,10 @@ class ScrollArea(ttk.Frame):
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.vsb.grid(row=0, column=1, sticky="ns")
         self.hsb.grid(row=1, column=0, sticky="ew")
+        self.hsb.grid_remove()          # shown again only if it is needed
+        self._wraps = {}                # label -> the widest it was designed for
+        self._flows = {}                # row frame -> [groups], last width
+        self._queued = False
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         for seq in WHEEL:
@@ -115,11 +137,163 @@ class ScrollArea(ttk.Frame):
 
     def _region(self):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._queue()
 
     def _fit(self, ev):
         self.canvas.itemconfigure(
             self._win, width=max(ev.width, self.frame.winfo_reqwidth()))
         self._region()
+
+    def _queue(self):
+        if not self._queued:
+            self._queued = True
+            try:
+                self.after_idle(self.relayout)
+            except Exception:                                # noqa: BLE001
+                self._queued = False
+
+    @staticmethod
+    def _px(v):
+        try:
+            return int(float(str(v).strip() or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _labels(self, w):
+        for c in w.winfo_children():
+            if isinstance(c, ttk.Label):
+                yield c
+            yield from self._labels(c)
+
+    @staticmethod
+    def _pads(info):
+        v = info.get("padx", 0)
+        try:
+            if isinstance(v, (tuple, list)):
+                return int(v[0]), int(v[-1])
+            parts = str(v).split()
+            return int(parts[0]), int(parts[-1])
+        except (TypeError, ValueError, IndexError):
+            return 0, 0
+
+    def flow(self, row):
+        """Let a row of side-by-side widgets wrap onto more lines when the
+        area is too narrow for it (a 1024px screen), instead of pushing the
+        whole tab sideways. A label stays with the field after it; buttons
+        packed to the right go last. Does nothing where it cannot work."""
+        try:
+            kids = list(row.pack_slaves())
+            if len(kids) < 2:
+                return
+            lefts, rights = [], []
+            for k in kids:
+                info = k.pack_info()
+                (rights if info.get("side") == "right" else lefts).append(
+                    (k, self._pads(info)))
+            items = lefts + rights[::-1]
+            groups, i = [], 0
+            while i < len(items):
+                k, _p = items[i]
+                if (isinstance(k, ttk.Label) and i + 1 < len(items)
+                        and not isinstance(items[i + 1][0],
+                                           (ttk.Label, ttk.Button))):
+                    groups.append(items[i:i + 2])
+                    i += 2
+                else:
+                    groups.append(items[i:i + 1])
+                    i += 1
+            for k, _p in items:
+                k.pack_forget()
+            self._flows[row] = [groups, None]
+            self._flow_one(row, 100000)
+        except Exception:                                    # noqa: BLE001
+            return
+
+    def _flow_one(self, row, room):
+        groups, last = self._flows[row]
+        if last == room:
+            return
+        self._flows[row][1] = room
+        lines, line, used = [], [], 0
+        for g in groups:
+            gw = sum(int(k.winfo_reqwidth()) + a + b for k, (a, b) in g)
+            if line and used + gw > room:
+                lines.append(line)
+                line, used = [], 0
+            line.append(g)
+            used += gw
+        if line:
+            lines.append(line)
+        y, widest = 0, 0
+        for line in lines:
+            h = max(int(k.winfo_reqheight()) for g in line for k, _p in g)
+            x = 0
+            for g in line:
+                for k, (a, b) in g:
+                    kh = int(k.winfo_reqheight())
+                    k.place(in_=row, x=x + a, y=y + (h - kh) // 2)
+                    x += a + int(k.winfo_reqwidth()) + b
+            widest = max(widest, x)
+            y += h + 4
+        # placed widgets do not size their frame: ask for the height only,
+        # and no width at all, so the row can never hold the tab wide
+        row.configure(height=max(y - 4, 1), width=1)
+
+    def relayout(self):
+        """Re-wrap every long label to the width the canvas really shows
+        (measured from where the label starts, never wider than it was
+        designed for), then size the inner frame to the canvas and show the
+        horizontal bar only when something still does not fit. Measuring
+        against the canvas, not the label's parent, is what lets a too-wide
+        row shrink back instead of holding its parent wide."""
+        self._queued = False
+        try:
+            view = int(self.canvas.winfo_width())
+            left = int(self.canvas.winfo_rootx())
+        except Exception:                                    # noqa: BLE001
+            return
+        if view < 50:
+            return
+        _px = self._px
+        for lab in self._labels(self.frame):
+            try:
+                if lab not in self._wraps:
+                    want = _px(lab.cget("wraplength"))
+                    if want <= 0 and lab.winfo_reqwidth() > 300:
+                        # a long one-line hint beside other widgets: it may
+                        # wrap too, never wider than it naturally is
+                        want = int(lab.winfo_reqwidth()) + 2
+                        try:
+                            lab.configure(justify="left")
+                        except Exception:                    # noqa: BLE001
+                            pass
+                    if want < 200:
+                        continue
+                    self._wraps[lab] = want
+                if not lab.winfo_ismapped():
+                    continue
+                room = view - (int(lab.winfo_rootx()) - left) - 16
+                wrap = max(200, min(self._wraps[lab], room))
+                if _px(lab.cget("wraplength")) != wrap:
+                    lab.configure(wraplength=wrap)
+            except Exception:                                # noqa: BLE001
+                continue
+        for row in list(self._flows):
+            try:
+                if row.winfo_ismapped():
+                    self._flow_one(row, max(
+                        160, view - (int(row.winfo_rootx()) - left) - 16))
+            except Exception:                                # noqa: BLE001
+                continue
+        try:
+            need = int(self.frame.winfo_reqwidth())
+            self.canvas.itemconfigure(self._win, width=max(view, need))
+            if need > view + 2:
+                self.hsb.grid()
+            else:
+                self.hsb.grid_remove()
+        except Exception:                                    # noqa: BLE001
+            pass
 
     def _over_me(self, w):
         """Is w inside this area? Stops at any widget that scrolls itself."""
@@ -172,9 +346,12 @@ class OptionsPane(ttk.Frame):
 
     COLUMNS = 2
 
-    def __init__(self, parent, sub, cfg, on_change=None, saved=None):
+    def __init__(self, parent, sub, cfg, on_change=None, saved=None,
+                 pinned=()):
         super().__init__(parent)
         self.sub = sub
+        # shown on the tab already (Save to): kept out of the fold
+        self.pinned = set(pinned or ())
         self.vars = {}
         self.on_change = on_change
         self.saved = dict(saved or {})
@@ -255,6 +432,8 @@ class OptionsPane(ttk.Frame):
             return False
         if dest in getattr(self, "_quick_dests", ()):
             return False            # already on the fine-tune strip
+        if dest in getattr(self, "pinned", ()):
+            return False            # already on the tab (Save to)
         want = spec["default"]
         if isinstance(v, tk.BooleanVar):
             return bool(v.get()) != bool(want)
@@ -271,10 +450,15 @@ class OptionsPane(ttk.Frame):
         rest sit behind one button -- reachable, but not filling the window.
         """
         shown = hidden = 0
+        small = sum(len(r) for _b, r in self._groups) <= 4
+        if small:
+            # a handful of options needs no fold, nor a button for one
+            self._all_btn.master.pack_forget()
         for _box, rows in self._groups:
             n = 0
             for dest, cell, spec, gopts in rows:
-                if self.show_all.get() or self._worth_showing(dest, spec):
+                if small or self.show_all.get() or \
+                        self._worth_showing(dest, spec):
                     row, col = divmod(n, self.COLUMNS)
                     cell.grid(row=row, column=col, **gopts)
                     n += 1
@@ -526,12 +710,137 @@ class FilePicker(ttk.Frame):
         return uicmd.pick_paths(self.rows, self.root)
 
 
+class Section(ttk.Frame):
+    """A block of the Download tab that folds away behind its title.
+
+    Quality, audio tracks, live streams and the full option list used to be
+    tabs of their own, away from the link they act on. Here they sit under
+    it, closed until wanted, so the tab opens short and nothing is more than
+    one click away. The header is a toggle button: ▸ closed, ▾ open.
+    """
+
+    def __init__(self, parent, key, title, blurb="", opened=False,
+                 on_toggle=None):
+        super().__init__(parent)
+        self.key, self.title, self.blurb = key, title, blurb
+        self.on_toggle = on_toggle
+        self.var = tk.BooleanVar(value=bool(opened))
+        self.header = ttk.Checkbutton(self, variable=self.var,
+                                      style="Section.Toolbutton",
+                                      command=self._flip)
+        self.header.pack(fill="x")
+        self.body = ttk.Frame(self)
+        self._show()
+
+    def _label(self):
+        arrow = "\u25be" if self.var.get() else "\u25b8"
+        return f"{arrow}  {self.title}" + (
+            f"     \u2014  {self.blurb}" if self.blurb else "")
+
+    def _show(self):
+        self.header.configure(text=self._label())
+        if self.var.get():
+            self.body.pack(fill="x", padx=(14, 0), pady=(2, 8))
+        else:
+            self.body.pack_forget()
+
+    def _flip(self):
+        self._show()
+        if self.on_toggle:
+            self.on_toggle()
+
+    def open(self):
+        if not self.var.get():
+            self.var.set(True)
+            self._flip()
+
+    def close(self):
+        if self.var.get():
+            self.var.set(False)
+            self._flip()
+
+    def is_open(self):
+        return bool(self.var.get())
+
+
+def _screen(root, which):
+    """The display's width or height in pixels, or 0 when it will not say."""
+    try:
+        return int(getattr(root, f"winfo_screen{which}")())
+    except Exception:                                        # noqa: BLE001
+        return 0
+
+
+def _font(root, delta=0, bold=False):
+    """The default UI font, bigger or bold. A literal family name would be
+    replaced by Tk's fallback (often not the system font) on Windows."""
+    fam, size = "TkDefaultFont", 9
+    try:
+        from tkinter import font as tkfont
+        f = tkfont.nametofont("TkDefaultFont", root=root).actual()
+        fam, size = f["family"], abs(int(f["size"])) or 9
+    except Exception:                                        # noqa: BLE001
+        pass
+    return (fam, size + delta, "bold" if bold else "normal")
+
+
+def _styles(root):
+    """The few named styles the window uses. Fonts and padding only, which
+    every ttk theme honours (colours on buttons do not survive 'vista')."""
+    try:
+        style = ttk.Style()
+    except Exception:                                        # noqa: BLE001
+        return
+    for name, kw in (
+            ("Accent.TButton", {"font": _font(root, 1, True),
+                                "padding": (16, 6)}),
+            ("Section.Toolbutton", {"font": _font(root, 0, True),
+                                    "anchor": "w", "padding": (8, 5)}),
+            ("Mode.Toolbutton", {"padding": (6, 5), "anchor": "w"}),
+            ("Detect.TLabel", {"font": _font(root, 1, True),
+                               "foreground": "#0b5394"}),
+            ("Icon.TLabel", {"font": _font(root, 7), "foreground": "#0b5394"}),
+            ("Title.TLabel", {"font": _font(root, 4, True)}),
+            ("Card.TLabelframe.Label", {"font": _font(root, 0, True)})):
+        try:
+            style.configure(name, **kw)
+        except Exception:                                    # noqa: BLE001
+            pass
+    try:        # the chosen mode / job reads as chosen on themes that allow it
+        style.map("Mode.Toolbutton",
+                  background=[("selected", "#cfe2f3"), ("active", "#e6eef7")],
+                  foreground=[("selected", "#0b3d6e")])
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def _wrap_with(label, container, margin=24, least=240):
+    """Re-wrap a label to the width it really has, so a narrow window
+    folds the text instead of cutting it off."""
+    def fit(ev):
+        try:
+            label.configure(wraplength=max(least, int(ev.width) - margin))
+        except Exception:                                    # noqa: BLE001
+            pass
+    container.bind("<Configure>", fit, add="+")
+
+
 def run():
     cfg = configmod.load()
     root = tk.Tk()
-    root.title("musictool — download & lyrics")
-    root.geometry("1080x800")
-    root.minsize(780, 520)
+    root.title("MusicTool \u2014 download, lyrics & live streams")
+    # Sized from the screen it opens on: 1080x720 where that fits (90% of the
+    # old 800px height), less on a small display, centred, the taskbar kept
+    # clear -- and it can never be dragged larger than the display either.
+    fit = uicmd.fit_window(_screen(root, "width"), _screen(root, "height"))
+    root.geometry(fit["geometry"])
+    root.minsize(fit["min_w"], fit["min_h"])
+    if _screen(root, "width") and _screen(root, "height"):
+        try:        # never larger than the display, taskbar kept clear
+            root.maxsize(fit["max_w"], fit["max_h"])
+        except Exception:                                    # noqa: BLE001
+            pass
+    _styles(root)
     q = queue.Queue()
     # Progress events come from the worker thread. Tkinter is not thread-safe,
     # so the hook only ever does pq.put(...) -- the same main-thread pump that
@@ -779,21 +1088,26 @@ def run():
     split = tk.PanedWindow(root, orient="vertical", sashwidth=9,
                            sashrelief="raised", bg="#b8b8b8", opaqueresize=True,
                            borderwidth=0)
-    split.pack(fill="both", expand=True, padx=8, pady=8)
+    split.pack(fill="both", expand=True, padx=8, pady=(6, 4))
 
+    # Ask for the split we want from the very first frame: the tabs get three
+    # quarters of the window, the log the rest. (The log used to ask for the
+    # *tabs'* height, so it opened covering most of the window.)
+    _top_h, _log_h = uicmd.split_heights(fit["h"])
     nb = ttk.Notebook(root)
-    split.add(nb, minsize=170, stretch="always")
+    split.add(nb, minsize=170, stretch="always", height=_top_h)
 
     history_values = uicmd.recent_paths(cfg)
     url_history_values = uicmd.recent_paths(cfg, key="recent_urls")
     panes = {}
     areas = {}
+    sections = {}
     # Everything you set in the window last time, keyed by tab. Restored below
     # into the widgets themselves, and rewritten whenever anything moves, so a
     # restart is never a form to fill in again.
     SAVED = dict(cfg.get("gui_opts") or {})
     EXTRA = dict(cfg.get("gui_extra") or {})
-    live_state = {}         # the Live streams tab's fields, once it exists
+    live_state = {}         # the live-stream fields, once they exist
     run_buttons = []
     # Buttons that must stay clickable mid-run, because clicking one now means
     # "do this next" rather than "start a second download".
@@ -812,10 +1126,16 @@ def run():
         try:
             opts = {sub: dict(pane.values()) for sub, pane in panes.items()}
             extra = {"urls": urls.get("1.0", "end").strip(),
-                     "download_mode": current_mode(),
-                     "more_options": bool(adv_open.get()),
+                     "download_mode": modevar.get(),
+                     "options_touched": bool(user_touched["v"]),
+                     "more_options": sections["options"].is_open(),
+                     "open_sections": [k for k, s in sections.items()
+                                       if s.is_open()],
                      "list_audio": bool(list_audio.get()),
-                     "show_all_options": bool(panes["get"].show_all.get())}
+                     "show_all_options": bool(panes["get"].show_all.get()),
+                     "library_task": lib_task.get(),
+                     "smart_learn": bool(learn_on.get()),
+                     "smart_lookup": bool(lookup_on.get())}
             extra.update({k: v.get() for k, v in live_state.items()})
             configmod.remember(gui_opts=opts, gui_extra=extra)
         except Exception as e:                                 # noqa: BLE001
@@ -869,178 +1189,469 @@ def run():
         return _after
 
     # ================================================== Download tab
+    # Everything that starts from a link lives here: the link box, the mode,
+    # and -- folded away until wanted -- the quality picker, the audio tracks,
+    # the live-stream tools and the full option list. ONE scrolling surface,
+    # so the wheel scrolls the tab wherever the pointer is; only the run
+    # buttons are pinned.
     dl = ttk.Frame(nb)
     nb.add(dl, text="  Download  ")
-    # ONE scrolling surface for the whole tab. The URL box, the mode, the
-    # fine-tune strip and the full option list all live inside it, so the wheel
-    # scrolls the tab wherever the pointer is -- you do not have to aim at the
-    # options first -- and the part above "More options" moves with the part
-    # below it instead of staying stuck. Only the run buttons are pinned.
     areas["get"] = ScrollArea(dl)
     body = areas["get"].frame
-    ttk.Label(body, text="URL(s), one per line — video or playlist:").pack(
-        anchor="w", padx=8, pady=(8, 2))
-    urls = tk.Text(body, height=3)
-    urls.pack(fill="x", padx=8)
-    ucb = ttk.Combobox(body, values=url_history_values, state="readonly", width=70)
-    ucb.pack(fill="x", padx=8, pady=2)
-    ucb.bind("<<ComboboxSelected>>", lambda e: urls.insert("end", ucb.get() + "\n"))
-    url_combos.append(ucb)
-    ttk.Label(body, text="↑ recently used URLs (select to insert)",
-              foreground="#888").pack(anchor="w", padx=8)
+    _open0 = set(EXTRA.get("open_sections") or [])
+    if EXTRA.get("more_options"):
+        _open0.add("options")
 
-    # ================================================= the mode
-    # Two questions decide nine checkboxes, so ask those two and set the rest.
-    # "Music or video" and "one item or a playlist" are shown as a grid because
-    # they are independent: every combination is a mode that already exists.
-    user_touched = {"v": False}
+    def section(key, title, blurb):
+        s = Section(body, key, title, blurb, opened=key in _open0,
+                    on_toggle=lambda: remember_soon())
+        sections[key] = s
+        return s
+
+    # Made now, packed further down: the option list has to exist before the
+    # mode card can show its Save to field (the same variable).
+    section("quality", "Quality & size",
+            "every quality with its real file size; pick one or let it choose")
+    section("audio", "Audio tracks",
+            "a dubbed video? see each spoken language and take the exact track")
+    section("live", "Live stream & chat",
+            "record from the start, watch so far, download a part, chat as "
+            "subtitles")
+    section("options", "All download options",
+            "cookies, proxy, speed limit, subtitles, file names, retries\u2026")
+    section("repair", "Files you already have",
+            "put the right spoken language into videos already downloaded")
+
+    # ---- 1. the link
+    linkf = ttk.LabelFrame(body, text="  1 \u00b7 Paste links  ",
+                           style="Card.TLabelframe")
+    linkf.pack(fill="x", padx=8, pady=(8, 4))
+    urls = tk.Text(linkf, height=3, wrap="none", undo=True)
+    urls.pack(fill="x", padx=6, pady=(4, 2))
+    _ur = ttk.Frame(linkf)
+    _ur.pack(fill="x", padx=6, pady=(0, 2))
+    ttk.Button(_ur, text="Paste", width=7,
+               command=lambda: paste_links()).pack(side="left")
+    ttk.Button(_ur, text="Clear", width=7,
+               command=lambda: clear_links()).pack(side="left", padx=(4, 12))
+    ttk.Label(_ur, text="recent:", foreground="#777").pack(side="left")
+    ucb = ttk.Combobox(_ur, values=url_history_values, state="readonly", width=60)
+    ucb.pack(side="left", fill="x", expand=True, padx=(4, 0))
+    ucb.bind("<<ComboboxSelected>>", lambda e: add_link(ucb.get()))
+    url_combos.append(ucb)
+    _dr = ttk.Frame(linkf)
+    _dr.pack(fill="x", padx=6, pady=(2, 2))
+    kind_icon = tk.StringVar(value="")
+    kind_text = tk.StringVar(value="")
+    kind_warn = tk.StringVar(value="")
+    ttk.Label(_dr, textvariable=kind_icon, style="Icon.TLabel",
+              width=2, anchor="center").pack(side="left")
+    _kl = ttk.Label(_dr, textvariable=kind_text, style="Detect.TLabel",
+                    wraplength=720, justify="left")
+    _kl.pack(side="left", padx=(4, 8), fill="x", expand=True)
+    bident = ttk.Button(_dr, text="Identify online", command=lambda: identify())
+    bident.pack(side="right")
+    _kw = ttk.Label(linkf, textvariable=kind_warn, foreground="#b45f06",
+                    wraplength=900, justify="left")
+    _kw.pack(anchor="w", padx=8, pady=(0, 4))
+    _wrap_with(_kl, linkf, margin=190)
+    _wrap_with(_kw, linkf)
+
+    # ---- 2. the mode
+    # Smart first: it reads the link and sets everything up. The rest are the
+    # modes it chooses between, there to be picked by hand when you know
+    # better -- and Smart notices which one you pick for which kind of link.
+    user_touched = {"v": bool(EXTRA.get("options_touched"))}
 
     def on_options_changed():
         user_touched["v"] = True
         describe_mode()
         remember_soon()
 
-    whatvar = tk.StringVar(value="music")
-    scopevar = tk.StringVar(value="single")
+    panes["get"] = OptionsPane(sections["options"].body, "get", cfg,
+                               on_change=on_options_changed,
+                               saved=SAVED.get("get"), pinned=("output_dir",))
+    panes["get"].pack(fill="x")
+
+    modef = ttk.LabelFrame(body, text="  2 \u00b7 How to download it  ",
+                           style="Card.TLabelframe")
+    modef.pack(fill="x", padx=8, pady=4)
+    modevar = tk.StringVar(value=uicmd.canonical_mode(EXTRA.get("download_mode")))
+    learn_on = tk.BooleanVar(value=EXTRA.get("smart_learn") is not False)
+    lookup_on = tk.BooleanVar(value=bool(EXTRA.get("smart_lookup")))
+    _mg = ttk.Frame(modef)
+    _mg.pack(fill="x", padx=6, pady=(4, 2))
+    mode_radios = []
+    for m in (uicmd.SMART,) + uicmd.MODES:
+        mode_radios.append(ttk.Radiobutton(
+            _mg, text=uicmd.mode_title(m), value=m, variable=modevar,
+            style="Mode.Toolbutton", command=lambda: mode_picked()))
+    mode_cols = {"n": 0}
+
+    def flow_modes(cols):
+        """Lay the ten mode buttons out in `cols` columns (5 on a normal
+        window, fewer on a narrow one, so none is ever cut off)."""
+        cols = max(2, min(5, int(cols)))
+        if cols == mode_cols["n"]:
+            return
+        mode_cols["n"] = cols
+        for i, rb in enumerate(mode_radios):
+            r, c = divmod(i, cols)
+            rb.grid(row=r, column=c, sticky="we", padx=2, pady=2)
+        for c in range(5):
+            _mg.grid_columnconfigure(c, weight=1 if c < cols else 0,
+                                     uniform="modes" if c < cols else "")
+    flow_modes(5)
+
+    def _modes_fit(ev):
+        try:
+            widest = max(int(rb.winfo_reqwidth()) for rb in mode_radios) + 6
+        except Exception:                                    # noqa: BLE001
+            widest = 200
+        flow_modes((int(ev.width) - 48) // max(widest, 120))
+    body.master.bind("<Configure>", _modes_fit, add="+")
     mode_desc = tk.StringVar(value="")
+    learned_txt = tk.StringVar(value="")
+    _md = ttk.Label(modef, textvariable=mode_desc, foreground="#06a",
+                    wraplength=960, justify="left")
+    _md.pack(anchor="w", padx=8, pady=(4, 0))
+    _ml = ttk.Label(modef, textvariable=learned_txt, foreground="#0a6",
+                    wraplength=960, justify="left")
+    _ml.pack(anchor="w", padx=8)
+    _wrap_with(_md, modef)
+    _wrap_with(_ml, modef)
+    _so = ttk.Frame(modef)
+    _so.pack(fill="x", padx=6, pady=(4, 6))
+    ttk.Label(_so, text="Save to:").pack(side="left")
+    outvar = panes["get"].vars["output_dir"]
+    _ocb = ttk.Combobox(_so, textvariable=outvar, values=history_values,
+                        width=50)
+    _ocb.pack(side="left", padx=6, fill="x", expand=True)
+    path_combos.append(_ocb)
+    ttk.Button(_so, text="Browse...", command=lambda: (
+        panes["get"].browse(outvar, "dir"), describe_mode(),
+        remember_soon())).pack(side="left")
+    ttk.Button(_so, text="Open", width=6,
+               command=lambda: open_out()).pack(side="left", padx=(4, 0))
 
-    mbox = ttk.LabelFrame(body, text="what are you downloading?")
-    mbox.pack(fill="x", padx=8, pady=(4, 2))
-    _wr = ttk.Frame(mbox)
-    _wr.pack(fill="x", padx=6, pady=(2, 0))
-    for val, txt in (("music", "Music  (audio + lyrics)"),
-                     ("video", "Video  (keep the picture)")):
-        ttk.Radiobutton(_wr, text=txt, value=val, variable=whatvar,
-                        command=lambda: mode_picked()).pack(side="left", padx=6)
-    _sr = ttk.Frame(mbox)
-    _sr.pack(fill="x", padx=6, pady=(0, 2))
-    for val, txt in (("single", "One item"),
-                     ("playlist", "A whole playlist")):
-        ttk.Radiobutton(_sr, text=txt, value=val, variable=scopevar,
-                        command=lambda: mode_picked()).pack(side="left", padx=6)
-    ttk.Label(body, textvariable=mode_desc, foreground="#06a",
-              wraplength=900, justify="left").pack(anchor="w", padx=10)
-
-    panes["get"] = OptionsPane(body, "get", cfg, on_change=on_options_changed,
-                               saved=SAVED.get("get"))
-    # The handful of toggles worth seeing stay on the tab; the long tail of
-    # options (cookies, proxy, speed, retries, subtitle languages) hides behind
-    # one checkbox, because a mode has already set all of it sensibly.
+    # ---- 3. the toggles worth seeing, then the folded sections
     quickbar = ttk.Frame(body)
     quickbar.pack(fill="x", padx=8)
     panes["get"].quick_row(quickbar, text="fine-tune")
-    adv_open = tk.BooleanVar(value=bool(EXTRA.get("more_options")))
-    ttk.Checkbutton(
-        body, text="More options  (cookies, proxy, speed limit, subtitles, "
-                   "retries, filename template\u2026)",
-        variable=adv_open, command=lambda: toggle_adv()).pack(anchor="w", padx=8)
+    for _k in ("quality", "audio", "live", "options", "repair"):
+        sections[_k].pack(fill="x", padx=8, pady=(3, 0))
+    ttk.Frame(body, height=8).pack(fill="x")
 
-    def toggle_adv():
-        if adv_open.get():
-            panes["get"].pack(fill="x")
-        else:
-            panes["get"].pack_forget()
+    # ---- the files-you-have section: the spoken-language repair
+    _rb = sections["repair"].body
+    _rl = ttk.Label(_rb, foreground="#555", justify="left", wraplength=900,
+                    text=("A video that came down in the wrong spoken language "
+                          "does not need downloading again: only its audio is "
+                          "fetched (tens of MB, not the hundreds the video "
+                          "cost) and swapped in, keeping the picture, the "
+                          "cover and the chapters. It works on the Save to "
+                          "folder."))
+    _rl.pack(anchor="w", padx=6, pady=(4, 2))
+    _wrap_with(_rl, _rb)
+    _rr = ttk.Frame(_rb)
+    _rr.pack(fill="x", padx=6, pady=(0, 4))
+    ttk.Label(_rr, text="Spoken language:").pack(side="left")
+    ttk.Entry(_rr, textvariable=panes["get"].vars["audio_lang"], width=8).pack(
+        side="left", padx=(4, 12))
+    blist = ttk.Button(_rr, text="List wrong-language files",
+                       command=lambda: go_relang(list_only=True))
+    blist.pack(side="left", padx=4)
+    blang = ttk.Button(_rr, text="Fix language in existing files",
+                       command=lambda: go_relang())
+    blang.pack(side="left", padx=4)
+
+    # ---- pinned: the buttons
+    grow = ttk.Frame(dl)
+    ttk.Separator(grow, orient="horizontal").pack(fill="x")
+    brow = ttk.Frame(grow)
+    brow.pack(fill="x", padx=8, pady=6)
+    bcheck = ttk.Button(brow, text="Check access (no cookies)",
+                        command=lambda: go_check())
+    bcheck.pack(side="left", padx=(0, 4))
+    bfmt = ttk.Button(brow, text="List qualities + sizes",
+                      command=lambda: go_formats())
+    bfmt.pack(side="left", padx=(4, 0))
+    # The video list normally hides the audio-only tracks (they are paired
+    # with the video for you). Ticked, they are listed too -- only the ones in
+    # the spoken language, as `formats --show-audio` does.
+    list_audio = tk.BooleanVar(value=bool(EXTRA.get("list_audio")))
+    ttk.Checkbutton(brow, text="+ audio formats", variable=list_audio,
+                    command=lambda: remember_soon()).pack(side="left",
+                                                          padx=(2, 4))
+    bget = ttk.Button(brow, text=uicmd.MODE_BUTTON["song"],
+                      style="Accent.TButton", command=lambda: go_primary())
+    bget.pack(side="right")
+    grow.pack(side="bottom", fill="x")
+    areas["get"].pack(fill="both", expand=True)
+
+    # ---------------------------------------------------- the plan
+    plan = {"mode": "song", "values": {}, "learned": {}, "why": "",
+            "links": uicmd.classify_links([])}
+    refined = {}            # url -> (kind, note), from an online look-up
+    url_seen = {"text": None}
+    link_seen = {"first": ""}
+    ident = {"busy": False}
+
+    def box_text():
+        return urls.get("1.0", "end")
+
+    def typed_urls():
+        """The links in the box -- pulled out of whatever was pasted with
+        them, each once."""
+        return uicmd.extract_links(box_text())
+
+    def links_now():
+        return uicmd.classify_links(typed_urls(), refined=refined)
 
     def current_mode():
-        return uicmd.make_mode(whatvar.get(), scopevar.get())
+        return plan["mode"]
+
+    def compute_plan(links=None):
+        links = links if links is not None else links_now()
+        p = uicmd.smart_plan(links, cfg.get("learned"),
+                             learn_on=bool(learn_on.get()),
+                             chosen=modevar.get(), last=plan.get("mode"))
+        p["links"] = links
+        return p
 
     def describe_mode():
-        mode = current_mode()
-        txt = uicmd.MODE_LABELS[mode] + ":  " + uicmd.MODE_SUMMARY[mode]
-        off = uicmd.mode_drift(panes["get"].values(), mode)
+        mode = plan["mode"]
+        smart = modevar.get() == uicmd.SMART
+        head = ("\u2726 Smart \u2192 " if smart else "") + \
+            uicmd.MODE_LABELS[mode]
+        txt = head + ":  " + uicmd.MODE_SUMMARY[mode]
+        off = uicmd.mode_drift(panes["get"].values(), mode,
+                               plan.get("values") or None)
         if off:
             # the summary describes the mode, not the checkboxes -- so once
             # they disagree it has to admit it rather than keep promising
             txt += "   \u00b7  changed by hand: " + ", ".join(sorted(off))
         mode_desc.set("\u2192  " + txt)
+        bits = []
+        if smart and plan.get("why"):
+            bits.append(plan["why"])
+        if plan.get("learned"):
+            bits.append("learned from you: "
+                        + uicmd.describe_learned(plan["learned"]))
+        out = str(outvar.get() or "").strip()
+        if out:
+            bits.append("saving to " + os.path.abspath(os.path.expanduser(out)))
+        learned_txt.set("   \u00b7   ".join(bits))
+        links = plan.get("links") or {}
+        kind_icon.set(links.get("icon") or "")
+        kind_text.set(links.get("summary") or "")
+        warns = list(links.get("warnings") or [])
+        stray = uicmd.stray_lines(box_text())
+        if stray and links.get("links"):
+            warns.append(f"{stray} line(s) without a link will be skipped")
+        kind_warn.set("   ".join(warns))
 
-    def apply_mode(mode):
-        """Set every checkbox the mode has an opinion about."""
-        whatvar.set(uicmd.MODE_WHAT[mode])
-        scopevar.set(uicmd.MODE_SCOPE[mode])
-        panes["get"].apply(uicmd.MODE_VALUES[mode])
-        describe_mode()
+    def refresh_button():
         try:
             # get_label() rather than the bare mode text: while a download is
             # running the button means "queue this", and the pump refreshes
             # this line every tick, which would otherwise talk it back.
             bget.configure(text=get_label())
         except NameError:
-            pass            # first apply happens before the buttons exist
+            pass
+
+    def apply_plan(p, opened_live=True):
+        """Set every checkbox the plan has an opinion about."""
+        was = plan["mode"]
+        plan.update(p)
+        panes["get"].apply(p["values"])
+        describe_mode()
+        refresh_button()
+        if opened_live and p["mode"] == "live" and was != "live":
+            sections["live"].open()     # its tools are what you need next
 
     def mode_picked():
-        """The user chose a mode by hand: obey it, and stop guessing."""
+        """A mode button was pressed: obey it, and stop holding back. The
+        kind is yours; one-or-many still follows the link, exactly as when
+        typing -- Song with an album link in the box means Album."""
         user_touched["v"] = False
-        apply_mode(current_mode())
+        chosen = modevar.get()
+        links = uicmd.classify_links(typed_urls(), refined=refined)
+        if chosen != uicmd.SMART and links.get("mode"):
+            want = uicmd.MODE_SCOPE[links["mode"]]
+            if uicmd.MODE_SCOPE.get(chosen) != want:
+                modevar.set(uicmd.mode_switch(chosen, scope=want))
+        apply_plan(compute_plan(links))
         remember_all()
 
-    def sync_mode():
-        """Follow the URL: a playlist link means a playlist run.
+    def follow_links(u):
+        """The Quality, Audio and Live sections work on the first link --
+        unless you typed another one into them yourself."""
+        first = u[0] if u else ""
+        prev, link_seen["first"] = link_seen["first"], first
+        for var in (qurl, lurl):
+            cur = var.get().strip()
+            if not cur or cur == prev:
+                var.set(first)
 
-        Skipped once you have touched an option by hand -- at that point you
-        are driving and the tab must not fight you.
+    def sync_mode(force=False):
+        """Follow the box: what the link is decides the mode (Smart), or at
+        least whether it is one item or many (a mode picked by hand).
+
+        Settings are left alone once you have changed an option by hand -- at
+        that point you are driving and the tab must not fight you -- but the
+        link is still recognised and named.
         """
-        u = [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]
+        u = typed_urls()
         joined = "\n".join(u)
-        if joined == url_seen["text"]:
+        if joined == url_seen["text"] and not force:
             return
         url_seen["text"] = joined
+        follow_links(u)
+        links = uicmd.classify_links(u, refined=refined)
         if user_touched["v"]:
+            plan["links"] = links
+            describe_mode()
             return
-        want = uicmd.mode_for(u, whatvar.get())
-        if uicmd.MODE_SCOPE[want] != scopevar.get():
-            apply_mode(want)
+        chosen = modevar.get()
+        if chosen != uicmd.SMART and links.get("mode"):
+            want = uicmd.MODE_SCOPE[links["mode"]]
+            if uicmd.MODE_SCOPE.get(chosen) != want:
+                modevar.set(uicmd.mode_switch(chosen, scope=want))
+        p = compute_plan(links)
+        if force or p["mode"] != plan["mode"] or p["values"] != plan["values"]:
+            apply_plan(p)
+        else:
+            plan.update(links=links, why=p["why"])
+            describe_mode()
+        if lookup_on.get() and u:
+            identify(auto=True)
         remember_soon()
 
-    url_seen = {"text": ""}
-    _mode0 = str(EXTRA.get("download_mode") or "")
-    if _mode0 in uicmd.MODES:
-        apply_mode(_mode0)
-    _urls0 = str(EXTRA.get("urls") or "").strip()
-    if _urls0:
-        urls.insert("end", _urls0 + "\n")
-        url_seen["text"] = "\n".join(
-            [x.strip() for x in _urls0.splitlines() if x.strip()])
-    # Switch the moment you paste, rather than on the next 120 ms tick -- and
-    # keep the tick as a belt-and-braces copy for URLs that arrive some other
+    # Recognise the link the moment you paste or type, rather than on the
+    # next 120 ms tick -- and keep the tick for links that arrive some other
     # way (drag and drop, a script, a remembered session).
     urls.bind("<KeyRelease>", lambda e: sync_mode())
-    urls.bind("<<Paste>>", lambda e: sync_mode())
-    apply_mode("music_single")
-    grow = ttk.Frame(dl)
-    brow = ttk.Frame(grow)
-    brow.pack(pady=6)
-    bcheck = ttk.Button(brow, text="Check access (no cookies)",
-                        command=lambda: go_check())
-    bcheck.pack(side="left", padx=4)
-    bfmt = ttk.Button(brow, text="List qualities + sizes",
-                      command=lambda: go_formats())
-    bfmt.pack(side="left", padx=(4, 0))
-    # The video list normally hides the audio-only tracks (they are paired
-    # with the video for you). Ticked, they are listed too -- only the ones in
-    # the spoken language set above, as `formats --show-audio` does.
-    list_audio = tk.BooleanVar(value=bool(EXTRA.get("list_audio")))
-    ttk.Checkbutton(brow, text="+ audio formats", variable=list_audio,
-                    command=lambda: remember_soon()).pack(side="left",
-                                                          padx=(2, 4))
-    bget = ttk.Button(brow, text="Download + lyrics",
-                      command=lambda: go_get())
-    bget.configure(text="Download video"
-                   if uicmd.MODE_WHAT[current_mode()] == "video"
-                   else "Download + lyrics")
-    bget.pack(side="left", padx=4)
-    blist = ttk.Button(brow, text="List wrong-language files",
-                       command=lambda: go_relang(list_only=True))
-    blist.pack(side="left", padx=4)
-    blang = ttk.Button(brow, text="Fix language in existing files",
-                       command=lambda: go_relang())
-    blang.pack(side="left", padx=4)
-    grow.pack(side="bottom", fill="x")
-    areas["get"].pack(fill="both", expand=True)
-    toggle_adv()          # closed to start with: the mode already set the rest
+    urls.bind("<<Paste>>", lambda e: root.after(10, sync_mode))
 
-    def typed_urls():
-        return [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]
+    def add_link(u):
+        u = (u or "").strip()
+        if not u or u in typed_urls():
+            return
+        txt = box_text().rstrip("\n")
+        urls.delete("1.0", "end")
+        urls.insert("end", (txt + "\n" if txt.strip() else "") + u + "\n")
+        sync_mode()
+
+    def paste_links():
+        """Paste the links out of whatever is on the clipboard -- a chat
+        message, a page of text -- each on a line of its own."""
+        try:
+            clip = root.clipboard_get()
+        except Exception:                                    # noqa: BLE001
+            clip = ""
+        found = uicmd.extract_links(clip)
+        if not found:
+            messagebox.showinfo("musictool", "There is no link on the "
+                                "clipboard. Copy one (Share \u2192 Copy link "
+                                "on YouTube) and press Paste again.")
+            return
+        for f in found:
+            add_link(f)
+        log(f"pasted {len(found)} link(s)")
+
+    def clear_links():
+        urls.delete("1.0", "end")
+        sync_mode()
+
+    def note_info(url, info):
+        """Fold what yt-dlp said about a video into what the link is."""
+        if not isinstance(info, dict) or info.get("error") or not url:
+            return
+        base = uicmd.classify_link(url)["kind"]
+        kind = uicmd.refine_kind(base, info)
+        title = str(info.get("title") or "").strip()
+        bits = [f"\u201c{title[:70]}\u201d"] if title else []
+        if info.get("duration"):
+            bits.append(uicmd.describe_duration(info["duration"]))
+        if kind == "upcoming" and info.get("release_timestamp"):
+            import datetime
+            bits.append("starts " + datetime.datetime.fromtimestamp(
+                int(info["release_timestamp"])).strftime("%a %d %b %H:%M"))
+        old = refined.get(url)
+        refined[url] = (kind, ", ".join(bits))
+        if old != refined[url]:
+            log(f"identified: {uicmd.LINK_KINDS[kind][0]}"
+                + (f" -- {', '.join(bits)}" if bits else ""))
+            sync_mode(force=True)
+
+    def identify(auto=False):
+        """Ask yt-dlp what the first video really is: live now, scheduled,
+        a finished stream, a music video, a Short, a long talk. One small
+        request; playlists and channels say what they are in the link."""
+        links = links_now()
+        lead = next((i for i in links.get("items") or []
+                     if i["kind"] in uicmd.IDENTIFIABLE
+                     or (i["url"] in refined)), None)
+        if lead is None:
+            if not auto:
+                messagebox.showinfo(
+                    "musictool", "Paste a video link first." if not
+                    typed_urls() else "That link already says what it is "
+                    "-- nothing to look up.")
+            return
+        url = lead["url"]
+        if url in refined or ident["busy"]:
+            if not auto:
+                sync_mode(force=True)
+            return
+        g = panes["get"].values()
+        opts = {k: g.get(k) for k in ("cookies", "cookies_from_browser",
+                                      "js_runtimes", "remote_components")}
+        ident["busy"] = True
+        kind_text.set(kind_text.get() + "   \u00b7   looking it up\u2026")
+
+        def job():
+            try:
+                info = download.probe(url, opts)
+            except Exception as e:                           # noqa: BLE001
+                info = {"error": str(e)}
+            ui(lambda: got(info))
+
+        def got(info):
+            ident["busy"] = False
+            if isinstance(info, dict) and not info.get("error"):
+                note_info(url, info)
+            else:
+                err = str((info or {}).get("error") or "no answer")
+                log("could not look it up: " + err.splitlines()[0][:200])
+            describe_mode()
+        threading.Thread(target=job, daemon=True).start()
+
+    def open_out():
+        d = os.path.abspath(os.path.expanduser(str(outvar.get() or ".")))
+        if not os.path.isdir(d):
+            messagebox.showinfo("musictool", f"That folder does not exist "
+                                f"yet:\n{d}\n\nIt is made by the first "
+                                f"download into it.")
+            return
+        try:
+            open_path(d)
+        except Exception as e:                               # noqa: BLE001
+            log(f"!! could not open it: {e}")
+
+    def learn_from_run(vals):
+        """Remember what you ran, for Smart. Only runs you start count."""
+        if not learn_on.get():
+            return
+        try:
+            kind = (plan.get("links") or {}).get("kind") or "empty"
+            cfg["learned"] = uicmd.learn(cfg.get("learned"), kind,
+                                         plan["mode"], vals)
+            configmod.remember(learned=cfg["learned"])
+            refresh_learned()
+        except Exception as e:                               # noqa: BLE001
+            log(f"!! could not record your choice: {type(e).__name__}: {e}")
 
     def go_check():
         """Is YouTube serving these to you? Deliberately cookie-free: a check
@@ -1075,7 +1686,7 @@ def run():
         if not d or not os.path.isdir(d):
             messagebox.showwarning(
                 "musictool",
-                "Point the Folder field at the folder those files are in.")
+                "Point Save to at the folder those files are in.")
             return
         argv = ["relang", d,
                 "--audio-lang", (vals.get("audio_lang") or "en").strip() or "en"]
@@ -1091,7 +1702,7 @@ def run():
         do_argv(argv)
 
     def go_get():
-        u = [x.strip() for x in urls.get("1.0", "end").splitlines() if x.strip()]
+        u = typed_urls()
         if not u:
             messagebox.showwarning("musictool", "Paste at least one URL.")
             return
@@ -1100,9 +1711,30 @@ def run():
         out = os.path.abspath(os.path.expanduser(out or "."))
         cfg["output_dir"] = out          # the field defaults to this next time
         remember(url="\n".join(u), path=out)
+        learn_from_run(vals)
         argv = uicmd.build_argv("get", vals, positionals=u, parser=build_parser())
         do_argv(argv, after=after_run(lambda: os.path.abspath(
             os.path.expanduser(out or "."))))
+
+    def go_live():
+        """The big button in Live stream mode: record the first link from
+        its first minute, into Save to, with the Live section's streams."""
+        u = typed_urls()
+        if not u:
+            messagebox.showwarning("musictool", "Paste the stream's link first.")
+            return
+        if len(u) > 1:
+            log("-- one stream at a time: recording the first link")
+        lurl.set(u[0])
+        sections["live"].open()
+        learn_from_run(dict(panes["get"].values()))
+        l_record()
+
+    def go_primary():
+        if plan["mode"] == "live":
+            go_live()
+        else:
+            go_get()
 
     run_buttons += [bcheck, bfmt, bget]
     queue_ok.append(bget)
@@ -1112,40 +1744,83 @@ def run():
         # pump's mode refresh must not talk it back into "Download".
         if running["n"]:
             return "Add to queue"
-        return ("Download video" if uicmd.MODE_WHAT[current_mode()] == "video"
-                else "Download + lyrics")
+        return uicmd.MODE_BUTTON[plan["mode"]]
 
-    # ================================================== Lyrics tab
+    # ================================================== Library tab
+    # The songs you already have: fix their lyrics, find the ones that share
+    # a wrong lyric, move lyrics in and out of .lrc files. One folder and one
+    # file list serve all three jobs, so they are chosen once, not three
+    # times on three tabs.
     ly = ttk.Frame(nb)
-    nb.add(ly, text="  Fix lyrics  ")
-    lvar = path_field(ly, cfg.get("output_dir", "."))
+    nb.add(ly, text="  Library  ")
+    lvar = path_field(ly, cfg.get("output_dir", "."),
+                      label="Music folder / file:")
+    svar = lfvar = lvar
+    LIB_TASKS = (("lyrics", "\u266a  Fix lyrics"),
+                 ("duplicates", "\u2261  Scan & duplicates"),
+                 ("files", "\u270e  Lyrics files (.lrc)"))
+    LIB_HINTS = {
+        "lyrics": "finds synced lyrics and embeds them -- tick files below "
+                  "to run a subset, untick to skip",
+        "duplicates": "songs that share one lyric are usually wrong: find "
+                      "them, see them as a tree, re-fetch them",
+        "files": "extract to .lrc, edit the .lrc in any text editor, embed "
+                 "it back",
+    }
+    _t0 = str(EXTRA.get("library_task") or "lyrics")
+    lib_task = tk.StringVar(value=_t0 if _t0 in dict(LIB_TASKS) else "lyrics")
+    _lt = ttk.Frame(ly)
+    _lt.pack(fill="x", padx=8, pady=(4, 0))
+    for _val, _txt in LIB_TASKS:
+        ttk.Radiobutton(_lt, text=_txt, value=_val, variable=lib_task,
+                        style="Mode.Toolbutton",
+                        command=lambda: show_task()).pack(side="left",
+                                                          padx=(0, 4))
+    lib_hint = tk.StringVar(value="")
+    _lh = ttk.Label(ly, textvariable=lib_hint, foreground="#777",
+                    wraplength=900, justify="left")
+    _lh.pack(anchor="w", padx=10, pady=(2, 0))
+    _wrap_with(_lh, ly)
 
-    areas["lyrics"] = ScrollArea(ly)
-    panes["lyrics"] = OptionsPane(areas["lyrics"].frame, "lyrics", cfg,
+    areas["library"] = ScrollArea(ly)
+    _lib = areas["library"].frame
+    qhold = ttk.Frame(_lib)
+    qhold.pack(fill="x")
+    phold = ttk.Frame(_lib)
+    phold.pack(fill="x")
+    ohold = ttk.Frame(_lib)
+    ohold.pack(fill="x")
+    panes["lyrics"] = OptionsPane(ohold, "lyrics", cfg,
                                   saved=SAVED.get("lyrics"))
-    panes["lyrics"].quick_row(areas["lyrics"].frame)
+    panes["duplicates"] = OptionsPane(ohold, "duplicates", cfg,
+                                      saved=SAVED.get("duplicates"))
+    panes["extract"] = OptionsPane(ohold, "extract", cfg,
+                                   saved=SAVED.get("extract"))
+    panes["embed"] = OptionsPane(ohold, "embed", cfg, saved=SAVED.get("embed"))
+    lq = panes["lyrics"].quick_row(qhold)
+    dq = panes["duplicates"].quick_row(qhold)
 
-    def lyrics_options():
-        v = panes["lyrics"].values()
+    def lib_options():
+        sub = "duplicates" if lib_task.get() == "duplicates" else "lyrics"
+        v = panes[sub].values()
         return {"recursive": v.get("recursive"), "lyrics_dir": v.get("lyrics_dir")}
 
-    picker = FilePicker(areas["lyrics"].frame, lvar.get,
-                        options_getter=lyrics_options)
+    picker = FilePicker(phold, lvar.get, options_getter=lib_options)
     picker.pack(fill="x")
-    panes["lyrics"].pack(fill="x")
+    dpicker = picker            # the same list, whichever job runs on it
 
-    lrow = ttk.Frame(ly)
-    b2 = ttk.Button(lrow, text="Fix lyrics", command=lambda: go_lyrics())
+    lib_bar = ttk.Frame(ly)
+    lrow = ttk.Frame(lib_bar)
+    b2 = ttk.Button(lrow, text="Fix lyrics", style="Accent.TButton",
+                    command=lambda: go_lyrics())
     b2.pack(side="left")
     ball = ttk.Button(lrow, text="Redo ALL files (force)",
                       command=lambda: go_lyrics(force=True))
     ball.pack(side="left", padx=6)
     ttk.Label(lrow, foreground="#888",
-              text="tick files above to run a subset · untick to skip").pack(
+              text="tick files above to run a subset \u00b7 untick to skip").pack(
         side="left", padx=8)
     run_buttons += [b2, ball]
-    lrow.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
-    areas["lyrics"].pack(fill="both", expand=True)
 
     def go_lyrics(force=None):
         p = lvar.get().strip()
@@ -1168,26 +1843,7 @@ def run():
                                 parser=build_parser())
         do_argv(argv, after=after_run(lambda: uicmd.common_root(pos)))
 
-    # ================================================== Scan + duplicates tab
-    sc = ttk.Frame(nb)
-    nb.add(sc, text="  Scan & duplicates  ")
-    svar = path_field(sc, cfg.get("output_dir", "."))
-
-    areas["duplicates"] = ScrollArea(sc)
-    panes["duplicates"] = OptionsPane(areas["duplicates"].frame, "duplicates",
-                                      cfg, saved=SAVED.get("duplicates"))
-    panes["duplicates"].quick_row(areas["duplicates"].frame)
-
-    def dupe_options():
-        v = panes["duplicates"].values()
-        return {"recursive": v.get("recursive"), "lyrics_dir": v.get("lyrics_dir")}
-
-    dpicker = FilePicker(areas["duplicates"].frame, svar.get,
-                         options_getter=dupe_options)
-    dpicker.pack(fill="x")
-    panes["duplicates"].pack(fill="x")
-
-    scf = ttk.Frame(sc)
+    scf = ttk.Frame(lib_bar)
 
     def go_scan(json_out=False):
         p = svar.get().strip()
@@ -1225,19 +1881,72 @@ def run():
         else:
             do_argv(argv, after=after_run(lambda: uicmd.common_root(pos)))
 
-    ttk.Button(scf, text="Scan", command=go_scan).pack(side="left", padx=4)
-    ttk.Button(scf, text="Scan (JSON)",
-               command=lambda: go_scan(True)).pack(side="left", padx=4)
-    ttk.Button(scf, text="Find duplicates",
-               command=go_dupes).pack(side="left", padx=4)
+    ttk.Button(scf, text="Find duplicates", style="Accent.TButton",
+               command=go_dupes).pack(side="left", padx=(0, 4))
     ttk.Button(scf, text="Duplicate groups (tree)",
                command=lambda: go_dupes(json_out=True)).pack(side="left", padx=4)
     b3 = ttk.Button(scf, text="FIX duplicate lyrics",
                     command=lambda: go_dupes(fix=True))
     b3.pack(side="left", padx=4)
+    ttk.Button(scf, text="Scan", command=go_scan).pack(side="left", padx=4)
+    ttk.Button(scf, text="Scan (JSON)",
+               command=lambda: go_scan(True)).pack(side="left", padx=4)
     run_buttons += [b3]
-    scf.pack(side="bottom", pady=6)
-    areas["duplicates"].pack(fill="both", expand=True)
+
+    def go_files(sub):
+        p = lfvar.get().strip()
+        if not p:
+            messagebox.showwarning("musictool", "Choose a folder or file.")
+            return
+        remember(path=p)
+        vals = dict(panes[sub].values())
+        argv = uicmd.build_argv(sub, vals, positionals=[p],
+                                parser=build_parser())
+        base = os.path.abspath(os.path.expanduser(p))
+        do_argv(argv, after=after_run(
+            lambda: base if os.path.isdir(base) else os.path.dirname(base)))
+
+    lfr = ttk.Frame(lib_bar)
+    bex = ttk.Button(lfr, text="Extract lyrics to .lrc", style="Accent.TButton",
+                     command=lambda: go_files("extract"))
+    bex.pack(side="left")
+    bem = ttk.Button(lfr, text="Embed .lrc into songs",
+                     command=lambda: go_files("embed"))
+    bem.pack(side="left", padx=6)
+    ttk.Label(lfr, foreground="#888",
+              text="extract -> edit the .lrc -> embed").pack(side="left", padx=8)
+    run_buttons += [bex, bem]
+    ttk.Separator(lib_bar, orient="horizontal").pack(fill="x", pady=(0, 6))
+    lib_bar.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
+    areas["library"].pack(fill="both", expand=True)
+
+    # job -> (quick strips, option panes, button row, uses the file list)
+    LIB_PARTS = {
+        "lyrics": ([lq], [panes["lyrics"]], lrow, True),
+        "duplicates": ([dq], [panes["duplicates"]], scf, True),
+        "files": ([], [panes["extract"], panes["embed"]], lfr, False),
+    }
+
+    def show_task():
+        """Show the chosen job's toggles, options and buttons; hide the rest."""
+        t = lib_task.get() if lib_task.get() in LIB_PARTS else "lyrics"
+        for qs, ps, row, _pick in LIB_PARTS.values():
+            for w in qs + ps + [row]:
+                w.pack_forget()
+        qs, ps, row, pick = LIB_PARTS[t]
+        for w in qs:
+            w.pack(fill="x", padx=8, pady=(2, 2))
+        if pick:
+            picker.pack(fill="x")
+        else:
+            picker.pack_forget()
+        for w in ps:
+            w.pack(fill="x")
+        row.pack(fill="x")
+        lib_hint.set(LIB_HINTS[t])
+        remember_soon()
+
+    show_task()
 
     # ================================================== Report tab
     # Not a ScrollArea: the tree below has its own scrollbars and must expand.
@@ -1367,30 +2076,103 @@ def run():
         if dst:
             log(f"exported -> {dst}")
 
-    # ================================================== Tools tab
+    # ================================================== Settings tab
     tl = ttk.Frame(nb)
-    nb.add(tl, text="  Tools  ")
+    nb.add(tl, text="  Settings  ")
     areas["tools"] = ScrollArea(tl)
     tframe = areas["tools"].frame
-    panes["providers"] = OptionsPane(tframe, "providers", cfg,
+
+    # ---- what Smart has learned, in plain words, and a way to forget it
+    smf = ttk.LabelFrame(tframe, text="  \u2726 Smart mode  ",
+                         style="Card.TLabelframe")
+    smf.pack(fill="x", padx=8, pady=(8, 4))
+    ttk.Checkbutton(
+        smf, text="Learn from what I download -- which mode I pick for which "
+                  "kind of link, and how I set each mode up",
+        variable=learn_on,
+        command=lambda: (sync_mode(force=True), remember_soon())).pack(
+        anchor="w", padx=6, pady=(4, 0))
+    ttk.Checkbutton(
+        smf, text="Look each pasted video up online, to tell live streams, "
+                  "music videos, Shorts and long talks apart (one small "
+                  "request per link)",
+        variable=lookup_on, command=lambda: remember_soon()).pack(
+        anchor="w", padx=6)
+    learned_box = tk.StringVar(value="")
+    _lbx = ttk.Label(smf, textvariable=learned_box, justify="left",
+                     foreground="#333", wraplength=900)
+    _lbx.pack(anchor="w", padx=12, pady=(6, 4))
+    _wrap_with(_lbx, smf)
+    _sb = ttk.Frame(smf)
+    _sb.pack(fill="x", padx=6, pady=(0, 6))
+
+    def refresh_learned():
+        learned_box.set("\n".join("\u2022  " + x for x in
+                                  uicmd.learned_report(cfg.get("learned"))))
+
+    def forget_learned():
+        if not messagebox.askyesno("musictool", "Forget everything Smart "
+                                   "has learned about your downloads?"):
+            return
+        cfg["learned"] = {}
+        configmod.remember(learned={})
+        refresh_learned()
+        sync_mode(force=True)
+        log("Smart has forgotten what it learned -- it starts from the "
+            "defaults again")
+
+    ttk.Button(_sb, text="Forget what was learned",
+               command=forget_learned).pack(side="left")
+    ttk.Label(_sb, foreground="#888", text=(
+        "a choice counts once it is the majority of your recent runs and you "
+        "made it at least twice")).pack(side="left", padx=10)
+    refresh_learned()
+
+    # ---- the window: what the display allows, and a way back to the start
+    winf = ttk.LabelFrame(tframe, text="  Window  ", style="Card.TLabelframe")
+    winf.pack(fill="x", padx=8, pady=4)
+    _sw, _sh = _screen(root, "width"), _screen(root, "height")
+    ttk.Label(winf, foreground="#555", text=(
+        f"display {_sw or '?'} x {_sh or '?'} \u00b7 the window opens at "
+        f"{fit['w']} x {fit['h']} and is kept within {fit['max_w']} x "
+        f"{fit['max_h']}, clear of the taskbar")).pack(
+        side="left", padx=6, pady=6)
+
+    def reset_window():
+        f = uicmd.fit_window(_screen(root, "width"), _screen(root, "height"))
+        root.geometry(f["geometry"])
+        root.update_idletasks()
+        reset_split()
+        log(f"window back to {f['w']} x {f['h']}, log at a quarter")
+    ttk.Button(winf, text="Reset size and layout",
+               command=reset_window).pack(side="right", padx=6, pady=6)
+
+    # ---- lyrics sources
+    srcf = ttk.LabelFrame(tframe, text="  Lyrics sources  ",
+                          style="Card.TLabelframe")
+    srcf.pack(fill="x", padx=8, pady=4)
+    panes["providers"] = OptionsPane(srcf, "providers", cfg,
                                      saved=SAVED.get("providers"))
     panes["providers"].pack(fill="x")
 
     def go_providers():
         do_argv(uicmd.build_argv("providers", panes["providers"].values(),
                                  parser=build_parser()))
-    ttk.Button(tframe, text="Check lyrics sources",
-               command=go_providers).pack(pady=4)
+    ttk.Button(srcf, text="Check lyrics sources",
+               command=go_providers).pack(anchor="w", padx=8, pady=(2, 6))
 
-    cfgf = ttk.LabelFrame(tframe, text="saved defaults (config)")
-    cfgf.pack(fill="x", padx=8, pady=6)
+    cfgf = ttk.LabelFrame(tframe, text="  saved defaults (config)  ",
+                          style="Card.TLabelframe")
+    cfgf.pack(fill="x", padx=8, pady=4)
+    _cf = ttk.Frame(cfgf)
+    _cf.pack(fill="x", padx=4, pady=6)
     ck = tk.StringVar()
     cv = tk.StringVar()
-    ttk.Label(cfgf, text="key:").pack(side="left", padx=4)
-    ttk.Combobox(cfgf, textvariable=ck, width=18, state="readonly",
+    ttk.Label(_cf, text="key:").pack(side="left", padx=4)
+    ttk.Combobox(_cf, textvariable=ck, width=18, state="readonly",
                  values=sorted(configmod.DEFAULTS)).pack(side="left")
-    ttk.Label(cfgf, text="value:").pack(side="left", padx=4)
-    ttk.Entry(cfgf, textvariable=cv, width=24).pack(side="left")
+    ttk.Label(_cf, text="value:").pack(side="left", padx=4)
+    ttk.Entry(_cf, textvariable=cv, width=24).pack(side="left")
 
     def set_cfg():
         if not ck.get():
@@ -1399,15 +2181,12 @@ def run():
         if cv.get():
             argv.append(cv.get())
         do_argv(argv)
-    ttk.Button(cfgf, text="Set", command=set_cfg).pack(side="left", padx=4)
-    ttk.Button(cfgf, text="Show all",
+    ttk.Button(_cf, text="Set", command=set_cfg).pack(side="left", padx=4)
+    ttk.Button(_cf, text="Show all",
                command=lambda: do_argv(["config"])).pack(side="left")
-    ttk.Button(cfgf, text="Reset",
+    ttk.Button(_cf, text="Reset",
                command=lambda: do_argv(["config", "--reset"])).pack(side="left",
                                                                    padx=4)
-
-    ttk.Button(tframe, text="Environment check (doctor)",
-               command=lambda: do_argv(["doctor"])).pack(pady=4)
 
     def save_defaults():
         for pane in panes.values():
@@ -1416,56 +2195,23 @@ def run():
                     cfg[k] = v
         configmod.save(cfg)
         log("saved current options as defaults -> " + configmod.PATH)
-    ttk.Button(tframe, text="Save these options as defaults",
-               command=save_defaults).pack(pady=4)
+
+    _tb = ttk.Frame(tframe)
+    _tb.pack(fill="x", padx=8, pady=(6, 8))
+    ttk.Button(_tb, text="Environment check (doctor)",
+               command=lambda: do_argv(["doctor"])).pack(side="left")
+    ttk.Button(_tb, text="Save these options as defaults",
+               command=save_defaults).pack(side="left", padx=6)
+    ttk.Label(_tb, foreground="#888",
+              text="settings file: " + configmod.PATH).pack(side="left", padx=8)
     areas["tools"].pack(fill="both", expand=True)
 
-    # ================================================== Lyrics files tab
-    lf = ttk.Frame(nb)
-    nb.add(lf, text="  Lyrics files  ")
-    lfvar = path_field(lf, cfg.get("output_dir", "."))
-
-    areas["lyricsfiles"] = ScrollArea(lf)
-    panes["extract"] = OptionsPane(areas["lyricsfiles"].frame, "extract", cfg,
-                                   saved=SAVED.get("extract"))
-    panes["extract"].pack(fill="x")
-    panes["embed"] = OptionsPane(areas["lyricsfiles"].frame, "embed", cfg,
-                                 saved=SAVED.get("embed"))
-    panes["embed"].pack(fill="x")
-
-    def go_files(sub):
-        p = lfvar.get().strip()
-        if not p:
-            messagebox.showwarning("musictool", "Choose a folder or file.")
-            return
-        remember(path=p)
-        vals = dict(panes[sub].values())
-        argv = uicmd.build_argv(sub, vals, positionals=[p],
-                                parser=build_parser())
-        base = os.path.abspath(os.path.expanduser(p))
-        do_argv(argv, after=after_run(
-            lambda: base if os.path.isdir(base) else os.path.dirname(base)))
-
-    lfr = ttk.Frame(lf)
-    bex = ttk.Button(lfr, text="Extract lyrics to .lrc",
-                     command=lambda: go_files("extract"))
-    bex.pack(side="left")
-    bem = ttk.Button(lfr, text="Embed .lrc into songs",
-                     command=lambda: go_files("embed"))
-    bem.pack(side="left", padx=6)
-    ttk.Label(lfr, foreground="#888",
-              text="extract -> edit the .lrc -> embed").pack(side="left", padx=8)
-    run_buttons += [bex, bem]
-    lfr.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
-    areas["lyricsfiles"].pack(fill="both", expand=True)
-
-    # ==================================================== Quality tab
+    # ==================================================== Quality & size
     # yt-dlp's raw format list is unusable (a 4K video reports 127 rows:
     # every stream split into 18 CDN variants, plus doubles of the same
     # resolution). This tab shows it collapsed, with filters, an automatic
-    # pick and a manual click-to-choose.
-    qtab = ttk.Frame(nb)
-    nb.add(qtab, text="  Quality  ")
+    # pick and a manual click-to-choose. (A section of the Download tab.)
+    qtab = sections["quality"].body
     ttk.Label(qtab, text="Pick a quality by its real file size:").pack(
         anchor="w", padx=8, pady=(8, 0))
     qrow = ttk.Frame(qtab)
@@ -1558,7 +2304,7 @@ def run():
              "variants")
     qwrap = ttk.Frame(qtab)
     qwrap.pack(fill="both", expand=True, padx=8)
-    qtree = ttk.Treeview(qwrap, columns=qcols, show="headings", height=10)
+    qtree = ttk.Treeview(qwrap, columns=qcols, show="headings", height=8)
     qsb = ttk.Scrollbar(qwrap, orient="vertical", command=qtree.yview)
     qtree.configure(yscrollcommand=qsb.set)
     qsb.pack(side="right", fill="y")
@@ -1572,8 +2318,8 @@ def run():
     qtree.bind("<<TreeviewSelect>>", lambda ev: q_picked(ev))
     qtree.bind("<Double-1>", lambda ev: q_download())
 
-    qinfo = tk.StringVar(value="Paste a video URL above and press "
-                              "“Load qualities”.")
+    qinfo = tk.StringVar(value="It takes the first link from the box "
+                              "above -- press “Load qualities”.")
     ttk.Label(qtab, textvariable=qinfo, foreground="#06a",
               wraplength=980, justify="left").pack(anchor="w", padx=8,
                                                    pady=(4, 0))
@@ -1761,6 +2507,7 @@ def run():
                 ainfo.set(qinfo.get())
                 return
             q_rows[:] = formats.rows_from_info(info)
+            note_info(url, info)
             q_loaded["url"] = url
             q_loaded["why"] = download.no_media_reason(info) or ""
             if a_pin["url"] != url:
@@ -1779,14 +2526,13 @@ def run():
 
     q_loaded = {"url": "", "why": ""}
 
-    # =============================================== Audio tracks tab
+    # =============================================== Audio tracks
     # A dubbed video serves one audio track per spoken language, often in two
     # codecs and several bitrates. The automatic pick takes the best one in
     # your audio language; this tab lists them so you can see what is really
     # there and take a specific one -- on its own (music), or with the video
-    # quality chosen on the Quality tab.
-    atab = ttk.Frame(nb)
-    nb.add(atab, text="  Audio tracks  ")
+    # quality chosen in Quality & size. (A section of the Download tab.)
+    atab = sections["audio"].body
     ttk.Label(atab, text="See every audio track in a language and pick the "
                          "one to download:").pack(anchor="w", padx=8,
                                                   pady=(8, 0))
@@ -1829,8 +2575,9 @@ def run():
     atree.bind("<<TreeviewSelect>>", lambda ev: a_picked())
     atree.bind("<Double-1>", lambda ev: a_download())
 
-    ainfo = tk.StringVar(value="Paste a video URL above and press "
-                              "\u201cLoad audio tracks\u201d.")
+    ainfo = tk.StringVar(value="It takes the first link from the box "
+                              "above -- press \u201cLoad audio "
+                              "tracks\u201d.")
     ttk.Label(atab, textvariable=ainfo, foreground="#06a",
               wraplength=980, justify="left").pack(anchor="w", padx=8,
                                                    pady=(4, 0))
@@ -1972,10 +2719,7 @@ def run():
         log("audio for video downloads: " + formats.describe_track(r))
         q_draw()
         a_draw()
-        try:
-            nb.select(qtab)
-        except Exception:                                   # noqa: BLE001
-            pass
+        sections["quality"].open()
 
     def a_automatic():
         a_pin["row"], a_pin["url"] = None, ""
@@ -1988,23 +2732,18 @@ def run():
 
     def a_show():
         """From the Quality tab: open this tab, loading the list if needed."""
-        try:
-            nb.select(atab)
-        except Exception:                                   # noqa: BLE001
-            pass
+        sections["audio"].open()
         if qurl.get().strip() and q_loaded["url"] != qurl.get().strip():
             q_load()
         else:
             a_draw()
 
-    # =============================================== Live streams tab
+    # =============================================== Live stream & chat
     # Record a stream that is live from its very start, watch what has come
     # down so far at any time, and carry on after a stop (a full disk, Stop,
     # a power cut). live.py explains why the pieces no longer pile up.
-    ltab = ttk.Frame(nb)
-    nb.add(ltab, text="  Live streams  ")
-    areas["live"] = ScrollArea(ltab)
-    lbody = areas["live"].frame
+    # (A section of the Download tab: it scrolls with the tab.)
+    lbody = sections["live"].body
     ttk.Label(lbody, text="Record a live stream from its start, watch what you "
                           "have so far, and download the rest after a "
                           "stop:").pack(anchor="w", padx=8, pady=(8, 2))
@@ -2034,11 +2773,11 @@ def run():
         ttk.Label(lbody, text=hint, foreground="#888").pack(anchor="w",
                                                             padx=10)
 
-    lfolder = tk.StringVar(value=str(EXTRA.get("live_folder")
-                                     or cfg.get("output_dir") or "."))
-    _l_dir_row("Folder:", lfolder, "where the recording goes -- and where a "
-                                   "stopped one is (also one made by plain "
-                                   "yt-dlp)")
+    # The same folder as Save to above: one place to say where things go.
+    lfolder = panes["get"].vars["output_dir"]
+    _l_dir_row("Folder:", lfolder, "the same folder as Save to -- where the "
+                                   "recording goes, and where a stopped one "
+                                   "is (also one made by plain yt-dlp)")
     lout = tk.StringVar(value=str(EXTRA.get("live_out") or ""))
     _l_dir_row("Copy to watch goes to:", lout,
                "empty = the same folder. The copy needs as much free space "
@@ -2047,8 +2786,7 @@ def run():
     ttk.Checkbutton(lbody, text="Audio only (no picture)", variable=laudio,
                     command=lambda: remember_soon()).pack(anchor="w", padx=8,
                                                           pady=(2, 0))
-    live_state.update(live_url=lurl, live_folder=lfolder, live_out=lout,
-                      live_audio=laudio)
+    live_state.update(live_url=lurl, live_out=lout, live_audio=laudio)
 
     # Which streams: filled by "Is it live? How big?". A chosen stream is
     # downloaded exactly (--exact) and copied as it is -- nothing converted.
@@ -2080,6 +2818,7 @@ def run():
         info = live.LAST_PROBE.get(u)
         if not isinstance(info, dict):
             return
+        note_info(u, info)
         rows = formats.rows_from_info(info)
         vids = sorted((r for r in rows if r["kind"] in ("video", "both")),
                       key=lambda r: (-(r["height"] or 0), -(r["fps"] or 0),
@@ -2267,10 +3006,10 @@ def run():
         "\u2022 Download this part: only the time range above, of a stream "
         "that has finished -- e.g. the hours you have not watched yet. Saved "
         "as \u201cTITLE [id] (from 1h00m00s)\u201d.\n"
-        "\u2022 Cookies, proxy and the JavaScript settings come from the "
-        "Download tab (More options).")).pack(anchor="w", padx=8,
+        "\u2022 Cookies, proxy and the JavaScript settings come from All "
+        "download options above. In Live stream mode the big button "
+        "records the first link.")).pack(anchor="w", padx=8,
                                                pady=(0, 8))
-    areas["live"].pack(fill="both", expand=True)
     l_made = {"path": ""}
 
     def l_net_args():
@@ -2499,18 +3238,25 @@ def run():
         except Exception as e:                              # noqa: BLE001
             log(f"!! could not open it: {e}")
 
+    # rows that wrap on a narrow window instead of widening the tab
+    for _row in (_ls, _lb, _c1, _c2, _c3, _f1, _f2, _m1):
+        areas["get"].flow(_row)
+
     # ================================================== log pane (resizable)
     logf = ttk.LabelFrame(root, text="log")
-    split.add(logf, minsize=90, stretch="always",
-              height=uicmd.pane_split(800))
+    split.add(logf, minsize=90, stretch="always", height=_log_h)
 
     # ---------------------------------------------- live download progress
     # A horizontal paned window: drag the sash to make the bars as wide or as
     # narrow as you like, which gives the text beside them more room. The width
     # you settle on is saved and restored next time.
     pstate = progress.State()
-    pwrap = ttk.PanedWindow(logf, orient="horizontal")
-    pwrap.pack(fill="x", padx=6, pady=(4, 0))
+    prow = ttk.Frame(logf)
+    prow.pack(fill="x", padx=6, pady=(4, 2))
+    tools = ttk.Frame(prow)
+    tools.pack(side="right", padx=(8, 0))
+    pwrap = ttk.PanedWindow(prow, orient="horizontal")
+    pwrap.pack(side="left", fill="x", expand=True)
     pbars = ttk.Frame(pwrap)
     ptext = ttk.Frame(pwrap)
     pwrap.add(pbars, weight=0)
@@ -2616,10 +3362,6 @@ def run():
     # The hook runs on the worker thread: put only, never touch a widget here.
     progress.set_hook(pq.put)
 
-    tools = ttk.Frame(logf)
-    tools.pack(fill="x", padx=4, pady=(2, 0))
-    ttk.Label(tools, foreground="#666",
-              text="drag the bar above to resize, or:").pack(side="left", padx=4)
 
     def sash_y():
         try:
@@ -2630,24 +3372,65 @@ def run():
     def log_px():
         return max(split.winfo_height() - sash_y(), 1)
 
+    # Until you move the sash yourself, it is put back at three quarters on
+    # every resize -- including the first real layout. Before the window is
+    # mapped the split reports a height of 1, and a sash placed from that
+    # lands at the top: that is how the log used to open far too high.
+    split_auto = {"on": True}
+
+    def place_split():
+        h = split.winfo_height()
+        if h < 200:
+            return False            # not laid out yet: the next resize places it
+        split.sash_place(0, 0, uicmd.pane_split(h))
+        return True
+
+    split_queued = {"on": False}
+
+    def _place_later():
+        split_queued["on"] = False
+        if split_auto["on"]:
+            place_split()
+
+    def _split_resized(_ev=None):
+        # The PanedWindow shares out a resize between its panes AFTER this
+        # event is handled, so a sash placed right here gets moved again:
+        # place it once things have settled.
+        if split_auto["on"] and not split_queued["on"]:
+            split_queued["on"] = True
+            try:
+                split.after_idle(_place_later)
+            except Exception:                                # noqa: BLE001
+                _place_later()
+
+    def _sash_dragged(_ev=None):
+        split_auto["on"] = False    # you put it there: it stays there
+
+    split.bind("<Configure>", _split_resized, add="+")
+    split.bind("<ButtonRelease-1>", _sash_dragged, add="+")
+
     def move_log(delta_px):
         """Positive = taller log, so the sash moves up."""
+        split_auto["on"] = False
         split.sash_place(0, 0, uicmd.move_sash(sash_y(), split.winfo_height(),
                                                -delta_px))
     for label, delta in (("log taller", 90), ("log shorter", -90)):
         ttk.Button(tools, text=label,
-                   command=lambda d=delta: move_log(d)).pack(side="left", padx=2)
+                   command=lambda d=delta: move_log(d)).grid(
+            row=0, column=0 if delta > 0 else 1, sticky="we", padx=1, pady=1)
 
     def reset_split(_ev=None):
-        split.sash_place(0, 0, uicmd.pane_split(split.winfo_height()))
-    ttk.Button(tools, text="reset split", command=reset_split).pack(side="left",
-                                                                    padx=2)
+        split_auto["on"] = True
+        place_split()
+    ttk.Button(tools, text="reset split", command=reset_split).grid(
+        row=1, column=0, sticky="we", padx=1, pady=1)
 
     def clear_log():
         outbox.configure(state="normal")
         outbox.delete("1.0", "end")
         outbox.configure(state="disabled")
-    ttk.Button(tools, text="Clear", command=clear_log).pack(side="right", padx=4)
+    ttk.Button(tools, text="Clear", command=clear_log).grid(
+        row=1, column=1, sticky="we", padx=1, pady=1)
 
     logbody = ttk.Frame(logf)
     logbody.pack(fill="both", expand=True)
@@ -2659,10 +3442,28 @@ def run():
     lsb.pack(side="right", fill="y")
     lhb.pack(side="bottom", fill="x")
 
+    # ---- start where you left off
+    _urls0 = str(EXTRA.get("urls") or "").strip()
+    if _urls0:
+        urls.insert("end", _urls0 + "\n")
+    _u0 = typed_urls()
+    url_seen["text"] = "\n".join(_u0)
+    link_seen["first"] = _u0[0] if _u0 else ""
+    for _var in (qurl, lurl):
+        if _u0 and not _var.get().strip():
+            _var.set(_u0[0])
+    _p0 = compute_plan()
+    if user_touched["v"]:
+        plan.update(_p0)       # your own settings stay; the summary says so
+        describe_mode()
+        refresh_button()
+    else:
+        apply_plan(_p0, opened_live=False)
+
     pump()
-    log("musictool ready.  Every CLI option is available on these tabs;")
-    log("each run prints the exact command it used, so you can copy it.")
-    log("Tick files on the Fix lyrics tab to run a subset; untick to skip.\n")
+    log("MusicTool ready.  Paste a link on the Download tab: what it is gets")
+    log("recognised as you paste, and Smart sets everything up for it -- or")
+    log("pick a mode yourself. Each run prints the exact command it used.\n")
 
     def _on_close():
         remember_all()          # closing the window saves, it does not discard
@@ -2671,4 +3472,5 @@ def run():
     root.protocol("WM_DELETE_WINDOW", _on_close)
     root.update_idletasks()
     reset_split()
+    root.after_idle(_split_resized)
     root.mainloop()

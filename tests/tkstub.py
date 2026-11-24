@@ -19,6 +19,7 @@ ROOTS = []        # Tk instances
 MESSAGES = []     # messagebox calls
 DIALOG = {}       # canned return values for filedialog
 DEFAULT_HEIGHT = 700
+SCREEN = [1920, 1080]   # what winfo_screenwidth/height report; tests change it
 
 
 class Event:
@@ -93,8 +94,11 @@ class Widget:
         ALL.append(self)
 
     # ------------------------------------------------------------- geometry
+    forgotten = False      # True after pack_forget / grid_remove: hidden
+
     def _set_geo(self, how, kw):
         self.geo = (how, dict(kw), self.options.get("in_"))
+        self.forgotten = False
         PACK_ORDER.append(self)
 
     def pack(self, **kw):
@@ -111,6 +115,7 @@ class Widget:
 
     def pack_forget(self):
         self.geo = None
+        self.forgotten = True
 
     def grid_remove(self):
         # real tk keeps the remembered options so a bare grid() brings it back
@@ -228,6 +233,16 @@ class Widget:
         for c in self.children:
             yield from c.walk()
 
+    def walk_shown(self):
+        """Like walk(), but skipping anything taken off screen with
+        pack_forget (and everything inside it). Folded option rows
+        (grid_remove) still count: one click shows them."""
+        if self.forgotten:
+            return
+        yield self
+        for c in self.children:
+            yield from c.walk_shown()
+
     def find(self, **pred):
         """First descendant (or self) whose options match every key."""
         for w in self.walk():
@@ -268,6 +283,18 @@ class Tk(Widget):
 
     def minsize(self, *a):
         self.options["minsize"] = a
+
+    def maxsize(self, *a):
+        self.options["maxsize"] = a
+
+    def winfo_screenwidth(self):
+        return SCREEN[0]
+
+    def winfo_screenheight(self):
+        return SCREEN[1]
+
+    def clipboard_get(self):
+        return self.clipboard
 
     def mainloop(self, n=0):
         self.looped = True       # returns at once: the test drives it by hand

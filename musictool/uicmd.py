@@ -58,80 +58,154 @@ HINTS = {
 }
 
 # ---------------------------------------------------------------------------
-# Modes. Four of them, because two independent facts decide almost every
-# checkbox: are you taking MUSIC or a VIDEO, and is it ONE thing or a PLAYLIST.
-# A music single wants audio extracted, lyrics embedded and no playlist walk;
-# a video playlist wants the video kept, chapters and subs, numbered file names
-# and no lyrics at all. Asking the user to reach those conclusions by ticking
-# nine checkboxes is how the wrong combination gets downloaded 447 times.
+# Modes. One per kind of thing people download, because the kind decides
+# almost every checkbox: a song wants the audio pulled out and synced lyrics,
+# an album wants the same but numbered in a folder of its own, a Short wants
+# the picture at its full vertical size, a two-hour talk is happiest as audio
+# with its chapters, and a live stream wants recording from its first minute.
+# Asking the user to reach those conclusions by ticking nine checkboxes is how
+# the wrong combination gets downloaded 447 times.
+#
+# On top of them sits Smart: it reads the link (classify_links), takes the
+# mode that kind of link wants -- or the one you have chosen for that kind
+# most often -- and sets it up the way you have set that mode up most often
+# (learn / smart_plan). Nothing is learned from a run you did not start.
 # ---------------------------------------------------------------------------
 
-MODES = ("music_single", "music_playlist", "video_single", "video_playlist")
+SMART = "smart"
+
+MODES = ("song", "album", "music_video", "video", "short", "podcast",
+         "video_playlist", "channel", "live")
+
+# Settings saved by older versions name the four modes of the old 2x2 grid.
+MODE_ALIASES = {"music_single": "song", "music_playlist": "album",
+                "video_single": "video", "video_playlist": "video_playlist"}
+
+# BMP symbols only: Tk 8.6 on Windows cannot draw emoji outside it.
+MODE_ICONS = {
+    SMART: "\u2726", "song": "\u266a", "album": "\u266b",
+    "music_video": "\u25b6", "video": "\u25b6", "short": "\u25ae",
+    "podcast": "\u25c9", "video_playlist": "\u2630", "channel": "\u25eb",
+    "live": "\u25cf",
+}
 
 MODE_LABELS = {
-    "music_single": "Music \u00b7 one song",
-    "music_playlist": "Music \u00b7 playlist / album",
-    "video_single": "Video \u00b7 one video",
-    "video_playlist": "Video \u00b7 playlist",
+    SMART: "Smart (auto)",
+    "song": "Song",
+    "album": "Album / music playlist",
+    "music_video": "Music video",
+    "video": "Video",
+    "short": "Short",
+    "podcast": "Podcast / talk (audio)",
+    "video_playlist": "Video playlist",
+    "channel": "Whole channel",
+    "live": "Live stream",
 }
 
 MODE_SUMMARY = {
-    "music_single": ("audio extracted to m4a, tags + cover embedded, lyrics "
-                     "embedded as each file lands, this video only"),
-    "music_playlist": ("audio extracted to m4a, lyrics as they land, walking "
-                       "the whole playlist in order"),
-    "video_single": ("video kept in mkv with chapters and subtitles, no lyrics, "
-                     "this video only"),
-    "video_playlist": ("videos kept in mkv, numbered inside a folder named "
-                       "after the playlist, no lyrics"),
+    "song": ("audio extracted to m4a, tags + cover embedded, synced lyrics "
+             "embedded as the file lands, this song only"),
+    "album": ("audio extracted to m4a with lyrics, numbered 001, 002 ... "
+              "inside a folder named after the album or playlist"),
+    "music_video": ("the video kept in mp4 (plays everywhere) at up to "
+                    "1080p, named Artist - Title, no lyrics"),
+    "video": ("video kept in mkv at up to 1080p with chapters and "
+              "subtitles, no lyrics, this video only"),
+    "short": ("the vertical video at its best quality in mp4, no chapters "
+              "or subtitles"),
+    "podcast": ("audio only -- a fraction of the video's size -- with the "
+                "chapters kept, no lyrics"),
+    "video_playlist": ("videos kept in mkv at up to 1080p, numbered inside a "
+                       "folder named after the playlist, no lyrics"),
+    "channel": ("every video of the channel in mkv at up to 1080p, in a "
+                "folder per channel, oldest first by date in the name"),
+    "live": ("recorded from the stream's first minute, watchable while it "
+             "records; a stop loses nothing (Live stream & chat below)"),
 }
+
+# What the big button says, so it always names what it is about to do.
+MODE_BUTTON = {
+    "song": "Download song + lyrics",
+    "album": "Download album + lyrics",
+    "music_video": "Download music video",
+    "video": "Download video",
+    "short": "Download Short",
+    "podcast": "Download audio",
+    "video_playlist": "Download playlist",
+    "channel": "Download channel",
+    "live": "Record live stream",
+}
+
+_MUSIC = {
+    "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
+    "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
+    "embed_subs": False, "just_download": False,
+    "no_lyrics": False, "lyrics_only": False,
+    "quality": "", "max_size": "", "format_selector": "", "merge_format": "",
+    "exact": False,
+}
+_VIDEO = {
+    "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
+    "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
+    "just_download": False, "no_lyrics": True, "lyrics_only": False,
+    "quality": "1080", "max_size": "", "format_selector": "", "exact": False,
+}
+_NUMBERED = "%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s"
 
 # Only the dests that a mode actually has an opinion about. Everything else is
 # left alone, so a saved config (proxy, cookies, speed limit) survives a switch.
 MODE_VALUES = {
-    "music_single": {
-        "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
-        "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
-        "embed_subs": False, "just_download": False,
-        "no_lyrics": False, "lyrics_only": False,
-        "no_playlist": True, "playlist_items": "", "quality": "",
-        "max_size": "", "format_selector": "", "merge_format": "", "exact": False,
-        "template": "%(uploader)s - %(title)s.%(ext)s",
-    },
-    "music_playlist": {
-        "keep_video": False, "audio_format": "m4a", "audio_quality": "4",
-        "embed_metadata": True, "embed_thumbnail": True, "embed_chapters": False,
-        "embed_subs": False, "just_download": False,
-        "no_lyrics": False, "lyrics_only": False,
-        "no_playlist": False, "quality": "", "max_size": "",
-        "format_selector": "", "merge_format": "", "exact": False,
-        "template": "%(playlist_title)s/%(playlist_index)03d - "
-                    "%(title)s.%(ext)s",
-    },
-    "video_single": {
-        "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
-        "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
-        "just_download": False, "no_lyrics": True, "lyrics_only": False, "no_playlist": True,
-        "playlist_items": "", "quality": "1080", "max_size": "",
-        "format_selector": "", "exact": False,
-        "template": "%(title)s.%(ext)s",
-    },
-    "video_playlist": {
-        "keep_video": True, "merge_format": "mkv", "embed_metadata": True,
-        "embed_thumbnail": True, "embed_chapters": True, "embed_subs": True,
-        "just_download": False, "no_lyrics": True, "lyrics_only": False, "no_playlist": False,
-        "quality": "1080", "max_size": "", "format_selector": "", "exact": False,
-        "template": "%(playlist_title)s/%(playlist_index)03d - "
-                    "%(title)s.%(ext)s",
-    },
+    "song": dict(_MUSIC, no_playlist=True, playlist_items="",
+                 template="%(uploader)s - %(title)s.%(ext)s"),
+    "album": dict(_MUSIC, no_playlist=False, template=_NUMBERED),
+    "music_video": dict(_VIDEO, merge_format="mp4", embed_chapters=False,
+                        embed_subs=False, no_playlist=True, playlist_items="",
+                        template="%(uploader)s - %(title)s.%(ext)s"),
+    "video": dict(_VIDEO, no_playlist=True, playlist_items="",
+                  template="%(title)s.%(ext)s"),
+    # height<=1080 would turn a 1080x1920 Short into 608x1080: take the best
+    "short": dict(_VIDEO, merge_format="mp4", quality="best",
+                  embed_chapters=False, embed_subs=False, no_playlist=True,
+                  playlist_items="", template="%(uploader)s - %(title)s.%(ext)s"),
+    "podcast": dict(_MUSIC, no_lyrics=True, embed_chapters=True,
+                    no_playlist=True, playlist_items="",
+                    template="%(uploader)s - %(title)s.%(ext)s"),
+    "video_playlist": dict(_VIDEO, no_playlist=False, template=_NUMBERED),
+    "channel": dict(_VIDEO, no_playlist=False,
+                    template="%(uploader)s/%(upload_date)s - %(title)s.%(ext)s"),
+    # [id] in the name is how `live` and `chat` find the recording again
+    "live": dict(_VIDEO, quality="", embed_subs=False, no_playlist=True,
+                 playlist_items="", live_from_now=False,
+                 template="%(title)s [%(id)s].%(ext)s"),
 }
 
-# The two things a mode name is built from, kept separate so the UI can show
-# them as a grid instead of a list of four.
-MODE_WHAT = {"music_single": "music", "music_playlist": "music",
-             "video_single": "video", "video_playlist": "video"}
-MODE_SCOPE = {"music_single": "single", "music_playlist": "playlist",
-              "video_single": "single", "video_playlist": "playlist"}
+# Audio or picture, and one item or many: the two facts every mode is made of.
+MODE_WHAT = {m: ("video" if MODE_VALUES[m]["keep_video"] else "audio")
+             for m in MODES}
+MODE_SCOPE = {m: ("single" if MODE_VALUES[m]["no_playlist"] else "playlist")
+              for m in MODES}
+
+# The neighbouring mode when a link says "many" (or "one") instead.
+MODE_SIBLING = {
+    ("song", "playlist"): "album", ("album", "single"): "song",
+    ("video", "playlist"): "video_playlist",
+    ("video_playlist", "single"): "video",
+    ("music_video", "playlist"): "video_playlist",
+    ("short", "playlist"): "video_playlist",
+    ("channel", "single"): "video", ("live", "playlist"): "video_playlist",
+}
+
+
+def mode_title(mode):
+    """'♪ Song' -- the icon and the name, as the mode buttons show them."""
+    mode = canonical_mode(mode)
+    return f"{MODE_ICONS.get(mode, '')} {MODE_LABELS.get(mode, mode)}".strip()
+
+
+def canonical_mode(mode, default=SMART):
+    """A mode name from any version of the settings, or `default`."""
+    mode = MODE_ALIASES.get(mode, mode)
+    return mode if mode in MODES or mode == SMART else default
 
 
 def is_playlist_url(url):
@@ -155,13 +229,16 @@ def scope_of(url):
 
 
 def make_mode(what, scope):
-    """The mode name for a (music|video, single|playlist) pair."""
-    name = f"{what}_{scope}"
-    return name if name in MODES else "music_single"
+    """The basic mode for an (audio|music|video, single|playlist) pair."""
+    audio = what in ("audio", "music")
+    if scope == "playlist":
+        return "album" if audio else "video_playlist"
+    return "song" if audio else "video"
 
 
 def mode_for(urls, what="music"):
-    """The mode these URLs want. One playlist in the list means a playlist run."""
+    """The basic mode these URLs want. One playlist in the list means a
+    playlist run."""
     for u in urls or []:
         if is_playlist_url(u):
             return make_mode(what, "playlist")
@@ -169,24 +246,40 @@ def mode_for(urls, what="music"):
 
 
 def mode_switch(mode, scope=None, what=None):
-    """The neighbouring mode when one axis changes."""
-    return make_mode(what or MODE_WHAT[mode], scope or MODE_SCOPE[mode])
+    """The neighbouring mode when one axis changes; the same mode when it
+    has no neighbour that way (a Short has no 'Short playlist')."""
+    mode = canonical_mode(mode, "song")
+    if what and what != MODE_WHAT[mode] and not (
+            what == "music" and MODE_WHAT[mode] == "audio"):
+        return make_mode(what, scope or MODE_SCOPE[mode])
+    if scope and scope != MODE_SCOPE[mode]:
+        return MODE_SIBLING.get((mode, scope), mode)
+    return mode
 
 
-def mode_drift(values, mode):
+def mode_drift(values, mode, want=None):
     """Which of the mode's settings the user has since changed by hand.
 
     The window prints a one-line summary of what the mode will do; that line
-    must stop describing the run the moment it is no longer true.
+    must stop describing the run the moment it is no longer true. `want` is
+    what the mode was applied as (its values plus anything learned).
     """
     out = []
-    for dest, want in MODE_VALUES[mode].items():
+    want = want if want is not None else MODE_VALUES[canonical_mode(mode, "song")]
+    for dest, val in want.items():
         have = values.get(dest)
         if have is None:
             continue
-        if str(have).strip().lower() != str(want).strip().lower():
-            out.append(dest)
+        if _same(have, val):
+            continue
+        if val in ("", None) and dest not in MODE_RESET:
+            continue            # "no opinion" cannot be contradicted
+        out.append(dest)
     return out
+
+
+def _same(a, b):
+    return str(a).strip().lower() == str(b).strip().lower()
 
 
 # A blank in MODE_VALUES means "no opinion" -- keep whatever the user typed,
@@ -194,6 +287,503 @@ def mode_drift(values, mode):
 # are the exception: they silently override everything else, so a mode always
 # clears them rather than inheriting a stale one.
 MODE_RESET = ("format_selector", "playlist_items", "quality")
+
+
+# ---------------------------------------------------------------------------
+# What a link is. Read from the URL alone -- instant, offline, no guessing
+# about the network -- and refined from yt-dlp's answer when one is fetched
+# anyway (Identify, Load qualities, Is it live?).
+# ---------------------------------------------------------------------------
+
+# kind -> (what it is called, icon, the mode it wants, plural noun)
+LINK_KINDS = {
+    "ytm_song": ("YouTube Music song", "\u266a", "song", "songs"),
+    "ytm_album": ("YouTube Music album", "\u266b", "album", "albums"),
+    "ytm_playlist": ("YouTube Music playlist", "\u266b", "album", "playlists"),
+    "ytm_artist": ("YouTube Music artist", "\u266b", "album", "artists"),
+    "album": ("album (YouTube playlist of an album)", "\u266b", "album",
+              "albums"),
+    "video": ("YouTube video", "\u25b6", "video", "videos"),
+    "in_playlist": ("YouTube video in a playlist -- just this one", "\u25b6",
+                    "video", "videos"),
+    "short": ("YouTube Short", "\u25ae", "short", "Shorts"),
+    "live": ("YouTube live stream", "\u25cf", "live", "live streams"),
+    "playlist": ("YouTube playlist", "\u2630", "video_playlist", "playlists"),
+    "channel": ("YouTube channel", "\u25eb", "channel", "channels"),
+    "music_video": ("music video", "\u266b", "music_video", "music videos"),
+    "long": ("long video", "\u25c9", "video", "long videos"),
+    "upcoming": ("scheduled live stream (not started yet)", "\u25cf", "live",
+                 "scheduled streams"),
+    "replay": ("finished live stream", "\u25cf", "live", "finished streams"),
+    "sc_track": ("SoundCloud track", "\u266a", "song", "tracks"),
+    "sc_set": ("SoundCloud playlist", "\u266b", "album", "playlists"),
+    "bc_track": ("Bandcamp track", "\u266a", "song", "tracks"),
+    "bc_album": ("Bandcamp album", "\u266b", "album", "albums"),
+    "vertical": ("short vertical video", "\u25ae", "short", "short videos"),
+    "twitch_live": ("Twitch channel (live)", "\u25cf", "live", "streams"),
+    "web": ("video on another site", "\u25b6", "video", "videos"),
+    "spotify": ("Spotify link", "!", "song", "Spotify links"),
+    "text": ("not a link", "?", None, "lines that are not links"),
+}
+
+# what to tell the user about a kind that cannot be downloaded as it is
+KIND_WARNING = {
+    "spotify": ("Spotify streams are encrypted and cannot be downloaded. "
+                "Search the song on music.youtube.com and paste that link -- "
+                "the lyrics are found the same way."),
+    "text": "that line is not a link -- it will be skipped",
+    "upcoming": ("it has not started: Record live stream waits for it and "
+                 "records from the first minute"),
+}
+
+_ID = r"[A-Za-z0-9_-]{6,}"
+SITE_NAMES = {
+    "vimeo.com": "Vimeo", "dailymotion.com": "Dailymotion",
+    "facebook.com": "Facebook", "fb.watch": "Facebook", "x.com": "X",
+    "twitter.com": "X", "instagram.com": "Instagram", "tiktok.com": "TikTok",
+    "twitch.tv": "Twitch", "soundcloud.com": "SoundCloud",
+    "bandcamp.com": "Bandcamp", "bilibili.com": "Bilibili",
+    "reddit.com": "Reddit", "rumble.com": "Rumble", "odysee.com": "Odysee",
+}
+
+
+def _split_url(url):
+    """(host without www./m., path, query dict) -- a link without https://
+    (pasted from a phone, typed by hand) is read the same way."""
+    from urllib.parse import parse_qs, urlsplit
+    u = (url or "").strip().strip("<>\"'")
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", u, re.I):
+        u = "https://" + u
+    try:
+        parts = urlsplit(u)
+    except ValueError:
+        return "", "", {}
+    host = (parts.hostname or "").lower()
+    for pre in ("www.", "m.", "mobile."):
+        if host.startswith(pre):
+            host = host[len(pre):]
+    q = {k: v[0] for k, v in parse_qs(parts.query).items() if v}
+    return host, parts.path or "/", q
+
+
+def _site(host):
+    for dom, name in SITE_NAMES.items():
+        if host == dom or host.endswith("." + dom):
+            return name
+    return host
+
+
+def _looks_like_url(text):
+    t = (text or "").strip()
+    if not t or " " in t:
+        return False
+    if re.match(r"^[a-z][a-z0-9+.-]*://", t, re.I):
+        return True
+    return bool(re.match(r"^[\w-]+(\.[\w-]+)+(/|$)", t))
+
+
+def classify_link(url):
+    """What this link is, from the URL alone.
+
+    -> {"kind", "label", "icon", "mode", "url", "id", "site", "note"}
+    """
+    out = {"url": (url or "").strip(), "id": "", "site": "", "note": ""}
+    kind = "text"
+    if _looks_like_url(url):
+        host, path, q = _split_url(url)
+        low = path.lower()
+        lst = q.get("list", "")
+        out["site"] = _site(host)
+        yt = host in ("youtube.com", "youtu.be", "youtube-nocookie.com") \
+            or host.endswith(".youtube.com")
+        if host == "music.youtube.com":
+            out["site"] = "YouTube Music"
+            if q.get("v"):
+                kind, out["id"] = "ytm_song", q["v"]
+                if lst:
+                    out["note"] = "from a playlist -- just this song"
+            elif low.startswith("/playlist") and lst:
+                kind = "ytm_album" if lst.startswith("OLAK5uy_") else "ytm_playlist"
+                out["id"] = lst
+            elif low.startswith("/browse/mpreb"):
+                kind = "ytm_album"
+            elif low.startswith(("/channel/", "/@", "/browse/uc")):
+                kind = "ytm_artist"
+            else:
+                kind = "ytm_song"
+        elif yt:
+            out["site"] = "YouTube"
+            m = re.match(r"^/(shorts|live|embed|v|e)/(" + _ID + ")", path)
+            if host == "youtu.be":
+                out["id"] = path.strip("/").split("/")[0]
+                kind = "in_playlist" if lst else "video"
+            elif m:
+                out["id"] = m.group(2)
+                kind = {"shorts": "short", "live": "live"}.get(m.group(1),
+                                                             "video")
+            elif q.get("v"):
+                out["id"] = q["v"]
+                kind = "in_playlist" if lst else "video"
+            elif low.startswith("/playlist") and lst:
+                out["id"] = lst
+                kind = "album" if lst.startswith("OLAK5uy_") else "playlist"
+            elif re.match(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)", path):
+                kind = "channel"
+                tail = low.rstrip("/").rsplit("/", 1)[-1]
+                if tail == "live":
+                    kind = "live"
+                elif tail == "shorts":
+                    out["note"] = "the channel's Shorts"
+                elif tail == "streams":
+                    out["note"] = "the channel's past streams"
+            else:
+                kind = "video"
+        elif out["site"] == "SoundCloud":
+            kind = "sc_set" if "/sets/" in low else "sc_track"
+        elif out["site"] == "Bandcamp":
+            kind = "bc_album" if low.startswith("/album/") else "bc_track"
+        elif host.endswith("spotify.com"):
+            kind, out["site"] = "spotify", "Spotify"
+        elif out["site"] == "TikTok" or (
+                out["site"] in ("Instagram", "Facebook")
+                and re.match(r"^/(reels?|share/r)/", low)):
+            kind = "vertical"
+        elif out["site"] == "Twitch":
+            seg = [s for s in low.split("/") if s]
+            kind = "web" if (seg and seg[0] in ("videos", "clip")) or \
+                "clip" in host or len(seg) != 1 else "twitch_live"
+        else:
+            kind = "web"
+    label, icon, mode, _pl = LINK_KINDS[kind]
+    if kind in ("web", "vertical") and out["site"]:
+        label = f"{'short video' if kind == 'vertical' else 'video'} on " \
+                f"{out['site']}"
+    out.update(kind=kind, label=label, icon=icon, mode=mode)
+    return out
+
+
+_URL_RE = re.compile(r"(?:https?://|www\.|(?:music\.|m\.)?youtube\.com/|"
+                     r"youtu\.be/)[^\s<>\"']+", re.I)
+
+
+def extract_links(text):
+    """The links in whatever was pasted, in order, each once.
+
+    A line copied from a chat ("check this out https://youtu.be/x !!") gives
+    its link; a line that is nothing but a bare youtube.com/... gives itself;
+    a line with no link gives nothing (stray_lines counts those).
+    """
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        found = [f.rstrip(").,;:!?]'\"") for f in _URL_RE.findall(line)]
+        if not found and _looks_like_url(line):
+            found = [line]
+        for f in found:
+            if f and f not in out:
+                out.append(f)
+    return out
+
+
+def stray_lines(text):
+    """How many non-empty lines hold no link at all."""
+    return sum(1 for line in (text or "").splitlines()
+               if line.strip() and not extract_links(line))
+
+
+def classify_links(urls, refined=None):
+    """What a whole paste is: every line read, and the one that leads.
+
+    A playlist anywhere in the list makes it a playlist run (as before); with
+    only single items the most common kind leads. `refined` maps a URL to
+    what an online look-up found ({url: (kind, note)}), which beats the URL's
+    own guess. -> {"kind", "label", "icon", "mode", "items", "links",
+    "summary", "warnings"}
+    """
+    from collections import Counter
+    items = [classify_link(u) for u in (urls or []) if str(u).strip()]
+    for i in items:
+        got = (refined or {}).get(i["url"])
+        if not got:
+            continue
+        k, note = (got, "") if isinstance(got, str) else (got[0], got[1])
+        if k in LINK_KINDS:
+            label, icon, mode, _pl = LINK_KINDS[k]
+            i.update(kind=k, label=label, icon=icon, mode=mode,
+                     note=note or i["note"])
+    links = [i for i in items if i["mode"]]
+    warns = []
+    for i in items:
+        w = KIND_WARNING.get(i["kind"])
+        if w and w not in warns:
+            warns.append(w)
+    if not links:
+        return {"kind": "empty" if not items else "text",
+                "label": "no link yet" if not items else "not a link",
+                "icon": "" if not items else "?", "mode": None,
+                "items": items, "links": 0, "warnings": warns,
+                "summary": ("Paste a link from YouTube, YouTube Music, "
+                            "SoundCloud, Bandcamp or another video site -- "
+                            "its type is recognised as you paste"
+                            if not items else "that is not a link")}
+    lists = [i for i in links if MODE_SCOPE.get(i["mode"]) == "playlist"]
+    if lists:
+        lead = lists[0]
+    else:
+        count = Counter(i["kind"] for i in links)
+        top = max(count.values())
+        lead = next(i for i in links if count[i["kind"]] == top)
+    if len(links) == 1:
+        summary = lead["label"] + (f" ({lead['note']})" if lead["note"] else "")
+    else:
+        count = Counter(i["kind"] for i in links)
+        bits = []
+        for k, n in sorted(count.items(), key=lambda kv: -kv[1]):
+            name = LINK_KINDS[k][0] if n == 1 else LINK_KINDS[k][3]
+            bits.append(f"{n} {name}" if n > 1 else f"1 {name}")
+        summary = f"{len(links)} links: " + ", ".join(bits)
+    return {"kind": lead["kind"], "label": lead["label"], "icon": lead["icon"],
+            "mode": lead["mode"], "items": items, "links": len(links),
+            "summary": summary, "warnings": warns}
+
+
+def refine_kind(kind, info):
+    """A better answer once yt-dlp has described the video.
+
+    Live now / scheduled / a finished stream, a music video (YouTube files it
+    under Music), a Short (vertical, a minute or so) and a long talk are all
+    invisible in a plain watch URL.
+    """
+    if not isinstance(info, dict) or info.get("error"):
+        return kind
+    if info.get("_type") == "playlist" or info.get("entries") is not None:
+        return kind
+    status = info.get("live_status") or ""
+    if status in ("is_live", "post_live"):
+        return "live"
+    if status == "is_upcoming":
+        return "upcoming"
+    if status == "was_live":
+        return "replay"
+    if kind.startswith(("ytm_", "sc_", "bc_")):
+        return kind
+    dur = info.get("duration") or 0
+    w, h = info.get("width") or 0, info.get("height") or 0
+    if kind == "short" or (dur and dur <= 180 and h > w > 0):
+        return "short" if kind in ("short", "video", "in_playlist") else "vertical"
+    cats = [str(c).lower() for c in (info.get("categories") or [])]
+    if "music" in cats and dur and dur < 15 * 60:
+        return "music_video"
+    if dur and dur >= 20 * 60:
+        return "long"
+    return kind
+
+
+# Only single items are worth a look-up: a playlist or a channel says what it
+# is in its link, and asking yt-dlp about one would read every entry.
+IDENTIFIABLE = ("video", "in_playlist", "short", "live", "web", "vertical")
+
+
+def describe_duration(seconds):
+    s = int(seconds or 0)
+    h, m = divmod(s // 60, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m {s % 60:02d}s"
+
+
+# ---------------------------------------------------------------------------
+# What the window has learned you like. Kept in the config file under
+# "learned": for every kind of link, the modes you ran for it; for every
+# mode, the values you ran it with. A choice is "learned" once it is the
+# majority of your recent runs AND you made it at least twice -- one odd run
+# never changes what Smart does next time.
+# ---------------------------------------------------------------------------
+
+LEARNABLE = ("output_dir", "audio_format", "audio_quality", "quality",
+             "max_size", "merge_format", "embed_thumbnail", "embed_chapters",
+             "embed_subs", "sub_langs", "audio_lang", "allow_unsynced",
+             "template")
+LEARN_KEEP = 10          # recent runs remembered per kind and per setting
+
+
+def _norm(v):
+    if isinstance(v, bool) or v is None:
+        return bool(v)
+    return str(v).strip()
+
+
+def favourite(history, min_count=2):
+    """The value chosen most often, if it is a real habit: a majority of the
+    history and at least `min_count` times. Otherwise None."""
+    from collections import Counter
+    vals = [json.dumps(v, sort_keys=True) for v in (history or [])]
+    if not vals:
+        return None
+    count = Counter(vals)
+    top = max(count.values())
+    # ties go to the most recent of the tied values
+    best = next(v for v in reversed(vals) if count[v] == top)
+    if top < min_count or top * 2 <= len(vals):
+        return None
+    return json.loads(best)
+
+
+def learn(store, kind, mode, values):
+    """Record one run you started: `mode` for this kind of link, with these
+    values. Returns the store (a plain dict, saved as is)."""
+    store = dict(store or {})
+    mode = canonical_mode(mode, "")
+    if mode not in MODES:
+        return store
+    kinds = dict(store.get("kinds") or {})
+    if kind and kind not in ("empty", "text"):
+        kinds[kind] = (list(kinds.get(kind) or []) + [mode])[-LEARN_KEEP:]
+    modes = dict(store.get("modes") or {})
+    per = dict(modes.get(mode) or {})
+    for dest in LEARNABLE:
+        if dest not in values:
+            continue
+        v = _norm(values[dest])
+        if dest == "output_dir" and not v:
+            continue
+        per[dest] = (list(per.get(dest) or []) + [v])[-LEARN_KEEP:]
+    modes[mode] = per
+    store.update(kinds=kinds, modes=modes, runs=int(store.get("runs") or 0) + 1)
+    return store
+
+
+def favourite_mode(store, kind, default):
+    fav = favourite(((store or {}).get("kinds") or {}).get(kind))
+    return fav if fav in MODES else default
+
+
+def learned_values(store, mode):
+    """{dest: value} for the settings of `mode` you have made a habit of."""
+    per = ((store or {}).get("modes") or {}).get(mode) or {}
+    out = {}
+    for dest, hist in per.items():
+        if dest not in LEARNABLE:
+            continue
+        fav = favourite(hist)
+        if fav is not None:
+            out[dest] = fav
+    return out
+
+
+def smart_plan(links, store=None, learn_on=True, chosen=SMART, last=None):
+    """Everything the mode card shows and applies.
+
+    links:  classify_links(...) of what is in the box
+    chosen: the mode button that is down (SMART, or a mode picked by hand)
+    -> {"mode", "values", "learned": {dest: value}, "why"}
+    """
+    chosen = canonical_mode(chosen)
+    kind = (links or {}).get("kind") or "empty"
+    default = (links or {}).get("mode")
+    why = ""
+    if chosen != SMART:
+        mode = chosen
+    elif not default:
+        mode = canonical_mode(last, "song") if last else "song"
+        if mode == SMART:
+            mode = "song"
+        why = "waiting for a link"
+    else:
+        mode = favourite_mode(store, kind, default) if learn_on else default
+        why = (f"you usually choose {MODE_LABELS[mode]} for a "
+               f"{LINK_KINDS[kind][0]}" if mode != default
+               else f"right for a {LINK_KINDS[kind][0]}")
+    values = dict(MODE_VALUES[mode])
+    learned = {}
+    if learn_on:
+        for dest, v in learned_values(store, mode).items():
+            if dest in values and _same(values[dest], v):
+                continue
+            values[dest] = v
+            learned[dest] = v
+    return {"mode": mode, "values": values, "learned": learned, "why": why}
+
+
+def describe_learned(learned):
+    """'opus · up to 720p · folder Music' -- a short line, not a dump."""
+    bits = []
+    for dest, v in learned.items():
+        if dest == "output_dir":
+            name = os.path.basename(str(v).rstrip("/\\")) or str(v)
+            bits.append(f"folder {name}")
+        elif dest == "quality":
+            bits.append(f"up to {v}p" if str(v).isdigit()
+                        else (f"{v} quality" if v else "best quality"))
+        elif dest in ("audio_format", "merge_format"):
+            bits.append(str(v))
+        elif dest == "audio_quality":
+            bits.append(f"audio quality {v}")
+        elif dest == "audio_lang":
+            bits.append(f"spoken language {v}")
+        elif dest == "template":
+            bits.append("your file names")
+        elif dest == "max_size":
+            bits.append(f"under {v}" if v else "no size limit")
+        elif isinstance(v, bool):
+            bits.append(("" if v else "no ") + LABELS.get(dest, dest).lower())
+        else:
+            bits.append(f"{LABELS.get(dest, dest).lower()} {v}")
+    return " \u00b7 ".join(bits)
+
+
+def learned_report(store):
+    """Plain lines for the Settings tab: what Smart will do, and why."""
+    store = store or {}
+    lines = []
+    for kind, hist in sorted((store.get("kinds") or {}).items()):
+        if kind not in LINK_KINDS:
+            continue
+        fav = favourite(hist)
+        dflt = LINK_KINDS[kind][2]
+        use = fav if fav in MODES else dflt
+        n = sum(1 for m in hist if m == use)
+        lines.append(f"{LINK_KINDS[kind][0]}  \u2192  {MODE_LABELS.get(use, use)}"
+                     f"   ({n} of your last {len(hist)})"
+                     + ("" if fav in MODES else "   [the default]"))
+    for mode in MODES:
+        got = learned_values(store, mode)
+        if got:
+            lines.append(f"{MODE_LABELS[mode]}:  {describe_learned(got)}")
+    if not lines:
+        lines.append("Nothing learned yet. Every download you start teaches "
+                     "Smart a little; a choice counts once you have made it "
+                     "at least twice.")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# The window itself: never bigger than the screen it opens on.
+# ---------------------------------------------------------------------------
+
+WINDOW = (1080, 720)        # 90% of the old 800px height
+MIN_WINDOW = (760, 470)
+
+
+def fit_window(screen_w, screen_h, want=WINDOW, minimum=MIN_WINDOW,
+               reserve_w=16, reserve_h=80):
+    """Size and place the window inside the screen.
+
+    reserve_h keeps the title bar and the taskbar clear (Windows' taskbar is
+    40-48px, the title bar ~31px); reserve_w the borders. A screen smaller
+    than the minimum shrinks the minimum too, so the window can always fit.
+    -> {"w", "h", "x", "y", "min_w", "min_h", "max_w", "max_h", "geometry"}
+    """
+    sw, sh = int(screen_w or 0), int(screen_h or 0)
+    if sw < 200 or sh < 200:             # no answer from the display: trust want
+        sw, sh = want[0] + reserve_w, want[1] + reserve_h
+    max_w, max_h = max(320, sw - reserve_w), max(240, sh - reserve_h)
+    w, h = min(int(want[0]), max_w), min(int(want[1]), max_h)
+    min_w, min_h = min(int(minimum[0]), max_w), min(int(minimum[1]), max_h)
+    x = max(0, (sw - w) // 2)
+    y = max(0, (sh - reserve_h - h) // 2)
+    return {"w": w, "h": h, "x": x, "y": y, "min_w": min_w, "min_h": min_h,
+            "max_w": max_w, "max_h": max_h, "geometry": f"{w}x{h}+{x}+{y}"}
 
 
 # Human wording for the generated widgets. Anything missing here falls back to
@@ -650,17 +1240,32 @@ SELECTION_MODES = ("all", "none", "invert", "needs", "ok", "shared")
 # --------------------------------------------------------------------------
 # window layout
 # --------------------------------------------------------------------------
-def pane_split(total, log_frac=0.34, min_top=170, min_log=90):
+def pane_split(total, log_frac=0.25, min_top=170, min_log=140):
     """Y of the sash between the tabs and the log, for a window `total` tall.
 
     The log sits BELOW the sash, so its height is total - y: to give the log a
-    third of the window the sash has to go at two thirds. The tabs keep at
-    least min_top and the log at least min_log.
+    quarter of the window the sash has to go at three quarters. The tabs keep
+    at least min_top and the log at least min_log -- 140px, enough for its
+    progress bars and still a few lines of text on a small screen.
+
+    A tk.PanedWindow that has not been laid out yet reports a height of 1,
+    and a sash placed from that lands at min_top -- which is how the log used
+    to open covering most of the window. The GUI therefore places it again on
+    every resize until you move it yourself.
     """
     total = max(int(total), min_top + min_log)
     y = int(total * (1.0 - log_frac))
     y = max(y, min_top)
     return min(y, total - min_log)
+
+
+def split_heights(window_h, chrome=58, **kw):
+    """(tabs, log) heights to request for a window `window_h` tall, so the
+    very first frame is already drawn at the right split. `chrome` is the
+    status bar and padding around the split."""
+    total = max(int(window_h) - int(chrome), 1)
+    y = pane_split(total, **kw)
+    return y, max(total, 260) - y
 
 
 def move_sash(current_y, total, delta_y, min_top=170, min_log=90):

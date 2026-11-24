@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1159 assertions across 46 sections (plus 8b), 0 failures** — with or without
+**1217 assertions across 47 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or
@@ -58,7 +58,7 @@ geometry manager calls, then lets the tests inspect it:
 
 ## Traps that will cost you an afternoon
 
-- **GUI jobs run inline.** Line ~775 of the test file sets
+- **GUI jobs run inline.** Line ~814 of the test file sets
   `G.threading = _FakeThreading()` whose `Thread` is synchronous. Anything that
   needs a job *still running* — the queue, concurrency, the progress panel —
   must swap the real module back and restore it afterwards:
@@ -97,8 +97,20 @@ geometry manager calls, then lets the tests inspect it:
 - **`--dry-run` never calls `download.download`.** Monkeypatch it to capture
   what would have been passed.
 
-- **`"Download" in text` matches two buttons** (`Download + lyrics` and
-  `Download this quality`). Select by exact text.
+- **The big Download button changes its text with the mode** (`Download
+  song + lyrics`, `Record live stream`, `Add to queue` while running …).
+  Find it with `MAIN_TEXTS` (section 17), never by one fixed text.
+
+- **Old tab names still work in `nb.tab_for()`.** Section 17 wraps the stub's
+  `Notebook.tab_for` so that *Fix lyrics* / *Scan & duplicates* / *Lyrics
+  files* select that Library job and return a view of what is on screen
+  (`walk_shown()` skips anything `pack_forget`-ed), *Tools* is Settings, and
+  *Quality* / *Audio tracks* / *Live streams* open that section of Download
+  and return its body. `_real_tab_for` is the unwrapped lookup.
+
+- **Smart keeps the last mode while the box is empty** ("waiting for a
+  link"). A check that wants the song defaults must start from a fresh
+  config, or press a mode.
 
 - `grep -E "PASS|FAIL"` truncates multi-line failure details. Read the raw
   tail; a missing summary line means the suite crashed, not that it passed.
@@ -253,8 +265,30 @@ Proven by execution:
   their subtitles) alone, saying so; a range no part holds touches none of
   them; a video without a part in its name still takes the range. (Before,
   the range's chat was written over every part's subtitle.)
+- the four-tab window, Smart and the modes (sections 17, 28, 47): four tabs,
+  with Quality / Audio tracks / Live / More options / Fix language as
+  foldable sections of Download; nine modes, each a different command with
+  the right flags; every kind of link recognised from the link alone
+  (YouTube Music song/album, video, video-in-a-playlist, Short, live,
+  playlist, channel, SoundCloud, Bandcamp, other sites, Spotify explained,
+  non-links counted), links pulled out of a pasted message once each, a look-up
+  refining a plain link (live, scheduled, finished stream, long talk, Short,
+  music video); learning that needs a majority and two picks, keeps the last
+  ten, is obeyed in Smart, ignored when switched off or when you pick a mode,
+  and is forgotten on request; in the window the big button following the
+  link (album, Short at best quality, live → *Record live stream* running the
+  recording), *Identify online* turning a plain link into a live one, two
+  runs of Music video for songs making Smart choose it with 720p and say
+  why, the learned habit in the settings file and in Settings, open sections
+  and the Library job remembered across a restart; the window sized from the
+  display (1080x720 centred on 1920x1080, 1008x520 on 1024x600, never larger
+  than the screen) and the log asked for its height before the first frame.
 
-**Not proven:** pixels. `tkstub` reproduces widget trees, geometry and command
-wiring, but renders nothing. Scroll feel, real clipping, real window resizing
-and anything platform-specific to Windows are outside what this suite can say.
-When you change GUI code, say so out loud.
+**Not proven by the suite:** pixels. `tkstub` reproduces widget trees,
+geometry and command wiring, but renders nothing. The four-tab window was
+looked at by hand — real Tk under Xvfb at 1366x768 and 1024x600, every tab,
+every section open, resized — which found and fixed rows wider than the
+window, a sash placed before the PanedWindow shared out a resize, and labels
+that never re-wrapped. That was a sandbox on Linux, not Windows: fonts, DPI
+scaling and the Windows title bar are still unverified. When you change GUI
+code, say so out loud.

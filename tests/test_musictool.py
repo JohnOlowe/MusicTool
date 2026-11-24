@@ -748,15 +748,16 @@ check("common_root across folders climbs",
       common_root([PICK, MUSIC]) == os.path.abspath(WORK), common_root([PICK, MUSIC]))
 check("common_root of nothing", common_root([]) == ".")
 
-check("pane_split leaves the log about a third",
-      abs((900 - U.pane_split(900)) / 900 - 0.34) < 0.01,
+check("pane_split leaves the log a quarter (it starts low, as asked)",
+      abs((900 - U.pane_split(900)) / 900 - 0.25) < 0.01,
       f"sash={U.pane_split(900)} log={900 - U.pane_split(900)}")
 check("pane_split never starves either pane on a small window",
       U.pane_split(200) == 170, str(U.pane_split(200)))
 check("... so the tabs keep at least 170px",
       all(U.pane_split(t) >= 170 for t in (200, 400, 700, 1200)))
-check("... and the log keeps at least 90px",
-      all(max(t, 260) - U.pane_split(t) >= 90 for t in (200, 400, 700, 1200)))
+check("... and the log keeps at least 140px (bars + a few lines)",
+      all(max(t, 310) - U.pane_split(t) >= 140 for t in (200, 400, 700, 1200)),
+      str([max(t, 310) - U.pane_split(t) for t in (200, 400, 700, 1200)]))
 check("move_sash applies the delta", U.move_sash(400, 900, -90) == 310)
 check("move_sash clamps at the top (tabs keep 170px)",
       U.move_sash(500, 900, -9999) == 170)
@@ -811,6 +812,61 @@ class _FakeThreading:
 
 
 G.threading = _FakeThreading()
+
+
+class _Shown:
+    """A view of part of the window that walks only what is on screen."""
+
+    def __init__(self, w):
+        self.w = w
+
+    def walk(self):
+        return self.w.walk_shown()
+
+    def __getattr__(self, k):
+        return getattr(self.w, k)
+
+
+_real_tab_for = tkstub.Notebook.tab_for
+# The interface has four tabs now. The features the old tabs held live on:
+# Fix lyrics / Scan & duplicates / Lyrics files are the three jobs of the
+# Library tab, Tools is Settings, and Quality / Audio tracks / Live streams
+# are foldable sections of the Download tab. Asking for an old tab name
+# opens its new home and returns just that part, so the checks below keep
+# testing the same features where they now are.
+_OLD_TABS = {"Fix lyrics": ("task", "lyrics"),
+             "Scan & duplicates": ("task", "duplicates"),
+             "Lyrics files": ("task", "files"),
+             "Tools": ("tab", "Settings"),
+             "Quality": ("section", "quality"),
+             "Audio tracks": ("section", "audio"),
+             "Live streams": ("section", "live")}
+
+
+def _tab_for(self, text):
+    how, what = _OLD_TABS.get(text.strip(), (None, None))
+    if how is None:
+        return _real_tab_for(self, text)
+    if how == "tab":
+        return _real_tab_for(self, what)
+    if how == "task":
+        lib = _real_tab_for(self, "Library")
+        for r in lib.walk():
+            if r.kind == "radiobutton" and r.options.get("value") == what:
+                r.invoke()
+                return _Shown(lib)
+        return None
+    for s in self.walk():
+        if isinstance(s, G.Section) and s.key == what:
+            s.open()
+            return s.body
+    return None
+
+
+tkstub.Notebook.tab_for = _tab_for
+# The big Download button says what the chosen mode will do ("Download album
+# + lyrics", "Record live stream", ...), and "Add to queue" while a job runs.
+MAIN_TEXTS = set(U.MODE_BUTTON.values()) | {"Add to queue"}
 ARGV = []
 _real_cli_main = G.cli_main
 G.cli_main = lambda argv: (ARGV.append(list(argv)), 0)[1]
@@ -847,11 +903,14 @@ def check_named(w, prefix):
 
 
 check("run() builds a window", root is not None and root.looped)
-check("all nine tabs exist (incl. Quality, Audio tracks, Live streams)",
+check("just four tabs: Download, Library, Report, Settings",
       [t.get("text", "").strip() for t in nb.tabs] ==
-      ["Download", "Fix lyrics", "Scan & duplicates", "Report", "Tools",
-       "Lyrics files", "Quality", "Audio tracks", "Live streams"],
+      ["Download", "Library", "Report", "Settings"],
       str([t.get("text", "").strip() for t in nb.tabs]))
+check("Quality, Audio tracks and Live streams are sections of Download",
+      sorted(s.key for s in root.walk() if isinstance(s, G.Section))
+      == ["audio", "live", "options", "quality", "repair"],
+      str([s.key for s in root.walk() if isinstance(s, G.Section)]))
 
 check("tabs and log share a vertical PanedWindow",
       pw.options.get("orient") == "vertical" and len(pw.panes) == 2,
@@ -1026,8 +1085,8 @@ def inside(w, anc):
     return False
 
 
-check("every non-Report tab is wrapped in a scroll area",
-      len(areas) == 6, str(len(areas)))
+check("every tab but Report is wrapped in a scroll area (Download, "
+      "Library, Settings)", len(areas) == 3, str(len(areas)))
 check("the Report tab is not (its tree scrolls itself)",
       not any(inside(nb.tab_for("Report"), a.frame) for a in areas))
 check("every scroll area has a vertical AND a horizontal scrollbar",
@@ -1043,13 +1102,15 @@ for _p in opanes:
     check(f"'{_p.sub}' options live inside a scroll area",
           any(inside(_p, a.frame) for a in areas))
 pickers = [w for w in root.walk() if isinstance(w, G.FilePicker)]
-check("both tabs have a file picker", len(pickers) == 2, str(len(pickers)))
+check("one file picker serves every Library job", len(pickers) == 1,
+      str(len(pickers)))
 check("the file list scrolls with its tab",
       all(any(inside(pk, a.frame) for a in areas) for pk in pickers))
 check("the quick strip scrolls with the tab, as its first block",
       any(inside(qstrip, a.frame) for a in areas))
 check("... and it is packed before the option list, so it appears first",
       tkstub.PACK_ORDER.index(qstrip) < tkstub.PACK_ORDER.index(lyrics_pane))
+ly = nb.tab_for("Fix lyrics")
 check("the run buttons stay pinned, outside the scroll",
       not any(inside(button(ly, "Fix lyrics"), a.frame) or
               inside(button(ly, "Redo ALL files (force)"), a.frame)
@@ -1089,7 +1150,8 @@ check("no row is wider than the picker's column budget",
               if b.geo and b.geo[1].get("row") == r) <= G.FilePicker.PER_ROW
           for r in _rows))
 
-for _sub, _pane in (("get", get_tab), ("lyrics", ly), ("duplicates", dup)):
+for _sub, _pane in (("get", get_tab), ("lyrics", nb.tab_for("Fix lyrics")),
+                    ("duplicates", nb.tab_for("Scan & duplicates"))):
     _n = len(U.widget_specs(_sub, parser=PARSER))
     _have = len({id(c.options["variable"]) for c in checks(_pane)})
     _have += len({w.options.get("textvariable") for w in kinds(_pane, "entry")
@@ -1837,7 +1899,7 @@ _cx.reset()
 # harness runs workers inline.
 _cli_now = G.cli_main
 _getb = [x for x in root.walk() if x.kind == "button"
-         and x.options.get("text") == "Download + lyrics"]
+         and x.options.get("text") in MAIN_TEXTS]
 
 
 def _cli_that_stops(argv):
@@ -2415,33 +2477,52 @@ check("doctor still reports the cookie situation",
 # ============================== 28. modes: the checkboxes set themselves
 print("\n--- 28. one mode chooses the checkboxes, not the other way round ---")
 
-check("there are exactly four modes, and they are a 2x2 grid",
-      len(U.MODES) == 4
-      and {U.MODE_WHAT[m] for m in U.MODES} == {"music", "video"}
-      and {U.MODE_SCOPE[m] for m in U.MODES} == {"single", "playlist"},
+_AUDIO = [m for m in U.MODES if U.MODE_WHAT[m] == "audio"]
+check("nine modes, one per kind of thing you download, plus Smart",
+      U.MODES == ("song", "album", "music_video", "video", "short", "podcast",
+                  "video_playlist", "channel", "live") and U.SMART == "smart",
       str(U.MODES))
-check("every mode is named on screen and says what it will do",
-      all(U.MODE_LABELS.get(m) and U.MODE_SUMMARY.get(m) for m in U.MODES))
+check("every mode is named on screen, says what it will do, and has an icon "
+      "and a button of its own",
+      all(U.MODE_LABELS.get(m) and U.MODE_SUMMARY.get(m) and U.MODE_ICONS.get(m)
+          and U.MODE_BUTTON.get(m) for m in U.MODES))
+check("...and no two buttons say the same thing",
+      len(set(U.MODE_BUTTON[m] for m in U.MODES)) == len(U.MODES))
 _gdests = {x["dest"] for x in U.widget_specs("get", parser=PARSER)}
-_bad = {d for m in U.MODES for d in U.MODE_VALUES[m] if d not in _gdests}
+_bad = {d for m in U.MODES for d in U.MODE_VALUES[m]
+        if d not in _gdests and d != "live_from_now"}
 check("every mode only sets options that really exist", not _bad, str(_bad))
-check("music takes the audio, video keeps the picture",
-      all(U.MODE_VALUES[m]["keep_video"] is (U.MODE_WHAT[m] == "video")
-          for m in U.MODES))
-check("music gets lyrics, video does not",
-      all(bool(U.MODE_VALUES[m]["no_lyrics"]) is (U.MODE_WHAT[m] == "video")
+check("audio modes take the audio, the rest keep the picture",
+      _AUDIO == ["song", "album", "podcast"]
+      and all(U.MODE_VALUES[m]["keep_video"] is (m not in _AUDIO)
+              for m in U.MODES))
+check("songs and albums get lyrics; a talk, a video, a Short do not",
+      all(bool(U.MODE_VALUES[m]["no_lyrics"]) is (m not in ("song", "album"))
           for m in U.MODES))
 check("a single stays a single, a playlist walks the list",
       all(bool(U.MODE_VALUES[m]["no_playlist"]) is
           (U.MODE_SCOPE[m] == "single") for m in U.MODES))
-check("playlists are numbered inside a folder of their own",
+check("albums and playlists are numbered inside a folder of their own",
       all("playlist_index" in U.MODE_VALUES[m]["template"]
-          for m in U.MODES if U.MODE_SCOPE[m] == "playlist")
+          for m in ("album", "video_playlist"))
       and all("playlist_index" not in U.MODE_VALUES[m]["template"]
               for m in U.MODES if U.MODE_SCOPE[m] == "single"))
+check("a channel goes into a folder per channel, dated, newest findable",
+      U.MODE_VALUES["channel"]["template"].startswith("%(uploader)s/")
+      and "upload_date" in U.MODE_VALUES["channel"]["template"])
 check("videos pick a real quality instead of leaving it to chance",
-      U.MODE_VALUES["video_single"]["quality"] == "1080"
-      and U.MODE_VALUES["video_single"]["merge_format"] == "mkv")
+      U.MODE_VALUES["video"]["quality"] == "1080"
+      and U.MODE_VALUES["video"]["merge_format"] == "mkv"
+      and U.MODE_VALUES["music_video"]["merge_format"] == "mp4"
+      and U.MODE_VALUES["short"]["quality"] == "best")
+check("a talk keeps its chapters; a song does not need them",
+      U.MODE_VALUES["podcast"]["embed_chapters"] is True
+      and U.MODE_VALUES["song"]["embed_chapters"] is False)
+check("the four old mode names still mean what they meant",
+      [U.canonical_mode(m) for m in ("music_single", "music_playlist",
+                                     "video_single", "video_playlist")]
+      == ["song", "album", "video", "video_playlist"]
+      and U.canonical_mode("nonsense") == U.SMART)
 
 # --- the URL decides single vs playlist, and it is not a guess
 check("a /playlist?list= URL is a playlist",
@@ -2456,17 +2537,18 @@ check("a plain watch URL, a youtu.be and nothing at all are singles",
 check("a playlist anywhere in the list makes it a playlist run",
       U.mode_for(["https://youtu.be/a",
                   "https://youtube.com/playlist?list=PLx"], "music")
-      == "music_playlist")
+      == "album")
 check("the window can tell when you have changed the mode by hand",
-      U.mode_drift(dict(U.MODE_VALUES["music_single"]), "music_single") == []
-      and U.mode_drift(dict(U.MODE_VALUES["music_single"], no_playlist=False),
-                       "music_single") == ["no_playlist"])
+      U.mode_drift(dict(U.MODE_VALUES["song"]), "song") == []
+      and U.mode_drift(dict(U.MODE_VALUES["song"], no_playlist=False),
+                       "song") == ["no_playlist"])
 check("...and '4' means 4, so strings do not read as a change",
-      U.mode_drift({k: str(v) for k, v in U.MODE_VALUES["video_single"].items()},
-                   "video_single") == [])
+      U.mode_drift({k: str(v) for k, v in U.MODE_VALUES["video"].items()},
+                   "video") == [])
 check("switching one axis keeps the other",
-      U.mode_switch("music_single", what="video") == "video_single"
-      and U.mode_switch("video_playlist", scope="single") == "video_single")
+      U.mode_switch("song", what="video") == "video"
+      and U.mode_switch("video_playlist", scope="single") == "video"
+      and U.mode_switch("song", scope="playlist") == "album")
 
 # --- and the window
 def gbtn(text):
@@ -2478,22 +2560,32 @@ def gbtn(text):
 
 
 _gtab = nb.tab_for("Download")
-_grb = [w for w in _gtab.walk() if w.kind == "radiobutton"]
-check("the two questions are on the tab, as four choices",
-      len(_grb) == 4, str([w.options.get("text") for w in _grb]))
-check("music and video are both offered",
-      {w.options.get("value") for w in _grb} >= {"music", "video", "single",
-                                                 "playlist"},
-      str({w.options.get("value") for w in _grb}))
+_MV = {U.SMART, *U.MODES}
+_grb = [w for w in _gtab.walk() if w.kind == "radiobutton"
+        and w.options.get("value") in _MV]
+check("the tab offers Smart and all nine modes as buttons",
+      [w.options.get("value") for w in _grb] == [U.SMART, *U.MODES],
+      str([w.options.get("text") for w in _grb]))
 _gpane = next(w for w in root.walk()
               if isinstance(w, G.OptionsPane) and w.sub == "get")
-_vrb = [w for w in _grb if w.options.get("value") == "video"][0]
-_srb = [w for w in _grb if w.options.get("value") == "playlist"][0]
-check("the default is music, one song",
-      _gpane.vars["keep_video"].get() is False
-      and _gpane.vars["no_lyrics"].get() is False
+_rb = {w.options.get("value"): w for w in _grb}
+_vrb, _mrb, _smrb = _rb["video"], _rb["song"], _rb[U.SMART]
+_modevar = _vrb.options["variable"]
+_utxt = [w for w in _gtab.walk() if w.kind == "text"][0]
+_utxt.delete("1.0", "end")
+_utxt.fire("<KeyRelease>")
+_rb0 = [w for w in _gtab.walk() if w.kind == "radiobutton"
+        and w.options.get("value") == U.SMART][0]
+_rb0.invoke()
+check("Smart is on until you pick something else",
+      _modevar.get() == U.SMART, str(_modevar.get()))
+check("with the box empty Smart keeps what it had and says it is waiting "
+      "(a fresh start prepares for a song -- section 47)",
+      any("waiting for a link" in str(w.options["textvariable"].get())
+          for w in _gtab.walk() if w.kind == "label"
+          and w.options.get("textvariable") is not None)
       and _gpane.vars["no_playlist"].get() is True,
-      str(_gpane.values()))
+      str(_gpane.values())[:200])
 _vrb.invoke()
 check("choosing Video ticks keep-video and drops lyrics by itself",
       _gpane.vars["keep_video"].get() is True
@@ -2501,55 +2593,62 @@ check("choosing Video ticks keep-video and drops lyrics by itself",
       and _gpane.vars["embed_chapters"].get() is True
       and _gpane.vars["merge_format"].get() == "mkv",
       str(_gpane.values()))
-check("...and it is the SAME variable the option list shows",
-      _vrb.options["variable"] is not None
-      and _gpane.vars["keep_video"] is _gpane.vars["keep_video"])
 _sum = [w for w in _gtab.walk() if w.kind == "label"
         and w.options.get("textvariable") is not None
         and str(w.options["textvariable"].get()).startswith("\u2192")]
 _cur = str(_sum[0].options["textvariable"].get())
 check("the tab states in plain words what the mode will do",
-      len(_sum) == 1 and U.MODE_LABELS["video_single"] in _cur and "mkv" in _cur,
+      len(_sum) == 1 and U.MODE_LABELS["video"] in _cur and "mkv" in _cur,
       _cur)
 check("the button says what the mode will do",
       gbtn("Download video") is not None,
       str([w.options.get("text") for w in _gtab.walk() if w.kind == "button"]))
-_mrb = [w for w in _grb if w.options.get("value") == "music"][0]
 _mrb.invoke()
-check("choosing Music puts them back",
+check("choosing Song puts them back",
       _gpane.vars["keep_video"].get() is False
       and _gpane.vars["no_lyrics"].get() is False
-      and gbtn("Download + lyrics") is not None)
+      and gbtn("Download song + lyrics") is not None)
 check("...and the one-line summary follows it",
-      U.MODE_LABELS["music_single"]
-      in str(_sum[0].options["textvariable"].get()),
+      U.MODE_LABELS["song"] in str(_sum[0].options["textvariable"].get()),
       str(_sum[0].options["textvariable"].get()))
 
 # the long tail of options is one click away, not in your face
-_utxt = [w for w in _gtab.walk() if w.kind == "text"][0]
-_adv = [w for w in _gtab.walk() if w.kind == "checkbutton"
-        and str(w.options.get("text", "")).startswith("More options")]
-check("the rest of the options hide behind one checkbox", len(_adv) == 1)
-check("...and they start hidden, so the tab fits a short window",
-      _gpane.geo is None, str(_gpane.geo))
-_adv[0].invoke()
-check("ticking it brings them back",
-      _gpane.geo is not None and _gpane.geo[0] == "pack", str(_gpane.geo))
-_adv[0].invoke()
-check("unticking it puts them away again", _gpane.geo is None, str(_gpane.geo))
+_osec = next(s for s in root.walk()
+             if isinstance(s, G.Section) and s.key == "options")
+check("the rest of the options fold into one section",
+      inside(_gpane, _osec.body))
+check("...which starts folded, so the tab fits a short window",
+      not _osec.is_open() and _osec.body.geo is None, str(_osec.body.geo))
+_osec.header.invoke()
+check("clicking its header unfolds it",
+      _osec.is_open() and _osec.body.geo is not None, str(_osec.body.geo))
+_osec.header.invoke()
+check("clicking again folds it away", _osec.body.geo is None,
+      str(_osec.body.geo))
 
 # --- pasting a playlist URL moves the mode for you
 def _tick():
     """Run one pump. Do not clear the queue: pump reschedules itself into it."""
     for _cb in list(root.pending):
         _cb()
+_smrb.invoke()
 _utxt.insert("end", "https://youtube.com/playlist?list=PLrOFa8sDv6jfKx9\n")
 _utxt.fire("<KeyRelease>")     # exactly what typing a playlist URL does
-check("pasting a playlist URL switches to a playlist run on its own",
-      _srb.options["variable"].get() == "playlist"
+check("Smart turns a pasted playlist into a playlist run on its own",
+      _modevar.get() == U.SMART
       and _gpane.vars["no_playlist"].get() is False
-      and "playlist_index" in _gpane.vars["template"].get(),
-      f"{_srb.options['variable'].get()} / {_gpane.vars['template'].get()}")
+      and "playlist_index" in _gpane.vars["template"].get()
+      and gbtn("Download playlist") is not None,
+      f"{_modevar.get()} / {_gpane.vars['template'].get()}")
+_utxt.delete("1.0", "end")
+_utxt.fire("<KeyRelease>")
+_mrb.invoke()
+_utxt.insert("end", "https://youtube.com/playlist?list=PLrOFa8sDv6jfKx9\n")
+_utxt.fire("<KeyRelease>")
+check("a mode picked by hand keeps its kind but follows one-vs-many "
+      "(Song + a playlist = Album)",
+      _modevar.get() == "album" and _gpane.vars["no_playlist"].get() is False,
+      str(_modevar.get()))
 # ...until you take the wheel
 _qc = [w for w in _gtab.walk() if w.kind == "checkbutton"
        and w.options.get("text", "").startswith("This video only")]
@@ -2562,30 +2661,39 @@ _utxt.fire("<KeyRelease>")
 check("...but once you tick something by hand it stops guessing",
       _gpane.vars["no_playlist"].get() is True,
       str(_gpane.vars["no_playlist"].get()))
-_mrb.invoke()
-_srb2 = [w for w in _grb if w.options.get("value") == "single"][0]
-_srb2.invoke()
+check("...while still naming what you pasted",
+      any("2" in str(w.options["textvariable"].get())
+          and "playlist" in str(w.options["textvariable"].get())
+          for w in _gtab.walk() if w.kind == "label"
+          and w.options.get("textvariable") is not None))
+_rb["video"].invoke()
 check("and picking a mode by hand takes the wheel back",
-      _gpane.vars["no_playlist"].get() is True)
+      _modevar.get() == "video_playlist"
+      and _gpane.vars["no_playlist"].get() is False
+      and "changed by hand" not in str(_sum[0].options["textvariable"].get()),
+      str(_modevar.get()))
+_utxt.delete("1.0", "end")
+_utxt.fire("<KeyRelease>")
+_smrb.invoke()
 
 # the real payoff: each mode is a different command, with the right flags
 _gav = {m: U.build_argv("get", dict(U.MODE_VALUES[m], output_dir="."),
                         positionals=["URL"], parser=PARSER) for m in U.MODES}
-check("music pulls the audio out, video keeps it",
-      "--format" in _gav["music_single"] and "--keep-video" in _gav["video_single"]
-      and "--keep-video" not in _gav["music_single"])
+check("songs pull the audio out, videos keep it",
+      "--format" in _gav["song"] and "--keep-video" in _gav["video"]
+      and "--keep-video" not in _gav["song"])
 check("a single refuses the playlist, a playlist walks it",
-      "--no-playlist" in _gav["music_single"]
-      and "--no-playlist" not in _gav["music_playlist"])
+      "--no-playlist" in _gav["song"]
+      and "--no-playlist" not in _gav["album"])
 check("playlists number the files inside a folder of their own",
       any("playlist_index" in a for a in _gav["video_playlist"]))
 check("videos ask for a height and a container",
-      _gav["video_single"][_gav["video_single"].index("--quality") + 1] == "1080"
-      and "--merge-format" in _gav["video_single"])
+      _gav["video"][_gav["video"].index("--quality") + 1] == "1080"
+      and "--merge-format" in _gav["video"])
 check("lyrics come with music and stay away from video",
-      "--no-lyrics" in _gav["video_single"] and "--no-lyrics" not in _gav["music_single"])
-check("the four modes are four different commands",
-      len({tuple(a) for a in _gav.values()}) == 4)
+      "--no-lyrics" in _gav["video"] and "--no-lyrics" not in _gav["song"])
+check("the nine modes are nine different commands",
+      len({tuple(a) for a in _gav.values()}) == 9)
 
 # ============ 29. the quality you asked for is the quality you get
 # Real incident: "1080p vp9 + mp4a ~ 644.7 MiB" was announced, and a 52 MiB
@@ -2849,9 +2957,10 @@ check("a plain get carries the language filter to yt-dlp",
 print("\n--- 31. the tab scrolls as one, and nothing is lost on a restart ---")
 
 # `areas` is rebound further up, so find the scroll area from the pane itself
-_gbody = _gpane.master
+# (it sits in the folded "More options" section, inside the tab's scroll)
 _garea = next(w for w in root.walk()
-              if isinstance(w, G.ScrollArea) and w.frame is _gbody)
+              if isinstance(w, G.ScrollArea) and inside(_gpane, w.frame))
+_gbody = _garea.frame
 
 
 def _inside_area(w):
@@ -2868,7 +2977,8 @@ check("the URL box, the mode, the toggles and the options share ONE scroll",
       and _inside_area(_gpane),
       str([_inside_area(x) for x in (_ut, _vrb, _qc[0], _gpane)]))
 check("the run buttons stay pinned outside it, so they are always reachable",
-      not _inside_area(gbtn("Download + lyrics")))
+      not _inside_area(next(w for w in _gtab.walk() if w.kind == "button"
+                            and w.options.get("text") in MAIN_TEXTS)))
 _had = _ut.buf
 _ut.buf = "https://youtu.be/one"
 check("the wheel over a short URL box scrolls the tab, not the box",
@@ -2887,9 +2997,15 @@ check("every option still exists behind the fold",
 check("...and the untouched ones are folded away instead of filling the window",
       0 < len(_vis) < len(_cells) // 2, f"{len(_vis)} of {len(_cells)} shown")
 check("the rows on screen are the ones with something in them",
-      {"output_dir", "template", "audio_format", "audio_lang"} <= set(_vis)
+      {"template", "audio_format", "audio_lang"} <= set(_vis)
       and not {"cookies", "proxy", "rate_limit", "download_archive"} & set(_vis),
       str(_vis))
+check("Save to sits on the tab itself, so it is not in the fold as well",
+      all(c.geo is None for d, c, _s in _cells if d == "output_dir")
+      and any(w.kind == "combobox"
+              and w.options.get("textvariable") is _gpane.vars["output_dir"]
+              for w in _gtab.walk()),
+      str([d for d, _c, _s in _cells][:5]))
 check("...and a setting already on the fine-tune strip is not repeated",
       not {"no_playlist", "keep_video", "no_lyrics", "force"} & set(_vis),
       str(_vis))
@@ -2920,6 +3036,8 @@ try:
         os.remove(_cfg.PATH)
     _gpane.vars["max_size"].set("800M")
     _gpane.vars["rate_limit"].set("3M")
+    _ut.insert("end", "https://youtu.be/ZLRwjygiCTE\n")
+    _ut.fire("<KeyRelease>")
     _vrb.invoke()                    # video, one item
     root.close_window()              # the X in the corner
     _saved = _cfg.load()
@@ -2933,10 +3051,10 @@ try:
           == "800M",
           str((_saved.get("gui_opts") or {}).get("get", {}).get("max_size")))
     check("...and the mode you were in",
-          (_saved.get("gui_extra") or {}).get("download_mode") == "video_single",
+          (_saved.get("gui_extra") or {}).get("download_mode") == "video",
           str(_saved.get("gui_extra")))
-    check("...and whether you had the options open",
-          "more_options" in (_saved.get("gui_extra") or {}),
+    check("...and which sections you had open",
+          "open_sections" in (_saved.get("gui_extra") or {}),
           str(_saved.get("gui_extra")))
     check("...and the URL you had open",
           "ZLRwjygiCTE" in str((_saved.get("gui_extra") or {}).get("urls"))
@@ -2960,7 +3078,7 @@ try:
     _p4.vars["format_selector"].set("248+140-0")
     _p4.vars["max_size"].set("800M")
     _p4.vars["rate_limit"].set("3M")
-    _p4.apply(U.MODE_VALUES["music_single"])
+    _p4.apply(U.MODE_VALUES["song"])
     check("a mode still clears the one thing that would override it",
           _p4.vars["format_selector"].get() == ""
           and _p4.vars["max_size"].get() == "800M"
@@ -3350,8 +3468,7 @@ G.cli_main = _fake_main
 _urls = [w for w in _r2.walk()
          if w.kind == "text" and w.options.get("height") == 3][0]
 _bget = [w for w in _r2.walk() if w.kind == "button"
-         and w.options.get("text") in ("Download + lyrics", "Download video",
-                                       "Add to queue")][0]
+         and w.options.get("text") in MAIN_TEXTS][0]
 _urls.buf = "https://youtu.be/aaa\nhttps://youtu.be/bbb\n"
 _bget.options["command"]()
 check("Download stays clickable while a job runs -- that is how you queue",
@@ -4594,8 +4711,10 @@ try:
           _opened and _opened[-1].endswith(" (so far).mp4"), str(_opened))
     from musictool import config as _cfg38
     _ex8 = _cfg38.load().get("gui_extra") or {}
-    check("the tab's fields come back next time",
-          _ex8.get("live_url") == _URL and _ex8.get("live_folder") == _D
+    _go8 = (_cfg38.load().get("gui_opts") or {}).get("get") or {}
+    check("the section's fields come back next time (its folder is the "
+          "tab's Save to)",
+          _ex8.get("live_url") == _URL and _go8.get("output_dir") == _D
           and _ex8.get("live_out") == _COP, str({k: v for k, v in _ex8.items()
                                                  if k.startswith("live")}))
 finally:
@@ -5525,8 +5644,7 @@ try:
     _utxt42.insert("end", "http://x/watch?v=abc\n")
     _drain40()
     _gb42 = [x for x in _nb42.tab_for("Download").walk() if x.kind == "button"
-             and x.options.get("text") in ("Download + lyrics",
-                                           "Download video")]
+             and x.options.get("text") in MAIN_TEXTS]
     _gb42[0].invoke()
     _drain40()
     _logs42 = " ".join(w.buf for w in _r40.walk() if w.kind == "text")
@@ -6291,6 +6409,326 @@ check("a video without a part in its name still takes --range as what it "
       "first part" not in _w and "second part" in _w and "00:00:10,000" in _w,
       _r.stdout[-300:] + _w[:200])
 shutil.rmtree(_D46, ignore_errors=True)
+
+
+# ============ 47. four tabs; Smart modes that learn; links recognised;
+#                 a window that fits the display
+print("\n--- 47. Smart: link types, learning, modes per kind; window fit ---")
+
+# --- what a link is, from the link alone
+_C47 = {u: U.classify_link(u)["kind"] for u in (
+    "https://youtu.be/abcdefghijk",
+    "https://www.youtube.com/watch?v=abcdefghijk&list=PLx",
+    "https://music.youtube.com/watch?v=abcdefghijk",
+    "https://music.youtube.com/playlist?list=OLAK5uy_abc",
+    "https://www.youtube.com/shorts/abcdefghijk",
+    "https://www.youtube.com/live/abcdefghijk",
+    "https://www.youtube.com/@chan",
+    "https://www.youtube.com/playlist?list=PLx",
+    "https://soundcloud.com/artist/track",
+    "https://artist.bandcamp.com/album/x",
+    "https://vimeo.com/123",
+    "https://open.spotify.com/track/xyz",
+    "not a link")}
+check("each kind of link is recognised from the link itself",
+      list(_C47.values()) == ["video", "in_playlist", "ytm_song", "ytm_album",
+                              "short", "live", "channel", "playlist",
+                              "sc_track", "bc_album", "web", "spotify",
+                              "text"], str(list(_C47.values())))
+check("...and each kind leads to the mode made for it",
+      [U.LINK_KINDS[k][2] for k in ("ytm_song", "ytm_album", "short", "live",
+                                    "channel", "playlist", "in_playlist")]
+      == ["song", "album", "short", "live", "channel", "video_playlist",
+          "video"])
+check("watch?v=X&list=PL is one video, and the label says so",
+      "just this one" in U.LINK_KINDS["in_playlist"][0])
+check("a Spotify link is explained, not attempted",
+      "encrypted" in U.KIND_WARNING["spotify"])
+_t47 = ("check this https://youtu.be/abcdefghijk via whatsapp\nhello\n"
+        "https://music.youtube.com/watch?v=zzzzzzzzzzz, and "
+        "https://youtu.be/abcdefghijk")
+check("links are pulled out of a pasted message, each once",
+      U.extract_links(_t47) == ["https://youtu.be/abcdefghijk",
+                                "https://music.youtube.com/watch?v=zzzzzzzzzzz"],
+      str(U.extract_links(_t47)))
+check("...and a line with no link in it is counted, to be skipped",
+      U.stray_lines(_t47) == 1, str(U.stray_lines(_t47)))
+_L47 = U.classify_links(U.extract_links(_t47))
+check("a mixed paste is summed up in one line",
+      _L47["summary"] == "2 links: 1 YouTube video, 1 YouTube Music song",
+      _L47["summary"])
+check("a look-up tells what a plain link hides",
+      [U.refine_kind("video", i) for i in (
+          {"live_status": "is_live"}, {"live_status": "is_upcoming"},
+          {"live_status": "was_live"}, {"duration": 3 * 3600},
+          {"duration": 40, "width": 720, "height": 1280},
+          {"categories": ["Music"], "duration": 200}, {"error": "x"})]
+      == ["live", "upcoming", "replay", "long", "short", "music_video",
+          "video"])
+check("...but never second-guesses a YouTube Music song",
+      U.refine_kind("ytm_song", {"duration": 3 * 3600}) == "ytm_song")
+check("only single videos are worth a look-up",
+      "playlist" not in U.IDENTIFIABLE and "video" in U.IDENTIFIABLE)
+
+# --- learning: what you do twice, and most often, becomes the default
+check("a habit needs a majority AND at least two picks",
+      U.favourite(["a", "b", "a"]) == "a" and U.favourite(["a"]) is None
+      and U.favourite(["a", "b"]) is None
+      and U.favourite(["a", "b", "b", "a"]) is None)
+_s47 = U.learn({}, "ytm_song", "music_video",
+               dict(U.MODE_VALUES["music_video"], quality="720"))
+_song47 = U.classify_links(["https://music.youtube.com/watch?v=abcdefghijk"])
+check("one run is not a habit yet",
+      U.smart_plan(_song47, _s47)["mode"] == "song")
+_s47 = U.learn(_s47, "ytm_song", "music_video",
+               dict(U.MODE_VALUES["music_video"], quality="720"))
+_p47 = U.smart_plan(_song47, _s47)
+check("two runs are: Smart now picks your mode for that kind of link",
+      _p47["mode"] == "music_video"
+      and "you usually choose Music video" in _p47["why"], str(_p47["why"]))
+check("...with the settings you made a habit of",
+      _p47["values"]["quality"] == "720" and _p47["learned"] == {"quality": "720"},
+      str(_p47["learned"]))
+check("...and it says so in plain words",
+      U.describe_learned(_p47["learned"]) == "up to 720p")
+check("learning switched off means the plain defaults",
+      U.smart_plan(_song47, _s47, learn_on=False)["mode"] == "song")
+check("a mode you pick yourself is obeyed, learned habits aside",
+      U.smart_plan(_song47, _s47, chosen="song")["mode"] == "song")
+check("what was learned can be read back",
+      any("Music video" in ln and "2 of your last 2" in ln
+          for ln in U.learned_report(_s47)), str(U.learned_report(_s47)))
+for _i in range(15):
+    _s47 = U.learn(_s47, "video", "video", U.MODE_VALUES["video"])
+check("only the recent runs count (old habits fade)",
+      len(_s47["kinds"]["video"]) == U.LEARN_KEEP and _s47["runs"] == 17)
+check("a fresh start, no link: Smart prepares for a song",
+      U.smart_plan(U.classify_links([]), None)["mode"] == "song")
+check("the box empty again: Smart keeps what it had, and waits",
+      U.smart_plan(U.classify_links([]), None, last="video")
+      == dict(U.smart_plan(U.classify_links([]), None, last="video"),
+              mode="video", why="waiting for a link"))
+
+# --- the window fits the display it opens on
+_f = U.fit_window(1920, 1080)
+check("on a big display: 1080x720 (90% of the old 800 high), centred",
+      _f["geometry"] == "1080x720+420+140" and U.WINDOW == (1080, 720), str(_f))
+_f = U.fit_window(1366, 768)
+check("on a laptop it is kept clear of the taskbar",
+      _f["h"] <= 768 - 80 and _f["max_h"] <= 768 - 80 and _f["max_w"] <= 1366,
+      str(_f))
+_f = U.fit_window(1024, 600)
+check("on a 1024x600 netbook it still fits, all of it",
+      _f["w"] <= 1024 and _f["h"] <= 600 and _f["x"] >= 0 and _f["y"] >= 0
+      and _f["min_w"] <= _f["w"] and _f["min_h"] <= _f["h"], str(_f))
+_f = U.fit_window(800, 480)
+check("...and even the smallest limit gives way to a tiny screen",
+      _f["min_w"] <= 800 and _f["min_h"] <= 480 and _f["w"] <= 800, str(_f))
+check("an unknown display gets the normal size",
+      U.fit_window(0, 0)["w"] == 1080)
+check("the very first frame already has the log a quarter of the split",
+      U.split_heights(720) == (496, 166))
+
+# --- the window itself
+from musictool import config as _cfg47
+_cp47, _cfg47.PATH = _cfg47.PATH, os.path.join(WORK, "smart47.json")
+_scr47 = list(tkstub.SCREEN)
+_A47, _cli47, _probe47 = [], G.cli_main, G.download.probe
+try:
+    if os.path.exists(_cfg47.PATH):
+        os.remove(_cfg47.PATH)
+    tkstub.SCREEN[:] = [1920, 1080]
+    G.cli_main = lambda argv: (_A47.append(list(argv)), 0)[1]
+    tkstub.reset()
+    G.run()
+    _r47 = tkstub.ROOTS[-1]
+
+    def _drain47():
+        for _n in range(4):
+            todo, _r47.pending[:] = list(_r47.pending), []
+            for f in todo:
+                f()
+
+    _drain47()
+    _nb47 = [w for w in _r47.walk() if isinstance(w, tkstub.Notebook)][0]
+    _pw47 = [w for w in _r47.walk() if isinstance(w, tkstub.PanedWindow)][0]
+    _g47 = _real_tab_for(_nb47, "Download")
+    check("opens at the size that fits the display, never larger than it",
+          _r47.geometry() == "1080x720+420+140"
+          and _r47.options.get("minsize") == (760, 470)
+          and _r47.options.get("maxsize") == (1904, 1000),
+          f"{_r47.geometry()} {_r47.options.get('minsize')} "
+          f"{_r47.options.get('maxsize')}")
+    check("the log is asked for its height before the first frame is drawn",
+          [p.get("height") for p in _pw47.panes] == [496, 166],
+          str([p.get("height") for p in _pw47.panes]))
+    _h47 = _pw47.winfo_height()
+    check("...and starts low: a quarter of the split, not a third",
+          _pw47.sash_coord(0)[1] == U.pane_split(_h47)
+          and abs((_h47 - _pw47.sash_coord(0)[1]) / _h47 - 0.25) < 0.02,
+          f"{_pw47.sash_coord(0)} of {_h47}")
+
+    _u47 = [w for w in _g47.walk() if w.kind == "text"][0]
+
+    def _paste47(text):
+        _u47.delete("1.0", "end")
+        _u47.insert("end", text)
+        _u47.fire("<KeyRelease>")
+        _drain47()
+
+    def _main47():
+        return next(w for w in _g47.walk() if w.kind == "button"
+                    and w.options.get("text") in MAIN_TEXTS)
+
+    def _said47(*bits):
+        return [str(w.options["textvariable"].get()) for w in _g47.walk()
+                if w.kind == "label" and w.options.get("textvariable")
+                is not None and all(b in str(w.options["textvariable"].get())
+                                    for b in bits)]
+
+    _rb47 = {w.options.get("value"): w for w in _g47.walk()
+             if w.kind == "radiobutton"
+             and w.options.get("value") in {U.SMART, *U.MODES}}
+    _mv47 = _rb47[U.SMART].options["variable"]
+    _gp47 = next(w for w in _r47.walk()
+                 if isinstance(w, G.OptionsPane) and w.sub == "get")
+    _secs47 = {s.key: s for s in _r47.walk() if isinstance(s, G.Section)}
+    check("a fresh start: Smart, ready for a song",
+          _mv47.get() == U.SMART
+          and _main47().options["text"] == "Download song + lyrics")
+    _paste47("https://music.youtube.com/playlist?list=OLAK5uy_abcdefghijk\n")
+    check("an album link is named, and the button becomes the album's",
+          _said47("YouTube Music album")
+          and _main47().options["text"] == "Download album + lyrics"
+          and "playlist_index" in _gp47.vars["template"].get(),
+          str(_main47().options["text"]))
+    _paste47("https://www.youtube.com/shorts/abcdefghijk\n")
+    _main47().invoke()
+    _drain47()
+    check("a Short: its own mode, and the button runs it at its best quality",
+          _A47 and _A47[-1][0] == "get"
+          and _A47[-1][_A47[-1].index("--quality") + 1] == "best",
+          str(_A47[-1:]))
+    check("...the Quality and Live sections follow the first link",
+          any(w.kind == "entry" and "shorts/abcdefghijk" in str(
+              (w.options.get("textvariable") or tkstub.StringVar()).get())
+              for w in _secs47["quality"].body.walk()))
+    _paste47("https://www.youtube.com/live/abcdefghijk\n")
+    check("a live link opens the Live section and the button records",
+          _secs47["live"].is_open()
+          and _main47().options["text"] == "Record live stream")
+    _n47 = len(_A47)
+    _main47().invoke()
+    _drain47()
+    _g47r = _A47[-1] if len(_A47) > _n47 else []
+    check("...and pressing it records the stream from its start (the Live "
+          "section's 'Record from the start')",
+          _g47r[:2] == ["get", "https://www.youtube.com/live/abcdefghijk"]
+          and "--keep-video" in _g47r and "--no-lyrics" in _g47r
+          and "--live-from-now" not in _g47r, str(_g47r))
+    _paste47("https://open.spotify.com/track/xyz\n")
+    check("a Spotify link is explained on the spot",
+          bool(_said47("encrypted")), str(_said47("Spotify")))
+    _paste47("look https://youtu.be/abcdefghijk\nnothing here\n")
+    check("a line without a link is pointed out, not silently dropped",
+          bool(_said47("without a link will be skipped")))
+
+    # identify online: one look-up, and the plan follows the answer
+    G.download.probe = lambda url, o: {"live_status": "is_live",
+                                       "title": "Now on air"}
+    _paste47("https://youtu.be/LIVELIVE123\n")
+    next(w for w in _g47.walk() if w.kind == "button"
+         and w.options.get("text") == "Identify online").invoke()
+    _drain47()
+    check("'Identify online' finds that a plain link is live right now",
+          _main47().options["text"] == "Record live stream"
+          and bool(_said47("live")), str(_main47().options["text"]))
+    G.download.probe = _probe47
+
+    # learning from what you run
+    _song = "https://music.youtube.com/watch?v=%s\n"
+    for _i, _id in enumerate(("aaaaaaaaaaa", "bbbbbbbbbbb")):
+        _paste47(_song % _id)
+        _rb47["music_video"].invoke()
+        _gp47.vars["quality"].set("720")
+        _gp47.touched()
+        _main47().invoke()
+        _drain47()
+    _rb47[U.SMART].invoke()
+    _paste47(_song % "ccccccccccc")
+    check("after twice choosing Music video for songs, Smart does it for you",
+          _mv47.get() == U.SMART
+          and _main47().options["text"] == "Download music video"
+          and _gp47.vars["quality"].get() == "720",
+          f"{_main47().options['text']} / {_gp47.vars['quality'].get()}")
+    check("...and tells you why",
+          bool(_said47("you usually choose Music video"))
+          and bool(_said47("learned from you", "720p")),
+          str(_said47("Smart")))
+    check("what it learned is kept in the settings file",
+          (_cfg47.load().get("learned") or {}).get("kinds", {}).get(
+              "ytm_song") == ["music_video", "music_video"],
+          str((_cfg47.load().get("learned") or {}).get("kinds")))
+    _st47 = _real_tab_for(_nb47, "Settings")
+    check("Settings shows what was learned, in words",
+          any("Music video" in str(w.options.get("text") or "")
+              or (w.options.get("textvariable") is not None and "Music video"
+                  in str(w.options["textvariable"].get()))
+              for w in _st47.walk() if w.kind == "label"))
+    _learn47 = next(w for w in _st47.walk() if w.kind == "checkbutton"
+                    and str(w.options.get("text", "")).startswith("Learn from"))
+    _learn47.invoke()
+    _paste47(_song % "ddddddddddd")
+    check("switch learning off and Smart goes back to the plain song",
+          _main47().options["text"] == "Download song + lyrics")
+    _learn47.invoke()
+    _paste47(_song % "eeeeeeeeeee")
+    check("...and on again, the habit is back",
+          _main47().options["text"] == "Download music video")
+    next(w for w in _st47.walk() if w.kind == "button" and w.options.get(
+        "text") == "Forget what was learned").invoke()
+    _drain47()
+    check("'Forget what was learned' really forgets",
+          _main47().options["text"] == "Download song + lyrics"
+          and not (_cfg47.load().get("learned") or {}).get("kinds"),
+          str(_main47().options["text"]))
+
+    # the layout comes back as you left it
+    _secs47["audio"].open()
+    _lib47 = _real_tab_for(_nb47, "Library")
+    next(w for w in _lib47.walk() if w.kind == "radiobutton"
+         and w.options.get("value") == "files").invoke()
+    check("the Library shows one job at a time",
+          any(w.kind == "button" and w.options.get("text") ==
+              "Extract lyrics to .lrc" for w in _lib47.walk_shown())
+          and not any(w.kind == "button" and w.options.get("text") ==
+                      "Find duplicates" for w in _lib47.walk_shown()))
+    _r47.close_window()
+    _ex47 = _cfg47.load().get("gui_extra") or {}
+    check("closing remembers the open sections and the Library job",
+          "audio" in (_ex47.get("open_sections") or [])
+          and _ex47.get("library_task") == "files", str(_ex47)[:300])
+
+    # a small display: everything still fits
+    tkstub.SCREEN[:] = [1024, 600]
+    tkstub.reset()
+    G.run()
+    _r47b = tkstub.ROOTS[-1]
+    check("on a 1024x600 display the window fits it, and is held within it",
+          _r47b.geometry() == "1008x520+8+0"
+          and _r47b.options.get("maxsize") == (1008, 520),
+          f"{_r47b.geometry()} {_r47b.options.get('maxsize')}")
+    _secs47b = {s.key for s in _r47b.walk() if isinstance(s, G.Section)
+                and s.is_open()}
+    check("...and opens with the sections you had open last time",
+          "audio" in _secs47b, str(_secs47b))
+    check("the wrapping helpers are harmless where they cannot measure",
+          all(a.relayout() is None for a in _r47b.walk()
+              if isinstance(a, G.ScrollArea)))
+finally:
+    G.cli_main, G.download.probe = _cli47, _probe47
+    tkstub.SCREEN[:] = _scr47
+    _cfg47.PATH = _cp47
 
 
 srv.shutdown()

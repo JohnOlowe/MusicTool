@@ -51,8 +51,10 @@ error messages name the specific failure instead of saying "unknown".
 - Audio: no hardware path anywhere. There is no hardware audio encoder in
   ffmpeg on any platform (no `*_qsv`/`*_nvenc`/`*_amf`/`*_vaapi` audio encoder).
 
-The 1600×720 display is the single biggest GUI constraint. Prefer compact
-pinned rows with scrolling bodies over tall stacked panels.
+The 1600×720 display is the single biggest GUI constraint. The window now
+sizes itself from the display (`uicmd.fit_window`: 1080×720, smaller on a
+small screen, never larger than it). Prefer compact pinned rows with
+scrolling bodies over tall stacked panels.
 
 ### Working on it in a sandbox
 
@@ -98,7 +100,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1159 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1217 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -116,8 +118,8 @@ MusicTool paths.
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
 │   ├── cli.py         1859   argparse + every cmd_* handler
-│   ├── gui.py         2674   tkinter GUI, 9 tabs
-│   ├── uicmd.py        675   parser -> widget specs, build_argv, intent modes
+│   ├── gui.py         3476   tkinter GUI: 4 tabs, Smart + 9 modes, foldable sections
+│   ├── uicmd.py       1280   parser -> widgets, build_argv, modes, link kinds, learning, window fit
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
 │   ├── download.py     899   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
@@ -131,8 +133,8 @@ MusicTool paths.
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
 │   └── cancel.py       303   Stop / Force stop, process tree kill
 ├── tests/
-│   ├── test_musictool.py 6299   46 sections (+8b), 1159 assertions
-│   └── tkstub.py          728   headless tkinter stub
+│   ├── test_musictool.py 6737   47 sections (+8b), 1217 assertions
+│   └── tkstub.py          755   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
 │   ├── DECISIONS.md       verified facts about yt-dlp and ffmpeg, and the traps
@@ -252,7 +254,14 @@ attempt violated them. Do not drop them.
 - Checkboxes driven by *intent*, not by the user. Videos ≠ music and
   playlists ≠ singles must be visible distinctions.
 - Save previous paths and selections automatically — nothing retyped after restart.
-- Log user-resizable; tabs must not eat the window.
+- Log user-resizable; tabs must not eat the window. The log starts low (a
+  quarter of the window), applied from the first frame.
+- Four tabs only — Download, Library, Report, Settings; the rest lives in
+  Download as foldable sections.
+- Smart, learned auto mode plus a mode per kind of video; the link type is
+  recognised as it is pasted.
+- The window is 90% of the old height (720) and must know and stay within the
+  display's size.
 - The progress bars must not open collapsed.
 - Show how many videos remain, and project when the whole run finishes.
 - Must be able to add more videos to the queue mid-run.
@@ -313,8 +322,10 @@ Read `speed=X.XXx`, divide 20 by it.
 
 - **GUI pixels.** No display anywhere in CI. All GUI work
   is verified against `tests/tkstub.py`, which reproduces widget trees, geometry
-  and command wiring but not rendering. Scroll feel, actual clipping and real
-  window resizing are unverified.
+  and command wiring but not rendering. The four-tab window was rendered by
+  hand with real Tk under Xvfb (1366×768 and 1024×600, every tab and section,
+  resized) on Linux; Windows fonts, DPI scaling and the title bar are
+  unverified.
 - **A real download.** Every download test uses a fake `yt-dlp` on `PATH`.
   By hand, with the maintainer's cookies, one 30 s part of R0GdEkPZSvM
   (`get --range`) and its chat replay (`chat --embed`) were fetched from
@@ -346,7 +357,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1159 assertions.
+Nothing is half-finished — `main` is green at 1217 assertions.
 
 Likely next asks:
 1. Whether their video has an English Opus track, and the resulting mux command.

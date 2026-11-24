@@ -8,6 +8,56 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — the window rebuilt: four tabs, Smart modes that learn, links recognised as you paste
+*2026-11-24 · 1217 assertions*
+
+Asked for: a cleaner window with just four tabs, most of the rest moved into
+Download; auto modes that choose the best options from what the app has
+learned you like, and a mode for each kind of video; the link type guessed
+from the pasted link; the log lower at start; the window 90% of its height;
+and the window kept within the display.
+
+- **Four tabs.** Download, Library, Report, Settings. Quality, Audio tracks
+  and Live streams are now foldable sections of Download, beside *More
+  options* (every other `get` flag) and *Fix language*; which are open is
+  remembered. Fix lyrics, Scan & duplicates and Lyrics files are the three
+  jobs of Library, over one folder field and one file list. Tools is
+  Settings.
+- **Links recognised as you paste** (`uicmd.classify_link/classify_links`):
+  YouTube Music song / album / playlist / artist, video, *a video in a
+  playlist — just this one*, Short, live, playlist, channel, SoundCloud,
+  Bandcamp, other sites; links pulled out of a pasted message once each;
+  Spotify explained; lines without a link counted. **Identify online**
+  (`download.probe` + `refine_kind`) finds live / scheduled / finished
+  streams, music videos, vertical Shorts and long talks.
+- **Nine modes and Smart.** Song, Album / music playlist, Music video, Video,
+  Short, Podcast / talk, Video playlist, Whole channel, Live stream — each a
+  different command; the big button says what it will do (*Record live
+  stream* runs the recording). The old four mode names are still read.
+- **Smart learns** (`uicmd.learn / smart_plan`): which mode you use for
+  which kind of link and how you set each mode up; a choice counts once it is
+  the majority of your last ten runs and you made it twice, and the window
+  says so. Settings → Smart shows it, turns it off, or forgets it.
+- **Window.** Opens at 1080x720 (was 1080x800; 720 = 90% of 800),
+  centred, smaller on a small display, never larger than it
+  (`uicmd.fit_window`, `maxsize`). The log starts at a quarter (was a third),
+  asked for before the first frame (`split_heights`), placed again after every
+  resize until you move it, with a 140 px floor; its buttons sit beside the
+  progress bars. Long labels re-wrap to the visible width, button rows and the
+  mode grid reflow on a narrow window, and the horizontal scrollbar only
+  shows when something cannot fit.
+- **Rendered and looked at** with real Tk under Xvfb at 1366x768 and
+  1024x600, which found the three layout faults fixed above (rows wider than
+  the window, a sash moved by the PanedWindow after being placed, labels that
+  never re-wrapped).
+- Tests: §§17, 28, 31 adapted (old tab names resolve to their new homes);
+  §47 new — link kinds, extraction, refining, learning, Smart, window fit,
+  and the window end to end (button per link, live recording, Identify
+  online, learning twice, learning off, forget, restart memory, a 1024x600
+  display).
+
+---
+
 ## `4fc4c19` — chat `--range` no longer puts one part's chat on every part
 *2026-11-23 · 1159 assertions*
 

@@ -8,7 +8,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 - **Python 3.8+, stdlib only** plus two dependencies: `yt-dlp` and `mutagen`
 - Works offline for scanning; the only network calls are to yt-dlp and lyrics APIs
 
-**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: modes](#the-window-two-questions-instead-of-nine-checkboxes) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Live streams](#live-streams-from-the-start-watch-it-so-far-carry-on-after-a-stop) · [Only part of a video, and the live chat as subtitles](#only-part-of-a-video-and-the-live-chat-as-subtitles) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [The window: Smart and modes](#the-window-paste-a-link-smart-does-the-rest) · [Commands](#commands) · [Am I blocked? (`check`)](#am-i-blocked----check) · [Picking a quality by size (`formats`)](#picking-a-quality-by-its-size----formats) · [Cookies and the bot wall](#cookies-sign-in-to-confirm-youre-not-a-bot) · [Surviving WiFi drops](#surviving-wifi-drops) · [Stopping a run](#stopping-a-run) · [Live streams](#live-streams-from-the-start-watch-it-so-far-carry-on-after-a-stop) · [Only part of a video, and the live chat as subtitles](#only-part-of-a-video-and-the-live-chat-as-subtitles) · [Lyrics are included as it downloads](#lyrics-are-included-as-it-downloads) · [Finding wrongly-embedded lyrics](#finding-wrongly-embedded-lyrics) · [Lyrics sources](#lyrics-sources) · [What it writes](#what-it-writes) · [GUI](#gui) · [Config](#config) · [Platform notes](#platform-notes) · [Tests](#tests) · [Verified / not verified](#verified--not-verified)
 
 ```
 ./
@@ -20,7 +20,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 ├── musictool/
 │   ├── cli.py            command line
 │   ├── gui.py            Tkinter interface
-│   ├── uicmd.py          parser -> widgets, argv building, intent modes
+│   ├── uicmd.py          parser -> widgets, argv, modes, link kinds, learning
 │   ├── formats.py        quality table, filters, language picking
 │   ├── download.py       yt-dlp wrapper + videoId index
 │   ├── live.py           live streams: record from the start, watch, carry on
@@ -33,7 +33,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1159 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1217 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -110,71 +110,74 @@ python musictool.py scan ~/Music/Gospel
 python musictool.py gui          # graphical interface
 ```
 
-## The window: two questions instead of nine checkboxes
+## The window: paste a link, Smart does the rest
 
-`musictool gui` opens the **Download** tab as a single choice, because that is
-all the downloader actually needs to know before everything else falls out of
-it:
+`musictool gui` opens on **Download**. Paste a link — or several, or a whole
+message with links in it — and the window says what each one is *as you
+paste it*: a YouTube Music song or album, a YouTube video, a video in a
+playlist (just that one), a Short, a live stream, a playlist, a channel, a
+SoundCloud or Bandcamp track or album, a video on another site. A Spotify
+link is explained rather than attempted (its streams are encrypted), and a
+line without a link is pointed out instead of silently dropped.
 
-| | **One item** | **A whole playlist** |
-|---|---|---|
-| **Music** (audio + lyrics) | `music_single` | `music_playlist` |
-| **Video** (keep the picture) | `video_single` | `video_playlist` |
-
-Pick one and the checkboxes set themselves — no reading, no ritual:
-
-- **Music · one song** — audio extracted to m4a, tags + cover embedded, lyrics
-  embedded as each file lands, `--no-playlist` so a `watch?v=…&list=…` link
-  cannot turn one song into ninety files.
-- **Music · playlist / album** — same, walking the whole playlist in order.
-- **Video · one video** — the picture kept in mkv, `1080` by default (or pick a
-  quality by its size under *More options*), chapters and subtitles on, lyrics
-  off, `--no-playlist`.
-- **Video · playlist** — same, files numbered inside a folder named after the
-  playlist.
-
-Three details make it behave:
-
-1. **The URL is read as you paste it.** A `/playlist?list=…` link moves the
-   window to a playlist run by itself. `watch?v=…&list=…` deliberately stays a
-   **single** — the `list=` there is the "up next" queue, not the thing you
-   asked for. The moment you tick anything by hand the window stops guessing
-   and leaves the checkboxes to you.
-2. **The rest of the options are one click away.** Cookies, proxy, speed
-   limit, retries, subtitle languages and the filename template sit behind
-   *More options*; the six toggles worth seeing stay on the tab. A mode has
-   already set all of them to something sensible.
-3. **The button says what will happen.** It reads *Download + lyrics* for
-   music and *Download video* for video, so the mode you are in is never a
-   surprise at the moment you press it.
-
-The same four modes are exactly what the CLI spells out longhand:
+**✦ Smart (auto)** then picks one of nine modes, each made for one kind of
+thing, and the checkboxes set themselves — no reading, no ritual:
 
 ```
-music_single     get URL --format m4a --audio-quality 4 --no-playlist
-music_playlist   get URL --format m4a --audio-quality 4 \
-                     --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
-video_single     get URL --keep-video --quality 1080 --merge-format mkv \
-                     --chapters --subs --no-lyrics --no-playlist
-video_playlist   get URL --keep-video --quality 1080 --merge-format mkv \
-                     --chapters --subs --no-lyrics \
-                     --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
+song            get URL --format m4a --audio-quality 4 --no-playlist
+                    --template '%(uploader)s - %(title)s.%(ext)s'
+album           get URL --format m4a --audio-quality 4
+                    --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
+music_video     get URL --keep-video --quality 1080 --merge-format mp4 --no-lyrics --no-playlist
+video           get URL --keep-video --quality 1080 --merge-format mkv --chapters --subs
+                    --no-lyrics --no-playlist --template '%(title)s.%(ext)s'
+short           get URL --keep-video --quality best --merge-format mp4 --no-lyrics --no-playlist
+podcast         get URL --format m4a --audio-quality 4 --chapters --no-lyrics --no-playlist
+video_playlist  get URL --keep-video --quality 1080 --merge-format mkv --chapters --subs --no-lyrics
+                    --template '%(playlist_title)s/%(playlist_index)03d - %(title)s.%(ext)s'
+channel         get URL --keep-video --quality 1080 --merge-format mkv --chapters --subs --no-lyrics
+                    --template '%(uploader)s/%(upload_date)s - %(title)s.%(ext)s'
+live            recorded from the stream's first minute (see Live streams)
 ```
+
+Five details make it behave:
+
+1. **It learns what you like.** Every download you start is noted: which mode
+   you used for which kind of link, and how you set that mode up (quality,
+   size cap, container, audio language, file names, folder). Once a choice is
+   the majority of your last ten runs for that kind of link *and* you have
+   made it at least twice, Smart makes it for you and says so — *you usually
+   choose Music video for a YouTube Music song · learned from you: up to
+   720p*. Settings → Smart shows everything it has learned, turns learning
+   off, or forgets it.
+2. **A plain link can hide what it is.** `youtu.be/…` could be a live stream,
+   a premiere, a finished stream, a music video, a Short or a two-hour talk.
+   **Identify online** asks yt-dlp once and the mode follows the answer
+   (Settings → Smart can do it for every paste).
+3. **`watch?v=…&list=…` stays one video.** The `list=` there is the "up next"
+   queue, not the thing you asked for. A `/playlist?list=…` link is a
+   playlist.
+4. **You can always take the wheel.** Pick a mode yourself and it is obeyed
+   (only one-or-many still follows the link: *Song* with an album link is
+   *Album*). Tick something by hand and the window stops adjusting and says
+   *changed by hand*.
+5. **The button says what will happen** — *Download song + lyrics*,
+   *Download album + lyrics*, *Download Short*, *Record live stream*,
+   *Download channel* … — so the mode is never a surprise when you press it.
 
 ### One scroll, folded options, and nothing to retype
 
 Three things about the window that used to cost clicks:
 
-**The whole tab scrolls as one.** The URL box, the mode, the fine-tune strip
-and the full option list all live inside a single scrolling surface, so the
+**The whole tab scrolls as one.** The link box, the modes, the fine-tune strip
+and the foldable sections all live inside a single scrolling surface, so the
 wheel moves the tab wherever the pointer is — you do not have to aim at the
-options first, and the part above *More options* moves with the part below it.
-Only the run buttons stay pinned. (A text box that genuinely cannot scroll —
+options first. Only the run buttons stay pinned. (A text box that genuinely cannot scroll —
 the three-line URL field — passes the wheel on; one with thirty URLs in it
 keeps it.)
 
-**Options you have not touched are folded away.** *More options* used to dump
-all forty-two settings on the screen at once. Now the grid shows the rows that
+**Options you have not touched are folded away.** The *More options* section
+is folded until you open it, and inside it the grid shows the rows that
 have something in them — folder, filename template, audio format, language,
 speed limit if you set one — plus anything you have changed, and folds the
 blank rest behind one button:
@@ -192,7 +195,7 @@ format*, *lyrics*), and a setting that is already on the fine-tune strip is not
 repeated in the grid.
 
 **Your values come back.** Every field on every tab, the mode you were in, the
-URLs you had open and whether you left the options expanded are written to the
+URLs you had open and which sections you left open are written to the
 config file as you change them and again when you close the window or start a
 run — so a restart is not a form to fill in. `800M` is still `800M`.
 
@@ -202,7 +205,7 @@ run — so a restart is not a form to fill in. `800M` is still `800M`.
 
 Choosing a mode no longer wipes what you typed: a blank in a mode's settings
 means "no opinion", so your size ceiling, cookies and speed limit survive a
-switch from Music to Video. The single exception is a raw format selector,
+switch from Song to Video. The single exception is a raw format selector,
 which overrides everything else — a mode always clears that rather than
 inheriting a stale one.
 
@@ -256,8 +259,9 @@ the chapters, the tags. Nothing is re-encoded, so it takes seconds per file.
   than guessing from the filename.
 * `--dry-run` shows what it would do; `--audio-lang es` goes the other way;
   pass `--cookies-from-browser auto` if YouTube wants a session again.
-* In the GUI it is the **Fix language in existing files** button on the
-  Download tab — same folder field, same language setting.
+* In the GUI it is the **Fix language in existing files** button in the
+  Download tab's **Fix language** section — the Save to folder, the same
+  language setting.
 
 **Which files are affected?** You do not need to dig the links out of an old
 terminal log — musictool wrote each one down when it downloaded the file
@@ -292,7 +296,8 @@ will not hand you a link it does not actually have. Files musictool did not
 download have no entry in the index, and it says so rather than guessing one
 from the filename.
 
-`--list` is also the **List wrong-language files** button on the Download tab.
+`--list` is also the **List wrong-language files** button in the Download tab's
+**Fix language** section.
 
 
 ### The progress panel, a queue, and more than one video at a time
@@ -883,7 +888,7 @@ Verified by comparing packet checksums of the source streams with the output
 (mkv), 299+140 (mp4) and the audio of 251 and 140 (only the container's last
 packet header differs).
 
-In the window: on the Live streams tab, **Is it live? How big?** fills a
+In the window: in the Download tab's Live stream section, **Is it live? How big?** fills a
 **Video stream** and an **Audio stream** picker; a stream picked there is
 recorded with `--exact`. Picking only the video pairs it with the audio that
 keeps the pair a plain copy. On the Download tab the same switch is under
@@ -1148,9 +1153,9 @@ musictool chat "D:\Videos\T [id].mkv" --lines 3     # the chat track in a video
   them, together. A subtitle next to an `.mkv` like that is timed to the
   sound as well.
 
-In the window this is all on the Live streams tab: **Only this part**,
+In the window this is all in the Live stream section: **Only this part**,
 **Download this part** and the **Live chat replay as subtitles** box (see
-[The Live streams tab](#the-live-streams-tab)).
+[Live stream & chat](#live-stream--chat-a-section-of-download)).
 
 ## Live download progress (why you used to see nothing)
 
@@ -1379,13 +1384,78 @@ override the tags in your files.
 python musictool.py gui
 ```
 
-Nine tabs — **Download**, **Fix lyrics**, **Scan & duplicates**, **Report**,
-**Tools**, **Lyrics files**, **Quality**, **Audio tracks**, **Live streams** —
-over the same code paths as the CLI.
+Four tabs — **Download**, **Library**, **Report**, **Settings** — over the
+same code paths as the CLI.
 
-### The Quality tab
+**Download** is where nearly everything happens, in three steps from the top:
 
-Paste a video URL, press **Load qualities**, and the tab shows the collapsed
+1. **Paste links.** Paste anything — a link, several, or a whole chat message
+   with links in it. Each link is recognised the moment it lands, from the
+   link alone: a YouTube Music song or album, a video, *a video in a
+   playlist — just this one*, a Short, a live stream, a playlist, a channel,
+   a SoundCloud or Bandcamp track or album, a video on another site. Several
+   links are summed up (`3 links: 2 songs, 1 YouTube video`). A Spotify link
+   is explained instead of attempted (its streams are encrypted), and lines
+   without a link are counted and skipped. **Identify online** asks yt-dlp
+   about the first video (one small request) and finds what the link hides:
+   live right now, scheduled, a finished stream, a music video, a vertical
+   Short, a long talk. Settings → Smart can do that look-up for every paste.
+2. **How to download it.** **✦ Smart (auto)** plus nine modes, one per kind
+   of thing:
+
+   | mode | what you get |
+   | --- | --- |
+   | Song | m4a, tags + cover, synced lyrics embedded, this song only |
+   | Album / music playlist | m4a with lyrics, numbered `001 - …` in a folder named after the album |
+   | Music video | mp4 up to 1080p, tags + cover, no lyrics |
+   | Video | mkv up to 1080p with chapters and subtitles |
+   | Short | mp4 at the best quality there is |
+   | Podcast / talk (audio) | m4a with chapters, no lyrics |
+   | Video playlist | mkv up to 1080p, numbered in a folder of its own |
+   | Whole channel | mkv up to 1080p, a folder per channel, dated names |
+   | Live stream | recorded from its first minute, watchable while it records |
+
+   **Smart** picks the mode from what you pasted, and **learns**: every
+   download you start is noted (which mode for which kind of link, and how
+   you set that mode up — quality, size cap, container, audio language,
+   names, folder). A choice becomes the default once it is the majority of
+   your last ten runs for that kind *and* you made it at least twice; the
+   line under the modes then says so (`you usually choose Music video for a
+   YouTube Music song · learned from you: up to 720p`). A mode you pick by
+   hand is obeyed; only one-or-many still follows the link, so *Song* with
+   an album link in the box becomes *Album*. Change an option by hand and the
+   tab stops adjusting things and says *changed by hand*. Settings → Smart
+   shows what was learned, turns learning off, or forgets it all.
+   **Save to** is right under the modes, with **Browse…** and **Open**.
+
+Below that: the **fine-tune** strip (the toggles you reach for most), then
+foldable sections — **Quality & size**, **Audio tracks**, **Live stream &
+chat**, **More options** (every other `get` flag) and **Fix language**. Open
+the one you need; the window remembers which were open. A live link opens
+the Live section by itself. The bottom bar stays put while the tab scrolls:
+**Check access (no cookies)**, **List qualities + sizes** (+ **audio
+formats**) and the big button, which says what it will do — *Download song +
+lyrics*, *Download album + lyrics*, *Download Short*, *Record live stream*,
+*Download channel* … — and *Add to queue* while something is running.
+
+**Library** holds the jobs on music you already have — **Fix lyrics**,
+**Scan & duplicates** and **Lyrics files (.lrc)** — one at a time, over one
+folder field and one file list. **Report** reads `lyrics-report.txt`.
+**Settings** holds Smart, the window, the lyrics sources, saved defaults and
+`doctor`.
+
+**The window fits your display.** It opens at 1080 x 720 (90% of the old
+800-pixel height), centred; on a smaller display it shrinks to fit with the
+taskbar kept clear, and it can never be made larger than the screen
+(Settings → Window shows the numbers and has **Reset size and layout**). The
+log starts low, a quarter of the window, already at the first frame, and its
+buttons sit beside the progress bars so it gets the room. Rows of buttons
+and long hints wrap on a narrow window instead of pushing the tab sideways.
+
+### Quality & size (a section of Download)
+
+It works on the first link in the box (or one you type into it). Press
+**Load qualities**, and it shows the collapsed
 list — not the 127 rows yt-dlp reports. From there:
 
 - **Filters** on one line: max height, container, codec, a size cap, and the
@@ -1397,26 +1467,25 @@ list — not the 127 rows yt-dlp reports. From there:
 - **Manual** — click a row and it becomes the choice instead; the row's audio
   partner and total size are shown underneath.
 - **Audio** — a video-only row is paired with the best audio track in your
-  audio language (`--audio-lang` on the Download tab), or with the track you
-  chose on the **Audio tracks** tab. The line next to **Choose audio track…**
-  says which one. (Before this, the tab ignored `--audio-lang` and could pair
-  a dubbed video with the wrong language.)
+  audio language (`--audio-lang`, in More options), or with the track you
+  chose in the **Audio tracks** section. The line next to **Choose audio
+  track…** says which one.
 - The `-f` box at the bottom holds the result. **Copy command** puts the whole
   `musictool get ...` line on your clipboard, **Download this quality** runs it
   with the settings from the Download tab. Double-clicking a row downloads it.
 
-If YouTube refuses the request the tab says why and repeats the fix from
+If YouTube refuses the request the section says why and repeats the fix from
 `check` — it does not leave you staring at an empty table. The same goes for
 an answer with no audio or video in it (the JS challenge failed): both this
-tab and Audio tracks say so and name the fix. The lookup uses the Download
-tab's cookies and its `--js-runtimes` / `--remote-components`.
+section and Audio tracks say so and name the fix. The lookup uses the
+cookies and the `--js-runtimes` / `--remote-components` set in More options.
 
-### The Audio tracks tab
+### Audio tracks (a section of Download)
 
 A dubbed video offers one audio track per spoken language, often in two codecs
 (Opus/webm and AAC/m4a) and at several bitrates. This tab lists them so you can
-see what is really there and take a specific one. It shares the URL box with
-the Quality tab, so one **Load** fills both.
+see what is really there and take a specific one. It shares the URL with
+Quality & size, so one **Load** fills both.
 
 - **Language** — starts at your audio language. The list shows every language
   the video has (`es (original), en, fr`), plus **all**. Picking a language
@@ -1431,7 +1500,7 @@ the Quality tab, so one **Load** fills both.
   --format-selector <id>`, converted to the audio format set on the Download
   tab), even if the Download tab is in video mode. Double-click does the same.
   **Copy command** puts that command on the clipboard.
-- **Use with a video quality** — keeps the track for the Quality tab, which
+- **Use with a video quality** — keeps the track for Quality & size, which
   then pairs every video row with it (`-f 248+251-1`). **Automatic audio**
   goes back to the best track in your language. The choice is per video:
   loading a different URL forgets it.
@@ -1441,9 +1510,10 @@ tracks in your `--audio-lang` (`--audio-lang any` for all of them) and names
 the spoken languages; `musictool get URL -f <id>` takes one. In the window,
 that is the **+ audio formats** tick beside **List qualities + sizes**.
 
-### The Live streams tab
+### Live stream & chat (a section of Download)
 
-The stream's link, the folder, an optional **Copy to watch goes to** folder
+The stream's link (the first link in the box, or one typed here), the folder
+— the tab's **Save to** — an optional **Copy to watch goes to** folder
 (another drive when this one is full) and an **Audio only** tick, then:
 
 - **Is it live? How big?** — `live --status`: live since when, how big so
@@ -1474,8 +1544,9 @@ The stream's link, the folder, an optional **Copy to watch goes to** folder
   part from its name. With no video of it in the folder, the *Only this
   part* field is used.
 
-Cookies, proxy and the JavaScript settings come from the Download tab, and
-the tab's fields come back next time.
+With a live link in the box the big button is **Record live stream**, which is
+**Record from the start**. Cookies, proxy and the JavaScript settings come
+from More options, and the section's fields come back next time.
 
 
 **Every CLI option is in the GUI, and it stays that way automatically.** The
@@ -1515,38 +1586,41 @@ so you can copy it into a shell or a cron job.
   strip that is the first block of each tab, laid out in a wrapping grid so it
   stays short on small screens. They are bound to the *same* variables as the
   generated widgets below, so ticking one ticks the other; nothing to keep in sync.
-- **Pick the files** — the **Fix lyrics** and **Scan & duplicates** tabs list every
+- **Pick the files** — the Library's **Fix lyrics** and **Scan & duplicates** jobs list every
   audio file with its current state, so you can run the whole folder, a subset, or
   everything except a few. Files that share lyrics with another file are flagged in
   the list. See below.
 - **Remembered paths and URLs** — the last 12 folders and URLs are kept in the
-  config and offered in a dropdown on every tab, so you are not re-typing
+  config and offered in the dropdowns, so you are not re-typing
   `/storage/67FE-19FE/Music/...` each time.
 - **Scan & duplicates** — scan, scan-as-JSON, find duplicate groups, render the
-  groups as a tree, and **FIX duplicate lyrics**, all from one tab.
+  groups as a tree, and **FIX duplicate lyrics**, all from one Library job.
 - **Report** — loads `lyrics-report.txt` and shows a summary line
   (`2 fixed (40%) · 1 already ok · 1 unresolved · 0 unreadable · of 5 scanned`),
   a collapsible tree of fixed / unresolved / unreadable with the reason for each
   miss, and a per-provider tally. Export to JSON or CSV. It refreshes itself after
   a run, and duplicate scans render straight into the same tree.
-- **Tools** — probe the lyrics sources, read/set/reset saved defaults, and run
+- **Settings** — Smart (learning on/off, what was learned, forget it), the
+  window (display size, reset), probe the lyrics sources, read/set/reset
+  saved defaults, and run
   `doctor`. "Save these options as defaults" writes the current widgets to the
   config so the next launch starts where you left off.
 - **Everything scrolls** — each tab's body sits in one scrolling area, so a short
-  or narrow window cannot push a control out of reach (your 1600x720 window is
-  exactly why). The path field and the run buttons are pinned outside it and stay
+  or narrow window cannot push a control out of reach. The run buttons (and the
+  Library's folder field) are pinned outside it and stay
   on screen while everything else, including the quick options and the file list,
   scrolls. The mouse wheel scrolls whichever tab the pointer is over, and
   stays out of the way of the file list, the report tree and the log, which scroll
   themselves.
 - **Resizable log** — the tabs and the log are two halves of one draggable split.
   Drag the bar between them, or use **log taller** / **log shorter** / **reset
-  split** just above the log. Neither half can be pushed off screen, and
-  **Clear** empties the pane.
+  split** beside the progress bars. It starts at a quarter of the window and
+  follows the window's size until you move it yourself. Neither half can be
+  pushed off screen, and **Clear** empties the pane.
 
 ### Running a subset of your files
 
-Press **Load file list** on the **Fix lyrics** tab and every audio file in the
+Press **Load file list** in **Library → Fix lyrics** and every audio file in the
 folder appears with a tick box, its state (`synced` / `plain` / `empty` /
 `unreadable`), its tags and its length. Everything starts ticked.
 
@@ -1614,7 +1688,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1159 assertions, 0 failures**, with or without
+**Verified by running the code — 1217 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

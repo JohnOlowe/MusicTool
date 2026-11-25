@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — chat: `--font-size`, and a size players can change
+## `780d019` — chat: `--font-size`, and a size players can change
 *2026-11-25 · 1298 assertions*
 
 Asked: why the ASS chat subtitles don't get smaller when the size is changed

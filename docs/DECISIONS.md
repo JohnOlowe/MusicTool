@@ -362,6 +362,14 @@ figure.
 
 These all caused a real bug at some point.
 
+- **A size written into every ASS line is a size nobody can change.** The
+  chat's gap between messages was `\N{\fs18}\h\N{\fs45}`. That second
+  `\fs45` fixed the size of every message after a gap, so a player that can
+  rescale ASS styles (mpv `--sub-ass-override=force --sub-scale`) changed
+  only the first. Go back to the style with `{\r}`. VLC can't rescale ASS
+  either way (libass ignores its subtitle size settings), which is why
+  `chat --font-size` exists.
+
 - **`x or fallback` swallows a measured 0.** `played_seconds(done) or secs`
   took a part whose picture never came (0 s) for the sound's 2:35, and the
   rest of the part was never fetched. Test `is not None`. The measuring had

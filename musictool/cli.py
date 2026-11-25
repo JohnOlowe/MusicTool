@@ -334,6 +334,12 @@ def build_parser():
                          "box, outlined text with a shadow)")
     ch.add_argument("--no-box", dest="box", action="store_const", const=False,
                     help=argparse.SUPPRESS)
+    ch.add_argument("--font-size", dest="font_size", type=int, metavar="PX",
+                    help="ass: how big the text is, in pixels on a 1080p "
+                         "picture (scaled with the video; default 45). VLC "
+                         "cannot resize ASS while it plays -- remake the "
+                         "file with this instead (`chat FILE.ass "
+                         "--font-size 32`, nothing is downloaded)")
     ch.add_argument("--gap", type=float,
                     help="space between messages, in lines (default 0.4; 0 = "
                          "none). srt/vtt can only space whole lines: 1+")
@@ -1880,6 +1886,10 @@ def cmd_chat(args):
     if args.lines is not None and args.lines < 1:
         print("!! --lines must be 1 or more")
         return 2
+    if args.font_size is not None and not 8 <= args.font_size <= 300:
+        print("!! --font-size is in pixels on a 1080p picture: 8 to 300 "
+              "(45 is the default)")
+        return 2
     folder = os.path.abspath(os.path.expanduser(o.get("output_dir") or "."))
     video = os.path.abspath(args.video) if args.video else None
     if video and not os.path.isfile(video):
@@ -1894,6 +1904,7 @@ def cmd_chat(args):
              "side": args.side, "place": args.place, "width": args.width,
              "wrap": args.wrap, "pad": args.pad, "names": args.names,
              "box": args.box, "gap": args.gap, "colours": args.colours,
+             "font_size": args.font_size,
              "offset": args.offset, "range": rng,
              "video": video, "embed": args.embed}
     return chat.run(args.source, folder, o, style)

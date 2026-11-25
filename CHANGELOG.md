@@ -8,6 +8,36 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — chat: `--font-size`, and a size players can change
+*2026-11-25 · 1298 assertions*
+
+Asked: why the ASS chat subtitles don't get smaller when the size is changed
+in VLC, then "Yes, do so" to both fixes offered.
+
+- **Why.** VLC's subtitle size (Ctrl+wheel, the font size in its
+  preferences) applies only to subtitles it draws itself (SRT, VTT). ASS is
+  drawn by libass from the sizes in the file. On top of that, each gap
+  between messages was written `\N{\fs18}\h\N{\fs45}`. The `\fs45` fixed
+  the size of every message after a gap, so even a player that can rescale
+  ASS styles (mpv `--sub-ass-override=force --sub-scale`) changed only the
+  first message.
+- **`chat --font-size PX`.** The size is in pixels on a 1080p picture, and
+  players scale it with the video; the default is 45. The gap scales with
+  it. Remaking a file (`chat FILE.ass --font-size 32`) downloads nothing,
+  and the size is stored in the file's settings, so later remakes keep it.
+  Values outside 8–300 are refused.
+- **The app's chat box** has a *Text size* field. Empty means the file's
+  own size (or 45).
+- **The size is written once, in the style.** After the gap the text goes
+  back to the style with `{\r}`. Older files still read back. Checked by
+  rendering with libass: at 30 px every message shrank, and the gaps with
+  them.
+- Tests: 6 new checks in section 45, and two older checks changed (the gap
+  text; the Live tab now has 8 text fields). README (chat section, with the
+  VLC explanation), DECISIONS (a trap), HANDOFF, TESTING, ARCHITECTURE.
+
+---
+
 ## `26e2e43` — `get --range` tested on real YouTube: four bugs fixed
 *2026-11-24 · 1292 assertions*
 

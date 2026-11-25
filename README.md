@@ -34,7 +34,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1292 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1298 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -1163,12 +1163,25 @@ musictool chat "D:\Videos\T [id].mkv" --lines 3     # the chat track in a video
   1` or more puts an empty-looking line between messages; VTT's colours and
   "no box" come from a STYLE block that browsers honour and some players
   ignore.
+- **Text size: `--font-size PX`** (ASS), in pixels on a 1080p picture; the
+  player scales it with the video. The default is 45. *Text size* in the
+  app's chat box does the same. **VLC cannot resize ASS while it plays.**
+  Its Ctrl+wheel and its subtitle font size apply only to SRT and VTT, which
+  it draws itself; ASS is drawn by libass from the sizes in the file. So
+  remake the file instead: `musictool chat "TITLE [id].ass" --font-size 32`
+  takes a second, downloads nothing, and the size stays with the file for
+  later remakes. The size is written once, in the file's style: players
+  that can rescale ASS styles (mpv `--sub-ass-override=force
+  --sub-scale=0.7`, MPC-HC) shrink every message, not just the first one
+  after a gap, as they did before. Or use `--format srt`, which VLC resizes,
+  but without the side placement or the outline.
 - **`--format ass|srt|vtt|txt`.** `txt` is a readable log, `[1:02:03.450]
   name: message`, not a subtitle.
 - **Remaking a chat file.** Give `chat` a file it made before instead of the
   link: an `.ass`, `.srt`, `.vtt` or `.txt`, or a video with the *Live chat*
   track that `--embed` added. It is made again with whatever you change
-  (`--format`, `--lines`, `--side`, `--colours`, `--box`, `--offset`, ...).
+  (`--format`, `--lines`, `--side`, `--colours`, `--box`, `--font-size`,
+  `--offset`, ...).
   Anything you leave out stays as that file had it, and nothing is
   downloaded. The result goes beside the source (or beside the video with
   the same name), and a file in the same format is replaced in place. ASS,
@@ -1742,7 +1755,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1292 assertions, 0 failures**, with or without
+**Verified by running the code — 1298 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

@@ -410,7 +410,10 @@ def to_ass(cues, side="right", place="bottom", width=32, font_size=0,
     or on a see-through dark box (`box`). `gap`: space between messages, in
     lines (0.4 = a little)."""
     W, H = res
-    fs = int(font_size) or int(H / 24)
+    # font_size: pixels on a 1080-line picture (the player scales it with the
+    # video); 0 = a 24th of the height, 45 px
+    fs = (max(8, round(float(font_size) * H / 1080)) if font_size
+          else int(H / 24))
     col = int(W * max(10, min(100, width)) / 100)
     edge = int(W * 0.02)
     if side == "right":
@@ -458,8 +461,11 @@ def to_ass(cues, side="right", place="bottom", width=32, font_size=0,
         "Effect, Text",
     ]
     g = int(round(fs * float(gap or 0)))
-    # a blank line `g` pixels high between two messages
-    sep = f"\\N{{\\fs{g}}}\\h\\N{{\\fs{fs}}}" if g >= 1 else "\\N"
+    # a blank line `g` pixels high between two messages, then \r: back to the
+    # style, so the size is written only there. A size written into every
+    # line (\fs45, as it was) is one a player cannot change: mpv's
+    # --sub-scale with --sub-ass-override=force shrank only the first message
+    sep = f"\\N{{\\fs{g}}}\\h\\N{{\\r}}" if g >= 1 else "\\N"
     body = []
     for a, b, shown in cues:
         parts = []
@@ -680,7 +686,8 @@ def _ass_cues(text):
             continue
         shown = []
         for part in f[9].split("\\N"):
-            part = re.sub(r"\{\\fs\d+\}", "", part)    # the spacing's size
+            # the spacing's size, and the return to the style after it
+            part = re.sub(r"\{\\(?:fs\d+|r)\}", "", part)
             plain = re.sub(r"\{[^}]*\}", "", part).replace("\\h", "").strip()
             if not plain:
                 continue                     # the space between two messages

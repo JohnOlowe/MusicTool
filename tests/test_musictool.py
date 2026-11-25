@@ -4637,10 +4637,10 @@ def _drain8():
 _nb8 = [w for w in _r8.walk() if isinstance(w, tkstub.Notebook)][0]
 _lt = _nb8.tab_for("Live streams")
 _le = [w for w in _lt.walk() if w.kind == "entry"]
-# link, folder, copy folder -- then the part, and the chat's hold, SRT pad
-# and spacing
+# link, folder, copy folder -- then the part, and the chat's hold, SRT pad,
+# spacing and text size
 check("the Live streams tab has the link, the folder and the copy folder",
-      len(_le) == 7, str(len(_le)))
+      len(_le) == 8, str(len(_le)))
 _gp8 = [w for w in _r8.walk() if isinstance(w, G.OptionsPane)
         and w.sub == "get"][0]
 _cfb8 = _gp8.vars["cookies_from_browser"].get()
@@ -6150,8 +6150,26 @@ check("ASS: no box (BorderStyle 1), an outline and a shadow",
       and int(_st45.split(",")[17]) >= 1, _st45)
 check("...each message's text in its colour, not plain white",
       "{\\b0\\c" + CH45._bgr(_cn["@owner"][1]) + "}welcome" in _a45, _dl45[0])
-check("...a blank line 0.4 of a line high between two messages",
-      "\\N{\\fs18}\\h\\N{\\fs45}" in _a45, _dl45[2])
+check("...a blank line 0.4 of a line high between two messages, then back "
+      "to the style (\\r): the size is written only in the style",
+      "\\N{\\fs18}\\h\\N{\\r}" in _a45 and "\\fs45" not in _a45,
+      _dl45[2])
+# VLC cannot resize ASS while it plays (libass ignores its size setting); a
+# size written into every line kept mpv's --sub-scale off all but the first
+_fz45 = CH45.render(_M45, "ass", lines=3, hold=15, start=100, end=130,
+                    font_size=30)
+_fs45 = [x for x in _fz45.splitlines() if x.startswith("Style: Chat")][0]
+check("--font-size: the style's size, in pixels on a 1080p picture, the gap "
+      "scaled with it",
+      _fs45.split(",")[2] == "30" and "\\N{\\fs12}\\h\\N{\\r}" in _fz45
+      and CH45.to_ass([], font_size=30, res=(1280, 720)).count(
+          "Style: Chat,Arial,20,") == 1, _fs45)
+_nd45 = _fz45[:_fz45.index(CH45.DATA)] + _fz45[_fz45.index("[Events]"):]
+check("...and the messages are read back from the lines alone (\\r skipped)",
+      [(m.author, m.text) for m in CH45.parse_own(_nd45, ".ass")[0]]
+      == [(m.author, m.text) for m in CH45.parse_own(_fz45, ".ass")[0]]
+      and len(CH45.parse_own(_nd45, ".ass")[0]) >= 3,
+      str([(m.author, m.text) for m in CH45.parse_own(_nd45, ".ass")[0]]))
 check("...gap 0: messages right under each other",
       "\\h" not in CH45.render(_M45, "ass", start=100, end=130, gap=0))
 check("...the messages and settings are kept in a section players skip",
@@ -6288,6 +6306,20 @@ _r = _cli45(_A45)
 check("chat FILE.ass alone: remade in place, in its own format",
       _r.returncode == 0 and CH45.read_own(_A45)[1].get("box") is True
       and "wrote Talk [ABCDEFGHIJK].ass" in _r.stdout, _r.stdout[-300:])
+_r = _cli45(_A45, "--font-size", "32")
+_sz45 = [x for x in open(_A45, encoding="utf-8").read().splitlines()
+         if x.startswith("Style: Chat")]
+check("chat FILE.ass --font-size 32: remade smaller, nothing downloaded",
+      _r.returncode == 0 and _sz45 and _sz45[0].split(",")[2] == "32"
+      and CH45.read_own(_A45)[1].get("font_size") == 32, _r.stdout[-300:])
+_r = _cli45(_A45, "--gap", "0.5")
+_sz45 = [x for x in open(_A45, encoding="utf-8").read().splitlines()
+         if x.startswith("Style: Chat")]
+check("...remade again for something else: it keeps its size",
+      _r.returncode == 0 and _sz45[0].split(",")[2] == "32", _sz45[0])
+_r = _cli45(_A45, "--font-size", "2")
+check("...a size that is no size is refused", _r.returncode == 2
+      and "8 to 300" in _r.stdout, _r.stdout[-200:])
 open(os.path.join(_D45, "Foreign.srt"), "w").write(
     "1\n00:00:01,000 --> 00:00:02,000\nsomeone's subtitle\n")
 _r = _cli45(os.path.join(_D45, "Foreign.srt"), "--format", "srt")
@@ -6340,8 +6372,16 @@ try:
     check("'Remake a chat file...' -> chat FILE with the box's settings",
           _c45[:2] == ["chat", _A45] and _val(_c45, "--format") == "ass"
           and _val(_c45, "--colours") == "name" and _val(_c45, "--gap") == "0.4"
-          and "--no-box" in _c45 and "--names" in _c45 and "-o" not in _c45,
-          str(_c45))
+          and "--no-box" in _c45 and "--names" in _c45 and "-o" not in _c45
+          and "--font-size" not in _c45, str(_c45))
+    _sl45 = [w for w in _lt45.walk() if str(w.options.get("text", "")).startswith(
+        "Text size")][0]
+    _sib45 = _sl45.master.children
+    _sib45[_sib45.index(_sl45) + 1].options["textvariable"].set("30")
+    _qbtn(_lt45, "Remake a chat file\u2026").invoke()
+    _drain45()
+    check("...with a text size typed: --font-size 30 (empty: the file's own)",
+          _val(_A45g[-1], "--font-size") == "30", str(_A45g[-1]))
     tkstub.DIALOG["open"] = ""
     _n45 = len(_A45g)
     _qbtn(_lt45, "Remake a chat file\u2026").invoke()

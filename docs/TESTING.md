@@ -4,7 +4,7 @@
 python3 tests/test_musictool.py
 ```
 
-**1292 assertions across 49 sections (plus 8b), 0 failures** — with or without
+**1298 assertions across 49 sections (plus 8b), 0 failures** — with or without
 tkinter installed, with or without a display. About 40 seconds. No network.
 
 Requirements: `mutagen`, and either `ffmpeg` on `PATH` or

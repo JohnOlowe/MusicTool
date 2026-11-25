@@ -2923,6 +2923,7 @@ def run():
     cbox = tk.BooleanVar(value=bool(EXTRA.get("chat_box")))
     cgap = tk.StringVar(value=str(EXTRA.get("chat_gap") if EXTRA.get(
         "chat_gap") not in (None, "") else "0.4"))
+    csize = tk.StringVar(value=str(EXTRA.get("chat_size") or ""))
     for label, var, kind, vals, w in (
             ("Format:", cfmt, "combo", chat.FORMATS, 6),
             ("Messages at once:", clines, "spin", (1, 30), 4),
@@ -2960,6 +2961,10 @@ def run():
     ttk.Label(_c3, text="Space between messages (lines):").pack(
         side="left", padx=(0, 3))
     ttk.Entry(_c3, textvariable=cgap, width=4).pack(side="left", padx=(0, 10))
+    ttk.Label(_c3, text="Text size (px at 1080p, empty = 45):").pack(
+        side="left", padx=(0, 3))
+    ttk.Entry(_c3, textvariable=csize, width=4).pack(side="left",
+                                                     padx=(0, 10))
     ttk.Checkbutton(_c3, text="Dark box behind the text", variable=cbox,
                     command=lambda: remember_soon()).pack(side="left")
     bchat = ttk.Button(_c3, text="Get the chat", command=lambda: l_chat())
@@ -2979,7 +2984,9 @@ def run():
         "their own (the owner, moderators, members and Super Chats in "
         "YouTube's), role = only those, off = white; the text is outlined, "
         "with no box unless you tick it. ASS keeps the side, colours and "
-        "spacing in every player; SRT plays everywhere (SRT spaces push it "
+        "spacing in every player, and its own text size (VLC cannot "
+        "resize ASS while it plays: set \u201cText size\u201d and remake "
+        "the file); SRT plays everywhere (SRT spaces push it "
         "right in players that ignore the side, try 40-60; it can only "
         "space whole lines, 1 or more); TXT is a readable log. Adding it "
         "as a track: an .mkv is updated, an .mp4 gets an .mkv copy beside "
@@ -2990,7 +2997,8 @@ def run():
     live_state.update(live_part=lpart, chat_format=cfmt, chat_lines=clines,
                       chat_hold=chold, chat_side=cside, chat_place=cplace,
                       chat_pad=cpad, chat_names=cnames, chat_embed=cembed,
-                      chat_colours=ccol, chat_box=cbox, chat_gap=cgap)
+                      chat_colours=ccol, chat_box=cbox, chat_gap=cgap,
+                      chat_size=csize)
     ttk.Label(lbody, foreground="#555", wraplength=980, justify="left", text=(
         "\u2022 Record from the start: from the stream's first minute, even "
         "if it began hours ago. Video and audio are added to the file as they "
@@ -3169,7 +3177,8 @@ def run():
         for flag, var, cast in (("--lines", clines, int),
                                 ("--hold", chold, float),
                                 ("--pad", cpad, int),
-                                ("--gap", cgap, float)):
+                                ("--gap", cgap, float),
+                                ("--font-size", csize, int)):
             t = var.get().strip()
             if not t:
                 continue

@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — Windows: no empty console windows when the app runs without one
+## `6923d5e` — Windows: no empty console windows when the app runs without one
 *2026-11-25 · 1304 assertions*
 
 Reported: started with `pythonw` from a `.vbs` file, the app kept opening an

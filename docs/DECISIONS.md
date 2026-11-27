@@ -362,6 +362,13 @@ figure.
 
 These all caused a real bug at some point.
 
+- **yt-dlp's browser reader returns every site's cookies.** `cookies --send`
+  must never pass on the bank's or Google's: `share.youtube_only` filters
+  before anything is printed, saved or sent, and keeps `youtube.com` and its
+  subdomains only (`youtube.com.evil.net` and `notyoutube.com` are tested).
+  YouTube-only is enough to stay signed in: the user's own working
+  `cookies.txt` (a youtube.com export) was YouTube-only.
+
 - **A console program started from a process with no console gets a new,
   visible one.** The app started with `pythonw` (a `.vbs` launcher) opened an
   empty black window for every yt-dlp and ffmpeg run. The output was piped,

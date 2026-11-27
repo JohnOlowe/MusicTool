@@ -20,6 +20,7 @@ musictool.py ──▶ cli.py ──▶ download.py ──▶ (yt-dlp subprocess
                    ├──▶ lyrics.py ──▶ providers.py ──▶ tags.py ──▶ mutagen
                    ├──▶ config.py      saved defaults, one JSON file
                    ├──▶ cancel.py      Stop / Force stop, every subprocess
+                   ├──▶ share.py       cookies: browser login -> phone (yt-dlp reads it)
                    └──▶ util.py        normalisation, LRC, HTTP, detection
 
 gui.py ──▶ uicmd.py ──▶ cli.build_parser()
@@ -36,8 +37,8 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 2067 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` / `_part_rounds` for `get --range` |
-| `gui.py` | 3485 | tkinter GUI: 4 tabs, Smart + modes, foldable sections, the log pane, the progress panel, the queue, Stop / Force stop |
+| `cli.py` | 2177 | argparse for all 16 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` / `_part_rounds` for `get --range` |
+| `gui.py` | 3518 | tkinter GUI: 4 tabs, Smart + modes, foldable sections, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 1280 | parser → widget specs, `build_argv`, modes, link recognition, learning, window fit, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
 | `download.py` | 980 | yt-dlp invocation (`resolve_ids`: which formats yt-dlp picks, asked offline; `needs_aac_fix`; `runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size` and the range proxy is off; `info_json` → `--load-info-json` instead of the link), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
@@ -51,6 +52,7 @@ button cannot drift away from what the same options do on the command line.
 | `progress.py` | 431 | parses yt-dlp's progress lines (per stream, retries, skips), and ffmpeg's for a part (position, its noise), into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
 | `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
+| `share.py` | 332 | `musictool cookies`: `read_browser` (yt-dlp `--cookies-from-browser` + `--cookies` with no URL writes the jar and downloads nothing; to a temp folder deleted at once), `youtube_only` (the filter: nothing but `youtube.com` leaves), `send` (UDP answer + one-shot HTTP with a random code, `--wait`, Stop), `find`/`receive` (broadcast, atomic save) |
 | `cancel.py` | 330 | `quiet` (programs started hidden on Windows when there is no console: pythonw); the stop flag shared by every worker; `popen`/`run` (every long-running program goes through them so Force stop can find it), `force`, `kill_tree` (with children: `taskkill /T` on Windows, `/proc` or `ps` elsewhere), `stop_process`, a `sleep` that Stop cuts short |
 
 Functions worth knowing by name because they are load-bearing:

@@ -367,6 +367,30 @@ def build_parser():
                     help="JavaScript runtime for YouTube's challenge, e.g. node")
     ch.add_argument("--remote-components", dest="remote_components",
                     help="e.g. ejs:github")
+    co = sub.add_parser(
+        "cookies", help="your YouTube login from the browser to your phone: "
+                        "--send here, --receive there (or -o: save it)")
+    co.add_argument("--send", action="store_true",
+                    help="offer it once on this Wi-Fi for your phone to fetch")
+    co.add_argument("--receive", nargs="?", const="", metavar="ADDRESS",
+                    help="on the phone: fetch it from the computer running "
+                         "--send. Finds it by itself; or give the address "
+                         "it shows")
+    co.add_argument("-o", "--output",
+                    help="save it to this file. With --receive: default "
+                         "your cookies setting, else Download/cookies.txt "
+                         "on Android")
+    co.add_argument("--from", dest="browser",
+                    help="browser to read: firefox, chrome, edge, "
+                         "firefox:PROFILE ... (default: your 'cookies from "
+                         "browser' setting; auto = the one you use most)")
+    co.add_argument("--cookies",
+                    help="send/save from this cookies.txt instead of a browser")
+    co.add_argument("--port", type=int, default=8765,
+                    help="network port, on both devices (default 8765)")
+    co.add_argument("--wait", type=int, default=None,
+                    help="seconds to keep offering it (--send, default 300) "
+                         "or to look for the computer (--receive, default 60)")
     sub.add_parser("doctor", help="check that yt-dlp, ffmpeg and tkinter are available")
     sub.add_parser("gui", help="launch the graphical interface")
     return ap
@@ -1965,6 +1989,91 @@ def ejs_status():
             "(the official yt-dlp executable bundles it)")
 
 
+def _receive_path(cfg):
+    """Where --receive saves by default: the cookies setting (which
+    MUSICTOOL_COOKIES also sets), else Download/cookies.txt on Android,
+    else cookies.txt in the config folder. -> (path, from the setting?)"""
+    if cfg.get("cookies"):
+        return cfg["cookies"], True
+    from .util import config_dir, is_termux
+    if is_termux() or os.path.isdir("/storage/emulated/0/Download"):
+        return "/storage/emulated/0/Download/cookies.txt", False
+    return os.path.join(config_dir(), "cookies.txt"), False
+
+
+def cmd_cookies(args):
+    from . import config as configmod
+    from . import share
+    from .download import cookie_args
+    cfg = configmod.load()
+    if args.send and args.receive is not None:
+        print("--send or --receive, not both")
+        return 2
+    if args.port < 1 or args.port > 65535:
+        print("--port: 1 to 65535")
+        return 2
+    if args.wait is not None and args.wait < 1:
+        print("--wait: at least 1 second")
+        return 2
+    try:
+        if args.receive is not None:
+            out, setting = ((args.output, False) if args.output
+                            else _receive_path(cfg))
+            path, n, signed = share.receive(out, args.receive or None,
+                                            args.port, args.wait or 60)
+            print(f"saved {n} YouTube cookies to {path}"
+                  + ("" if signed else "\n  WARNING: no login cookie in them "
+                     "-- is that browser signed in to YouTube?"))
+            if not args.output and not setting:
+                configmod.remember(cookies=path)
+                print("  saved as your cookies setting: downloads here use "
+                      "it from now on")
+            elif args.output and os.path.abspath(args.output) != \
+                    os.path.abspath(cfg.get("cookies") or ""):
+                print(f"  use it with: --cookies \"{path}\"")
+            return 0
+
+        # what to read: --from, else --cookies, else the saved settings --
+        # the same choice every download makes (a cookies file wins)
+        o = {"cookies": None if args.browser else
+             (args.cookies or cfg.get("cookies")),
+             "cookies_from_browser": args.browser or
+             cfg.get("cookies_from_browser")}
+        how = cookie_args(o, log=print)
+        if not how:
+            print("no browser to read the login from: say which, e.g. "
+                  "--from firefox")
+            return 1
+        if how[0] == "--cookies":
+            text, n, signed = share.read_file(how[1])
+            src = how[1]
+        else:
+            print(f"reading your YouTube login from {how[1]}...")
+            text, n, signed = share.read_browser(how[1])
+            src = how[1]
+        if not n:
+            print(f"no YouTube cookies in {src} -- sign in to YouTube there "
+                  f"first (or pick the browser with --from)")
+            return 1
+        print(f"{n} YouTube cookies from {src}, signed in: "
+              f"{'yes' if signed else 'NO -- sign in to YouTube there first'}"
+              f" (other sites' cookies are left out)")
+        if args.output:
+            share.save(text, args.output)
+            print(f"saved to {args.output}\n  keep it private: it is your "
+                  f"YouTube login")
+        if args.send:
+            rc, _who = share.send(text, args.port, args.wait or 300)
+            return rc
+        if not args.output:
+            print("  --send: offer it to your phone (then 'musictool cookies "
+                  "--receive' there)\n  -o FILE: save it as a cookies.txt")
+        return 0
+    except share.ShareError as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
 def cmd_doctor(_args):
     ok = True
     print("platform  :", "Windows" if is_windows() else
@@ -2060,6 +2169,7 @@ def main(argv=None):
                "extract": cmd_extract, "embed": cmd_embed,
                "providers": cmd_providers, "config": cmd_config,
                "relang": cmd_relang, "live": cmd_live, "chat": cmd_chat,
+               "cookies": cmd_cookies,
                "doctor": cmd_doctor, "gui": cmd_gui}.get(args.cmd)
     if handler is None:
         print(f"unknown command: {args.cmd}")

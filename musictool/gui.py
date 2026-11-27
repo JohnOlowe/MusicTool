@@ -2128,6 +2128,39 @@ def run():
         "made it at least twice")).pack(side="left", padx=10)
     refresh_learned()
 
+    # ---- your YouTube login on your phone, straight from the browser
+    phf = ttk.LabelFrame(tframe, text="  Your login on your phone  ",
+                         style="Card.TLabelframe")
+    phf.pack(fill="x", padx=8, pady=4)
+    ttk.Label(phf, foreground="#555", justify="left", text=(
+        "Send: reads your YouTube login from the browser set on the Download "
+        "tab (Cookies from browser, e.g. firefox) and offers it once on this "
+        "Wi-Fi for 5 minutes. Only YouTube's cookies -- no other site's -- "
+        "and nothing is saved here. Then on the phone, in Termux: musictool "
+        "cookies --receive  (it finds this computer by itself). Windows asks "
+        "the first time: allow Python on Private networks.")).pack(
+        anchor="w", fill="x", padx=8, pady=(4, 2))
+
+    def send_login():
+        g = panes["get"].values()
+        b = (g.get("cookies_from_browser") or "").strip()
+        argv = ["cookies", "--send"]
+        if b and b.lower() not in ("off", "none", "no"):
+            argv += ["--from", b]
+        elif g.get("cookies"):
+            argv += ["--cookies", g["cookies"]]
+        do_argv(argv)
+
+    _phb = ttk.Frame(phf)
+    _phb.pack(fill="x", padx=6, pady=(0, 6))
+    ttk.Button(_phb, text="Send my YouTube login to my phone",
+               command=send_login).pack(side="left")
+    ttk.Button(_phb, text="Get it from my computer",
+               command=lambda: do_argv(["cookies", "--receive"])).pack(
+        side="left", padx=6)
+    ttk.Label(_phb, foreground="#888", text=(
+        "(this one is for the app running on the phone)")).pack(side="left")
+
     # ---- the window: what the display allows, and a way back to the start
     winf = ttk.LabelFrame(tframe, text="  Window  ", style="Card.TLabelframe")
     winf.pack(fill="x", padx=8, pady=4)

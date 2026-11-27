@@ -32,9 +32,10 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── providers.py      ytmusic, lrclib, netease
 │   ├── tags.py           mutagen tag + .lrc handling
 │   ├── cancel.py         Stop / Force stop
+│   ├── share.py          your YouTube login from the browser to your phone
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1304 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1323 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -367,6 +368,7 @@ videos. In the GUI it is the **jobs** field under More Options.
 | `embed PATH...` | put a `.lrc` you made/downloaded back into the matching song |
 | `providers` | list lyrics sources; `--test` probes them live |
 | `config [key] [value]` | show or set saved defaults |
+| `cookies` | your YouTube login from the browser to your phone: `--send` on the computer, `--receive` on the phone; `-o FILE` saves it |
 | `doctor` | verify yt-dlp, ffmpeg, tkinter, mutagen |
 | `gui` | graphical interface |
 
@@ -737,6 +739,47 @@ while you were signed in to YouTube. It is optional, and the browser picker abov
 is easier -- use a file when the browser you use is one yt-dlp cannot read, or
 when you want a fixed login that survives browser updates. A file always wins when
 both are set.
+
+**3. Your phone: send it the computer's login.**
+
+The phone has no browser that yt-dlp can read, so give it the computer's
+login, straight from the browser. Nothing is exported by hand, and there's
+no file to copy:
+
+```bash
+python musictool.py cookies --send          # on the computer (or: Settings tab >
+                                            #   "Send my YouTube login to my phone")
+musictool cookies --receive                 # on the phone, in Termux
+```
+
+- **Which browser:** `--send` reads the browser in your *Cookies from browser*
+  setting (in the app: the Download tab's). `--from firefox` picks one; on
+  Windows that's the dependable choice, see the caveat above.
+- **YouTube only:** the browser hands over every site's cookies; only the
+  `youtube.com` ones are kept. Not Google's, not your bank's, not a look-alike
+  domain's. They aren't saved on the computer.
+- **Finding the computer:** `--receive` finds the computer on the Wi-Fi by
+  itself. The phone asks the network (UDP, port 8765) and the computer answers
+  with an address that carries a random one-time code. The computer hands the
+  file out **once**, then stops; it also stops after 5 minutes (`--wait`), on
+  Stop, or on Ctrl+C. Everything stays on your own network: no internet data.
+- **Where the phone saves it:** in your `cookies` setting (or
+  `MUSICTOOL_COOKIES`). Without one, it saves to
+  `/storage/emulated/0/Download/cookies.txt` and makes that the setting, so
+  downloads on the phone use it from then on. `-o FILE` saves it elsewhere.
+- **If the phone can't find it:** some routers stop devices finding each
+  other. Then type the address the computer shows:
+  `musictool cookies --receive http://192.168.1.5:8765/CODE`. Without
+  musictool on the other device, the computer also prints a `curl` command,
+  and the same address works in a phone browser.
+- **Windows firewall:** the first time, Windows asks whether Python may use
+  the network. Allow **Private networks**.
+- **When it stops working:** a browser that stays open keeps refreshing its
+  YouTube login (the "rotated" warning). If the phone starts getting sign-in
+  errors, send it again; it takes seconds.
+
+`musictool cookies` alone says how many YouTube cookies the browser has and
+whether it is signed in. `-o FILE` saves them as a YouTube-only `cookies.txt`.
 
 ### The sign-in cascade, decoded
 
@@ -1769,7 +1812,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1304 assertions, 0 failures**, with or without
+**Verified by running the code — 1323 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

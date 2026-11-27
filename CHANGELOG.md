@@ -8,6 +8,42 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — `musictool cookies`: your browser login to your phone
+*2026-11-25 · 1323 assertions*
+
+Asked for: a fast way to get the login the laptop reads from Firefox onto the
+phone, to download there too. There was no file to copy: it is read from
+Firefox on each run.
+
+- **`musictool cookies --send`** (computer) reads the login from the browser
+  (`--from`, else the *Cookies from browser* setting; `--cookies FILE` works
+  too) and offers it once on the Wi-Fi.
+  **`musictool cookies --receive`** (phone) finds the computer by itself
+  (a UDP question on port 8765; the answer carries the address and a random
+  one-time code), fetches it and saves it. The default is the `cookies`
+  setting; without one, Download/cookies.txt on Android, which then becomes
+  the setting.
+- **Only youtube.com cookies** ever leave the browser (`share.youtube_only`).
+  Nothing is saved on the computer. yt-dlp's full read goes to a private temp
+  folder and is deleted right away. No internet is used.
+- **Stopping:** once fetched, after `--wait` (300 s), on Stop, or on Ctrl+C.
+- **When the router stops devices finding each other:** `--receive` takes the
+  address the computer printed. That address also works with curl or in a
+  phone browser.
+- **Errors:** what comes back is checked: a captive-portal page never
+  replaces a good `cookies.txt`. A browser it can't read gives an error with
+  the Chrome/Edge-on-Windows hint, not a traceback. `cookies` alone reports
+  the count and whether you're signed in; `-o FILE` saves a YouTube-only
+  `cookies.txt`.
+- **GUI:** Settings > *Your login on your phone*: "Send my YouTube login to
+  my phone" (uses the Download tab's browser) and "Get it from my computer".
+- **Tests:** section 51 (19 checks) over real sockets: one-time code, served
+  once, timeout, Stop, junk refused. Firefox is read through the real yt-dlp
+  from a test profile holding bank and Google cookies. Checked by hand: send
+  and receive between two processes with discovery by broadcast.
+
+---
+
 ## `6923d5e` — Windows: no empty console windows when the app runs without one
 *2026-11-25 · 1304 assertions*
 

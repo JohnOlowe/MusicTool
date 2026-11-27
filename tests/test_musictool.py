@@ -7747,6 +7747,291 @@ check("...and nothing in musictool starts a program around it",
       not _bad50, str(_bad50))
 
 
+# ============ 51. musictool cookies: the YouTube login from the browser to
+# ============     the phone (--send / --receive), YouTube cookies only
+print("\n--- 51. cookies: browser login to the phone ---")
+import socket as _so51  # noqa: E402
+import http.server as _hs51  # noqa: E402
+import tempfile as _tf51  # noqa: E402
+from musictool import share as SH51  # noqa: E402
+from musictool import cli as CLI51  # noqa: E402
+
+_D51 = _tf51.mkdtemp(prefix="mt51-")
+_txt51 = "\n".join([
+    "# Netscape HTTP Cookie File", "",
+    ".youtube.com\tTRUE\t/\tTRUE\t1900000000\tSID\ts",
+    "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1900000000\tLOGIN_INFO\tl",
+    "music.youtube.com\tFALSE\t/\tTRUE\t1900000000\tPREF\tp",
+    ".google.com\tTRUE\t/\tTRUE\t1900000000\tSID\tg",
+    "www.mybank.com\tFALSE\t/\tTRUE\t1900000000\tsession\tBANK",
+    ".notyoutube.com\tTRUE\t/\tTRUE\t1900000000\tx\tEVIL",
+    "youtube.com.evil.net\tFALSE\t/\tTRUE\t1900000000\ty\tEVIL2", ""])
+_o51, _n51, _s51 = SH51.youtube_only(_txt51)
+check("only youtube.com cookies are kept -- not google, the bank or "
+      "look-alike domains; HttpOnly lines count",
+      _n51 == 3 and _s51 and "BANK" not in _o51 and "EVIL" not in _o51
+      and "\tg\n" not in _o51 and _o51.startswith(SH51.HEADER)
+      and "#HttpOnly_.youtube.com" in _o51, _o51)
+check("...visiting is not being signed in",
+      SH51.youtube_only(".youtube.com\tTRUE\t/\tTRUE\t1900000000\tPREF\tp")
+      [1:] == (1, False))
+
+
+def _free51():
+    s = _so51.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def _send51(text, port, wait=20):
+    out, said = {}, []
+
+    def go():
+        out["r"] = SH51.send(text, port, wait, log=said.append,
+                             host="127.0.0.1")
+    th = threading.Thread(target=go, daemon=True)
+    th.start()
+    for _ in range(100):
+        if any("offering" in x for x in said):
+            break
+        _time.sleep(0.05)
+    return th, out, said
+
+
+from musictool import cancel as _cx51  # noqa: E402
+_cx51.reset()
+_p51 = _free51()
+_th51, _out51, _said51 = _send51(_o51, _p51)
+_url51 = next((x.split()[-1] for x in _said51 if "curl -o" in x), "")
+_tok51 = _url51.rsplit("/", 1)[-1]
+_wrong51 = _url51[:-len(_tok51)] + "nottheco" if _tok51 else ""
+try:
+    _UR.urlopen(_wrong51.replace(_url51.split("/")[2],
+                                 f"127.0.0.1:{_p51}"), timeout=5)
+    _w51 = 200
+except Exception as e:  # noqa: BLE001
+    _w51 = getattr(e, "code", str(e))
+_f51 = os.path.join(_D51, "phone", "cookies.txt")
+_got51 = SH51.receive(_f51, f"127.0.0.1:{_p51}", _p51, 10, log=lambda m: None)
+_th51.join(5)
+check("--send offers it; --receive finds the computer (UDP question), "
+      "fetches it once and saves it",
+      _got51[1:] == (3, True) and open(_f51).read() == _o51
+      and _out51.get("r", (None,))[0] == 0
+      and any("sent to 127.0.0.1" in x for x in _said51),
+      f"{_got51} {_out51} {_said51}")
+check("...the address has a one-time code: a wrong one gets nothing",
+      _w51 == 404 and len(_tok51) >= 8, f"{_w51} {_url51}")
+check("...and it tells the phone user what to type, curl and browser too",
+      any("musictool cookies --receive" in x for x in _said51)
+      and _url51.startswith("http://"), str(_said51))
+try:
+    _UR.urlopen(f"http://127.0.0.1:{_p51}/{_tok51}", timeout=2)
+    _again51 = "served again"
+except Exception as e:  # noqa: BLE001
+    _again51 = type(e).__name__
+check("...handed out once, then it stops offering it", _again51 !=
+      "served again", _again51)
+
+_p51 = _free51()
+_th51, _out51, _said51 = _send51(_o51, _p51, wait=20)
+_url51 = next((x.split()[-1] for x in _said51 if "curl -o" in x), "")
+_f51b = os.path.join(_D51, "b.txt")
+_got51 = SH51.receive(_f51b, _url51.replace(_url51.split("/")[2],
+                                            f"127.0.0.1:{_p51}"),
+                      log=lambda m: None)
+_th51.join(5)
+check("--receive with the full address it showed (when the router blocks "
+      "finding each other)", _got51[1] == 3 and os.path.exists(_f51b))
+
+_p51 = _free51()
+_t0 = _time.monotonic()
+_th51, _out51, _said51 = _send51(_o51, _p51, wait=1)
+_th51.join(5)
+check("nobody fetches it: it stops after --wait and says what to check",
+      _out51.get("r", (None,))[0] == 1 and _time.monotonic() - _t0 < 4
+      and any("firewall" in x for x in _said51), str(_said51))
+_p51 = _free51()
+_th51, _out51, _said51 = _send51(_o51, _p51, wait=60)
+_cx51.request()
+_th51.join(5)
+_cx51.reset()
+check("Stop ends the offer at once", not _th51.is_alive()
+      and _out51.get("r", (None,))[0] == 1)
+try:
+    SH51.receive(os.path.join(_D51, "c.txt"), f"127.0.0.1:{_free51()}",
+                 wait=1, log=lambda m: None)
+    _e51 = ""
+except SH51.ShareError as e:
+    _e51 = str(e)
+check("--receive with no computer offering: a clear message, nothing saved",
+      "no computer answered" in _e51 and "--send" in _e51
+      and not os.path.exists(os.path.join(_D51, "c.txt")), _e51)
+
+
+class _Junk51(_hs51.BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"<html>captive portal</html>")
+
+    def log_message(self, *a):
+        pass
+
+
+_js51 = _hs51.HTTPServer(("127.0.0.1", 0), _Junk51)
+threading.Thread(target=_js51.handle_request, daemon=True).start()
+open(os.path.join(_D51, "keep.txt"), "w").write("OLD")
+try:
+    SH51.receive(os.path.join(_D51, "keep.txt"),
+                 f"http://127.0.0.1:{_js51.server_address[1]}/x",
+                 log=lambda m: None)
+    _e51 = ""
+except SH51.ShareError as e:
+    _e51 = str(e)
+_js51.server_close()
+check("...something that is not cookies never replaces the file you have",
+      "no YouTube cookies" in _e51
+      and open(os.path.join(_D51, "keep.txt")).read() == "OLD", _e51)
+
+# reading a real browser profile, through the real yt-dlp
+try:
+    import yt_dlp as _yd51  # noqa: F401,E402
+    _have51 = True
+except ImportError:
+    _have51 = False
+if _have51:
+    import sqlite3 as _sq51  # noqa: E402
+    _prof51 = os.path.join(_D51, "ffprofile")
+    os.makedirs(_prof51)
+    _db51 = _sq51.connect(os.path.join(_prof51, "cookies.sqlite"))
+    _db51.execute(
+        "CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes "
+        "TEXT NOT NULL DEFAULT '', name TEXT, value TEXT, host TEXT, path "
+        "TEXT, expiry INTEGER, lastAccessed INTEGER, creationTime INTEGER, "
+        "isSecure INTEGER, isHttpOnly INTEGER, inBrowserElement INTEGER "
+        "DEFAULT 0, sameSite INTEGER DEFAULT 0, rawSameSite INTEGER DEFAULT "
+        "0, schemeMap INTEGER DEFAULT 0)")
+    for _n, _v, _h in (("SID", "s", ".youtube.com"),
+                       ("LOGIN_INFO", "l", ".youtube.com"),
+                       ("session", "BANK", "www.mybank.com"),
+                       ("SID", "GOOG", ".google.com")):
+        _db51.execute("INSERT INTO moz_cookies (name, value, host, path, "
+                      "expiry, lastAccessed, creationTime, isSecure, "
+                      "isHttpOnly) VALUES (?,?,?,?,?,0,0,1,1)",
+                      (_n, _v, _h, "/", int(_time.time()) + 9 ** 7))
+    _db51.commit()
+    _db51.close()
+    _tmpb51 = set(os.listdir(_tf51.gettempdir()))
+    _r51 = SH51.read_browser("firefox:" + _prof51,
+                             ytdlp=[sys.executable, "-m", "yt_dlp"])
+    _left51 = [x for x in set(os.listdir(_tf51.gettempdir())) - _tmpb51
+               if x.startswith("mtck-")]
+    check("reads Firefox's login through yt-dlp (no internet): the YouTube "
+          "cookies only, and every other site's are deleted at once",
+          _r51[1:] == (2, True) and "BANK" not in _r51[0]
+          and "GOOG" not in _r51[0] and not _left51, f"{_r51} {_left51}")
+    _buf51 = io.StringIO()
+    _oyc51 = util.ytdlp_cmd      # the suite puts a stand-in yt-dlp on PATH
+    util.ytdlp_cmd = lambda: [sys.executable, "-m", "yt_dlp"]
+    try:
+        with contextlib.redirect_stdout(_buf51):
+            _rc51 = CLI51.main(["cookies", "--from", "firefox:" + _prof51,
+                                "-o", os.path.join(_D51, "out.txt")])
+    finally:
+        util.ytdlp_cmd = _oyc51
+    check("musictool cookies --from firefox -o FILE: says how many, signed "
+          "in, and saves YouTube's only",
+          _rc51 == 0 and "2 YouTube cookies" in _buf51.getvalue()
+          and "signed in: yes" in _buf51.getvalue()
+          and "BANK" not in open(os.path.join(_D51, "out.txt")).read(),
+          _buf51.getvalue())
+    _buf51 = io.StringIO()
+    with contextlib.redirect_stdout(_buf51):
+        _rc51 = CLI51.main(["cookies", "--from",
+                            "firefox:" + os.path.join(_D51, "nope")])
+    check("...a browser it can't read: an error, not a traceback",
+          _rc51 == 1 and "ERROR: could not read" in _buf51.getvalue(),
+          _buf51.getvalue())
+
+
+def _cli51(*a):
+    b = io.StringIO()
+    with contextlib.redirect_stdout(b):
+        rc = CLI51.main(list(a))
+    return rc, b.getvalue()
+
+
+check("--send with --receive, a bad port or --wait 0: refused (rc 2)",
+      _cli51("cookies", "--send", "--receive")[0] == 2
+      and _cli51("cookies", "--send", "--port", "0")[0] == 2
+      and _cli51("cookies", "--send", "--wait", "0")[0] == 2)
+# --receive on the phone with no -o: saves where downloads look, and makes it
+# the cookies setting when there was none
+_orec51 = SH51.receive
+from musictool import config as _cf51  # noqa: E402
+_rem51, _oremember51, _oload51 = [], _cf51.remember, _cf51.load
+try:
+    SH51.receive = lambda out, *a, **k: (out, 3, True)
+    _cf51.load = lambda: dict(_cf51.DEFAULTS)
+    _cf51.remember = lambda **kv: _rem51.append(kv)
+    _rc51, _so51out = _cli51("cookies", "--receive")
+    _want51 = CLI51._receive_path(dict(_cf51.DEFAULTS))[0]
+    check("--receive with no cookies setting: saved, then made the setting "
+          "so downloads on the phone use it",
+          _rc51 == 0 and _rem51 == [{"cookies": _want51}]
+          and "downloads here use it" in _so51out, f"{_rem51} {_so51out}")
+    _rem51.clear()
+    _cf51.load = lambda: dict(_cf51.DEFAULTS, cookies="/sd/ck.txt")
+    _rc51, _so51out = _cli51("cookies", "--receive")
+    check("...with one (or MUSICTOOL_COOKIES): written there, setting "
+          "untouched", _rc51 == 0 and not _rem51
+          and "to /sd/ck.txt" in _so51out, _so51out)
+    check("...on Android the default is the Download folder",
+          CLI51._receive_path({"cookies": ""})[0].startswith(
+              "/storage/emulated/0/Download/")
+          if os.path.isdir("/storage/emulated/0/Download")
+          or util.is_termux() else
+          CLI51._receive_path({"cookies": ""})[0].endswith("cookies.txt"))
+finally:
+    SH51.receive, _cf51.remember, _cf51.load = (_orec51, _oremember51,
+                                                _oload51)
+
+# the GUI: Settings > Your login on your phone
+tkstub.reset()
+G.run()
+_r51g = tkstub.ROOTS[-1]
+_st51 = _real_tab_for([w for w in _r51g.walk()
+                       if isinstance(w, tkstub.Notebook)][0], "Settings")
+_gp51 = next(w for w in _r51g.walk()
+             if isinstance(w, G.OptionsPane) and w.sub == "get")
+_A51, _cli51g = [], G.cli_main
+G.cli_main = lambda argv: (_A51.append(list(argv)), 0)[1]
+try:
+    _gp51.vars["cookies_from_browser"].set("firefox")
+    _qbtn(_st51, "Send my YouTube login to my phone").invoke()
+    for _ in range(3):
+        _todo, _r51g.pending[:] = list(_r51g.pending), []
+        for _f in _todo:
+            _f()
+    _time.sleep(0.3)
+    _qbtn(_st51, "Get it from my computer").invoke()
+    _time.sleep(0.3)
+    for _ in range(3):
+        _todo, _r51g.pending[:] = list(_r51g.pending), []
+        for _f in _todo:
+            _f()
+    check("GUI: Settings has 'Send my YouTube login to my phone' (the "
+          "Download tab's browser) and 'Get it from my computer'",
+          ["cookies", "--send", "--from", "firefox"] in _A51
+          and ["cookies", "--receive"] in _A51, str(_A51))
+finally:
+    G.cli_main = _cli51g
+shutil.rmtree(_D51, ignore_errors=True)
+
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

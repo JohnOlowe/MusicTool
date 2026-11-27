@@ -34,7 +34,7 @@ multiple lyrics sources, and both a CLI and a GUI.
 │   ├── cancel.py         Stop / Force stop
 │   ├── config.py         saved defaults
 │   └── util.py           normalisation, LRC, HTTP
-├── tests/                1298 assertions, offline, headless (see docs/TESTING.md)
+├── tests/                1304 assertions, offline, headless (see docs/TESTING.md)
 ├── docs/                 architecture, decisions, testing, ffmpeg recipes
 └── handoff/              not part of musictool: ffmpeg / Quick Sync / Android notes
 ```
@@ -1451,6 +1451,20 @@ override the tags in your files.
 python musictool.py gui
 ```
 
+**Without a console window on Windows**, start it with `pythonw`, e.g. from a
+`.vbs` file you double-click:
+
+```vbs
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "pythonw ""C:\Users\YOU\MusicTool\musictool.py"" gui", 0, False
+```
+
+The programs the app starts (yt-dlp, ffmpeg, deno) are then started hidden
+too. Before this fix each one opened an empty black window of its own: under
+`pythonw` the app has no console, so Windows gave each of them a new one.
+Started from a terminal, they share the terminal as before, and Ctrl+C
+reaches them.
+
 Four tabs — **Download**, **Library**, **Report**, **Settings** — over the
 same code paths as the CLI.
 
@@ -1755,7 +1769,7 @@ argv each button sends to the CLI. Pixels are out of scope; behaviour is not.
 
 ## Verified / not verified
 
-**Verified by running the code — 1298 assertions, 0 failures**, with or without
+**Verified by running the code — 1304 assertions, 0 failures**, with or without
 tkinter installed (`tests/test_musictool.py`): text normalisation against real messy
 filenames, LRC parse/shift/classify, tag read/write/backup on real `.m4a` files,
 all three providers against stub APIs that replay the response shapes seen live

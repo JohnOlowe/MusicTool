@@ -8,6 +8,31 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
+## `PENDING` — Windows: no empty console windows when the app runs without one
+*2026-11-25 · 1304 assertions*
+
+Reported: started with `pythonw` from a `.vbs` file, the app kept opening an
+empty black window with the Python icon while it worked.
+
+- **Why.** Without a console of its own (`pythonw`), every console program
+  the app starts gets a new, visible console from Windows: yt-dlp (a pip
+  launcher, hence the Python icon), ffmpeg, the `--version` checks. Their
+  output comes to the app, so the window stayed empty. `cancel.py` already
+  defined `CREATE_NO_WINDOW`, but used it only for `taskkill`.
+- **Fix.** `cancel.quiet(kw)` adds `CREATE_NO_WINDOW` when Windows says there
+  is no console (`GetConsoleWindow()` is 0), unless a new console or none was
+  asked for on purpose. `cancel.popen`, and so `cancel.run`, use it for every
+  program, and so do the three direct `subprocess.run` calls (`doctor`, the
+  ffmpeg and yt-dlp version checks). What yt-dlp starts itself (ffmpeg, deno)
+  shares its hidden console. From a terminal nothing changes: the programs
+  share it, and Ctrl+C reaches them.
+- Tests: section 50 (6 checks), including a scan of the source that fails if
+  a program is started without going through `quiet`. Not run on Windows:
+  `GetConsoleWindow` is faked. README (GUI: the `.vbs` launcher), DECISIONS
+  (a trap), HANDOFF, TESTING, ARCHITECTURE.
+
+---
+
 ## `780d019` — chat: `--font-size`, and a size players can change
 *2026-11-25 · 1298 assertions*
 

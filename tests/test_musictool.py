@@ -7673,6 +7673,80 @@ shutil.rmtree(_d48, ignore_errors=True)
 shutil.rmtree(TMP, ignore_errors=True)
 
 
+# ============ 50. no console windows: the app started with pythonw (the
+# ============     .vbs launcher) opened an empty black window per program
+print("\n--- 50. Windows: programs started hidden when there is no console ---")
+import types as _ty50  # noqa: E402
+from musictool import cancel as K50  # noqa: E402
+
+_ow50, _onc50, _opo50 = K50._WIN, K50._no_console, K50.subprocess.Popen
+try:
+    K50._no_console = lambda: True
+    check("no console of our own: a program is started with CREATE_NO_WINDOW, "
+          "other flags kept",
+          K50.quiet({}) == {"creationflags": 0x08000000}
+          and K50.quiet({"creationflags": 0x200})["creationflags"]
+          == 0x08000200)
+    check("...but not when a new or no console was asked for on purpose",
+          K50.quiet({"creationflags": 0x10}) == {"creationflags": 0x10}
+          and K50.quiet({"creationflags": 0x8}) == {"creationflags": 0x8})
+    _kw50 = []
+
+    class _P50:
+        pid = 1
+
+        def __init__(self, args, **kw):
+            _kw50.append(kw)
+
+        def poll(self):
+            return 0
+
+    K50.subprocess.Popen = _P50
+    K50.done(K50.popen(["yt-dlp", "--version"], stdout=-1))
+    check("...every program musictool starts goes through that (popen)",
+          _kw50 and _kw50[-1].get("creationflags") == 0x08000000
+          and _kw50[-1].get("stdout") == -1, str(_kw50))
+    K50.subprocess.Popen = _opo50
+    K50._no_console = lambda: False
+    check("with a console (the CLI in a terminal): left alone, so Ctrl+C "
+          "still reaches the program", K50.quiet({}) == {})
+    K50._no_console = _onc50
+    import ctypes as _ct50  # noqa: E402
+    _had50 = hasattr(_ct50, "windll")
+    _cw50 = [0]
+    _ct50.windll = _ty50.SimpleNamespace(kernel32=_ty50.SimpleNamespace(
+        GetConsoleWindow=lambda: _cw50[0]))
+    K50._WIN = True
+    _a50 = K50._no_console()
+    _cw50[0] = 4242
+    _b50 = K50._no_console()
+    K50._WIN = False
+    _c50 = K50._no_console()
+    if not _had50:
+        del _ct50.windll
+    check("'no console' is Windows saying so (GetConsoleWindow is 0); never "
+          "elsewhere", _a50 is True and _b50 is False and _c50 is False)
+finally:
+    K50._WIN, K50._no_console, K50.subprocess.Popen = _ow50, _onc50, _opo50
+
+_bad50 = []
+for _fn50 in sorted(os.listdir(os.path.join(ROOT, "musictool"))):
+    if not _fn50.endswith(".py") or _fn50 == "cancel.py":
+        continue
+    _src50 = open(os.path.join(ROOT, "musictool", _fn50),
+                  encoding="utf-8").read().splitlines()
+    for _i50, _ln50 in enumerate(_src50):
+        if re.search(r"subprocess\.(Popen|run|call|check_output|check_call)\(",
+                     _ln50):
+            near = " ".join(_src50[_i50:_i50 + 3])
+            # open_path's xdg-open/termux-open: never on Windows
+            if "quiet(" not in near and "xdg-open" not in " ".join(
+                    _src50[max(0, _i50 - 6):_i50]):
+                _bad50.append(f"{_fn50}:{_i50 + 1}")
+check("...and nothing in musictool starts a program around it",
+      not _bad50, str(_bad50))
+
+
 srv.shutdown()
 print("\n" + (f"ALL {len(fails) == 0 and '' or ''}"
               + ("CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}")))

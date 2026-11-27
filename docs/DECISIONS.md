@@ -362,6 +362,14 @@ figure.
 
 These all caused a real bug at some point.
 
+- **A console program started from a process with no console gets a new,
+  visible one.** The app started with `pythonw` (a `.vbs` launcher) opened an
+  empty black window for every yt-dlp and ffmpeg run. The output was piped,
+  so the window stayed empty. `CREATE_NO_WINDOW` was defined in `cancel.py`
+  but used only for `taskkill`. Now every program goes through
+  `cancel.quiet`, which adds the flag only when `GetConsoleWindow()` is 0;
+  with a terminal, Ctrl+C has to keep reaching the program.
+
 - **A size written into every ASS line is a size nobody can change.** The
   chat's gap between messages was `\N{\fs18}\h\N{\fs45}`. That second
   `\fs45` fixed the size of every message after a gap, so a player that can

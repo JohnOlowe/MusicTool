@@ -91,9 +91,36 @@ def sleep(secs):
     return not _flag
 
 
+def _no_console():
+    """Windows, and this process has no console of its own: started with
+    pythonw (the .vbs launcher, a shortcut). Every console program started
+    from here -- yt-dlp, ffmpeg, deno -- would then get a new console window
+    of its own: empty (its output comes to us), black, on top."""
+    if not _WIN:
+        return False
+    try:
+        import ctypes
+        return not ctypes.windll.kernel32.GetConsoleWindow()
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+def quiet(kw):
+    """Popen keywords that start a console program hidden when we have no
+    console (see _no_console). With a console (the CLI in a terminal) they
+    are left alone: the program shares it, and Ctrl+C reaches it as before.
+    The program's own children (yt-dlp's ffmpeg) share its hidden console,
+    so they stay hidden too. -> kw"""
+    flags = kw.get("creationflags", 0) or 0
+    if _no_console() and not flags & 0x18:   # NEW_CONSOLE / DETACHED asked
+        kw["creationflags"] = flags | _NO_WINDOW
+    return kw
+
+
 def popen(args, **kw):
-    """subprocess.Popen, remembered so Force stop can end it."""
-    p = subprocess.Popen(args, **kw)
+    """subprocess.Popen, remembered so Force stop can end it (and started
+    without a window of its own: quiet)."""
+    p = subprocess.Popen(args, **quiet(kw))
     with _lock:
         _procs.add(p)
         late = _forced

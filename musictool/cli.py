@@ -1972,7 +1972,8 @@ def cmd_doctor(_args):
     print("python    :", sys.version.split()[0])
     cmd = list(ytdlp_cmd())
     try:
-        r = subprocess.run(cmd + ["--version"], capture_output=True, text=True,
+        r = subprocess.run(cmd + ["--version"], **cancel.quiet({}),
+                           capture_output=True, text=True,
                            timeout=30)
         ver = (r.stdout or "").strip()
         if r.returncode == 0 and ver:

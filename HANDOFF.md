@@ -100,7 +100,7 @@ layout   flat — the package sits at the repository root
 tests    python3 tests/test_musictool.py
 ```
 
-Current as of the latest commit on `main`: **1298 assertions, 0 failures**, with
+Current as of the latest commit on `main`: **1304 assertions, 0 failures**, with
 or without tkinter installed (see `docs/TESTING.md`).
 
 Everything outside `handoff/` is MusicTool. `handoff/` (added in `076d1ce`) is
@@ -117,11 +117,11 @@ MusicTool paths.
 ├── pyproject.toml       installable; provides the `musictool` console script
 ├── musictool.py         15   shim: `python musictool.py <cmd>`, no install needed
 ├── musictool/
-│   ├── cli.py         2066   argparse + every cmd_* handler
+│   ├── cli.py         2067   argparse + every cmd_* handler
 │   ├── gui.py         3485   tkinter GUI: 4 tabs, Smart + 9 modes, foldable sections
 │   ├── uicmd.py       1280   parser -> widgets, build_argv, modes, link kinds, learning, window fit
 │   ├── formats.py      887   quality table, filters, language picking, audio tracks, --exact plan
-│   ├── download.py     978   yt-dlp invocation, retries, error text, videoId index, swap_audio
+│   ├── download.py     980   yt-dlp invocation, retries, error text, videoId index, swap_audio
 │   ├── live.py         990   live streams: plan, scan, join, watch copy, resume
 │   ├── parts.py        622   get --range: keyframe, salvage a .part, coverage, disk/FAT32, cut subtitles
 │   ├── rangeproxy.py   714   get --range, fast: a local proxy, 10 MB pieces for ffmpeg, sidx/Cues index
@@ -132,9 +132,9 @@ MusicTool paths.
 │   ├── progress.py     431   yt-dlp + ffmpeg line parsing (per stream) + batch State
 │   ├── tags.py         143   mutagen tag + .lrc handling
 │   ├── config.py       111   DEFAULTS, load(), remember(), PATH
-│   └── cancel.py       303   Stop / Force stop, process tree kill
+│   └── cancel.py       330   Stop / Force stop, no console windows, process tree kill
 ├── tests/
-│   ├── test_musictool.py 7679   49 sections (+8b), 1298 assertions
+│   ├── test_musictool.py 7753   50 sections (+8b), 1304 assertions
 │   └── tkstub.py          755   headless tkinter stub
 ├── docs/
 │   ├── ARCHITECTURE.md    module responsibilities and data flow
@@ -360,7 +360,7 @@ Read `speed=X.XXx`, divide 20 by it.
 
 ## 8. Where to pick up
 
-Nothing is half-finished — `main` is green at 1298 assertions. The range
+Nothing is half-finished — `main` is green at 1304 assertions. The range
 proxy was tested on real YouTube with the maintainer's cookies on 2026-11-24
 (README, "Verified"); four bugs found there are fixed and have tests
 (section 49). `--no-fast-range` is still the way back. YouTube may give a

@@ -36,11 +36,11 @@ button cannot drift away from what the same options do on the command line.
 
 | module | lines | responsibility |
 |---|---|---|
-| `cli.py` | 2066 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` / `_part_rounds` for `get --range` |
+| `cli.py` | 2067 | argparse for all 15 subcommands, and every `cmd_*` handler; `_plan_part` / `_download_part` / `_part_rounds` for `get --range` |
 | `gui.py` | 3485 | tkinter GUI: 4 tabs, Smart + modes, foldable sections, the log pane, the progress panel, the queue, Stop / Force stop |
 | `uicmd.py` | 1280 | parser → widget specs, `build_argv`, modes, link recognition, learning, window fit, pane geometry |
 | `formats.py` | 887 | quality rows, collapsing near-duplicates, filters, language picking, the audio-track list, `exact_plan` / `merge_container` / `matching_audio` for `--exact` |
-| `download.py` | 978 | yt-dlp invocation (`resolve_ids`: which formats yt-dlp picks, asked offline; `needs_aac_fix`; `runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size` and the range proxy is off; `info_json` → `--load-info-json` instead of the link), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
+| `download.py` | 980 | yt-dlp invocation (`resolve_ids`: which formats yt-dlp picks, asked offline; `needs_aac_fix`; `runtime_args` for every call; `ffmpeg_reconnect_args` / `http_opts` for a part: reconnect, and 10 MB requests when ffmpeg has `-request_size` and the range proxy is off; `info_json` → `--load-info-json` instead of the link), retry pacing, `_error_text` / `retryable` (is a failure a network one), the videoId index, stream probing, `swap_audio` |
 | `live.py` | 990 | live streams: `plan` (what `get` changes for one), `scan`/`join`/`watch_copy` for the leftover pieces, `resume`, `after_failure` |
 | `chat.py` | 1453 | chat replay: `load` (yt-dlp's JSON lines), `windows` (which messages are on screen when), `colour_of`, `to_ass`/`to_srt`/`to_vtt`/`to_txt` (messages and settings kept inside), `parse_own`/`read_own` (a file it made, back to messages), `extract_track`, `fetch`, `find_videos`/`part_from_name`, `first_times` (where the sound starts), `embed`, `run` |
 | `parts.py` | 622 | `get --range` pieces: `keyframe_before` (where a part really starts; sound alone too, never HLS), `chosen_formats`/`is_hls`/`HLS_SLACK`, `cut_subtitles` (a whole video's VTT/SRT/ASS cut to a part), `trim`/`salvage` (a fragmented `.part` cut to its last whole piece and renamed to what it holds), `coverage`/`continue_point` (how far the files already go; never past the end in a name), `played_seconds` (the shorter of picture and sound; a stream with nothing in it is 0), `drop_temps`, `estimate_bytes`/`free_bytes`/`fs_type`/`is_fat` (the Android card behind FUSE) |
@@ -51,7 +51,7 @@ button cannot drift away from what the same options do on the command line.
 | `progress.py` | 431 | parses yt-dlp's progress lines (per stream, retries, skips), and ffmpeg's for a part (position, its noise), into a `State` |
 | `tags.py` | 143 | mutagen tag read/write with backup, `.lrc` sidecar handling |
 | `config.py` | 111 | `DEFAULTS`, `load()`, `remember(**kv)`, `PATH` |
-| `cancel.py` | 303 | the stop flag shared by every worker; `popen`/`run` (every long-running program goes through them so Force stop can find it), `force`, `kill_tree` (with children: `taskkill /T` on Windows, `/proc` or `ps` elsewhere), `stop_process`, a `sleep` that Stop cuts short |
+| `cancel.py` | 330 | `quiet` (programs started hidden on Windows when there is no console: pythonw); the stop flag shared by every worker; `popen`/`run` (every long-running program goes through them so Force stop can find it), `force`, `kill_tree` (with children: `taskkill /T` on Windows, `/proc` or `ps` elsewhere), `stop_process`, a `sleep` that Stop cuts short |
 
 Functions worth knowing by name because they are load-bearing:
 

@@ -565,6 +565,7 @@ def ffmpeg_reconnect_args():
             exe = shutil.which("ffmpeg")
             if exe:
                 have = subprocess.run([exe, "-hide_banner", "-h", "protocol=http"],
+                                      **cancel.quiet({}),
                                       capture_output=True, text=True, timeout=20,
                                       errors="replace").stdout or ""
         except Exception:                                   # noqa: BLE001
@@ -969,6 +970,7 @@ def preflight(o, log=print):
                         "will fail.")
     try:
         r = subprocess.run(list(ytdlp_cmd()) + ["--version"],
+                           **cancel.quiet({}),
                            capture_output=True, text=True, timeout=30)
         ver = (r.stdout or "").strip()
         if ver:

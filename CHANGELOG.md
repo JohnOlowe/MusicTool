@@ -8,7 +8,7 @@ there. From 854 on the suite is hermetic and the count is the same everywhere.
 
 ---
 
-## `PENDING` — `musictool cookies`: your browser login to your phone
+## `7bd50fe` — `musictool cookies`: your browser login to your phone
 *2026-11-25 · 1323 assertions*
 
 Asked for: a fast way to get the login the laptop reads from Firefox onto the
